@@ -1,0 +1,7 @@
+{
+  "name": "Classroom OS",
+  "description": "Secure online classroom platform with role-based access control, course isolation, anti-piracy watermarked video delivery, interactive classwork feeds, quizzes, and automated certificate generation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
