@@ -1,21 +1,17 @@
-import React, { useState, useRef } from 'react';
-import { Course, User } from '../types/classroom';
+import React, { useState } from 'react';
+import { Course } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
-import { PRESET_AVATARS, compressImageFile } from '../data/presetAvatars';
+import { PRESET_AVATARS } from '../data/presetAvatars';
 import {
   UserPlus,
   Search,
   Check,
   AlertCircle,
-  Sparkles,
   UserCheck,
-  Lock,
   Eye,
   EyeOff,
   Copy,
   CheckCheck,
-  Camera,
-  Upload,
 } from 'lucide-react';
 
 interface AddStudentModalProps {
@@ -69,7 +65,6 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
     coursesLabel: string;
   } | null>(null);
   const [copied, setCopied] = useState(false);
-  const avatarFileRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
@@ -86,17 +81,6 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
     setTimeout(() => {
       setSuccessMessage(null);
     }, 3000);
-  };
-
-  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const compressed = await compressImageFile(file, 256, 0.85);
-      setNewAvatar(compressed);
-    } catch {
-      setFormError('ဓာတ်ပုံဖိုင် ဖတ်ရှုရာတွင် ချို့ယွင်းချက်ဖြစ်ပေါ်ပါသည်');
-    }
   };
 
   const handleCreateAndEnroll = (e: React.FormEvent) => {
@@ -330,54 +314,6 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
               )}
 
               <form onSubmit={handleCreateAndEnroll} className="space-y-3.5 text-xs">
-                {/* Profile Picture Selection */}
-                <div>
-                  <label className="block text-slate-700 dark:text-slate-300 font-medium mb-1.5">
-                    Student Profile Picture (ကျောင်းသား ပရိုဖိုင်ဓာတ်ပုံ)
-                  </label>
-                  <div className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700">
-                    <img
-                      src={newAvatar}
-                      alt="Avatar"
-                      referrerPolicy="no-referrer"
-                      className="w-12 h-12 rounded-full object-cover ring-2 ring-indigo-500/30 shrink-0"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex flex-wrap gap-1.5 max-h-16 overflow-y-auto">
-                        {PRESET_AVATARS.slice(0, 6).map((preset) => (
-                          <button
-                            key={preset.id}
-                            type="button"
-                            onClick={() => setNewAvatar(preset.url)}
-                            className={`w-7 h-7 rounded-full overflow-hidden border-2 transition-all ${
-                              newAvatar === preset.url
-                                ? 'border-indigo-600 ring-2 ring-indigo-500/30 scale-105'
-                                : 'border-slate-200 dark:border-slate-700 hover:border-slate-400'
-                            }`}
-                          >
-                            <img src={preset.url} alt={preset.name} className="w-full h-full object-cover" />
-                          </button>
-                        ))}
-                      </div>
-                      <input
-                        ref={avatarFileRef}
-                        type="file"
-                        accept="image/*"
-                        onChange={handleAvatarUpload}
-                        className="hidden"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => avatarFileRef.current?.click()}
-                        className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
-                      >
-                        <Camera className="w-3 h-3" />
-                        <span>Upload Custom Photo</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-slate-700 dark:text-slate-300 font-medium mb-1">

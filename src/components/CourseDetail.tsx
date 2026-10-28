@@ -3,8 +3,10 @@ import { Course, CoursePost, Assignment, Quiz, User, StudentProgress, Certificat
 import { CourseStream } from './CourseStream';
 import { ClassworkView } from './ClassworkView';
 import { PeopleView } from './PeopleView';
+import { AttendanceView } from './AttendanceView';
+import { ClassroomDB } from '../services/storage';
 import { useBackHandler } from '../utils/backNavigation';
-import { ArrowLeft, MessageSquare, BookOpen, Users } from 'lucide-react';
+import { ArrowLeft, MessageSquare, BookOpen, Users, CalendarCheck } from 'lucide-react';
 
 interface CourseDetailProps {
   course: Course;
@@ -19,7 +21,7 @@ interface CourseDetailProps {
   textProtectionEnabled: boolean;
 }
 
-type ClassroomTab = 'stream' | 'classwork' | 'people';
+type ClassroomTab = 'stream' | 'classwork' | 'attendance' | 'people';
 
 export const CourseDetail: React.FC<CourseDetailProps> = ({
   course,
@@ -45,6 +47,9 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
   useBackHandler(tabHistory.length > 1, () => {
     setTabHistory((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev));
   });
+
+  const attendanceSessions = ClassroomDB.getAttendanceSessions(course.id);
+  const hasOpenAttendance = attendanceSessions.some((s) => s.isOpen);
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -72,10 +77,10 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
         </div>
 
         {/* Tab Controls */}
-        <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-xs font-medium self-stretch sm:self-auto justify-center">
+        <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-xs font-medium self-stretch sm:self-auto justify-center overflow-x-auto">
           <button
             onClick={() => handleSwitchTab('stream')}
-            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
               activeTab === 'stream'
                 ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs font-semibold'
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -87,7 +92,7 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
 
           <button
             onClick={() => handleSwitchTab('classwork')}
-            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
               activeTab === 'classwork'
                 ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs font-semibold'
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -98,8 +103,23 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
           </button>
 
           <button
+            onClick={() => handleSwitchTab('attendance')}
+            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+              activeTab === 'attendance'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs font-semibold'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+            }`}
+          >
+            <CalendarCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            <span>Attendance</span>
+            {hasOpenAttendance && (
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="Attendance Check-in Open" />
+            )}
+          </button>
+
+          <button
             onClick={() => handleSwitchTab('people')}
-            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
               activeTab === 'people'
                 ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs font-semibold'
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -120,6 +140,7 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
             posts={posts}
             onRefresh={onRefresh}
             textProtectionEnabled={textProtectionEnabled}
+            onOpenAttendance={() => handleSwitchTab('attendance')}
           />
         )}
 
@@ -132,6 +153,16 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
             progress={progress}
             onRefresh={onRefresh}
             onOpenCertificate={onOpenCertificate}
+            onOpenAttendance={() => handleSwitchTab('attendance')}
+          />
+        )}
+
+        {activeTab === 'attendance' && (
+          <AttendanceView
+            course={course}
+            currentUser={currentUser}
+            onRefresh={onRefresh}
+            onOpenCertificate={onOpenCertificate}
           />
         )}
 
@@ -142,3 +173,5 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
     </div>
   );
 };
+
+

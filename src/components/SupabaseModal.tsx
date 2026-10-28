@@ -186,11 +186,10 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
                   🛡️ Administrator
                 </span>
                 <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">
-                  Full governance: Create courses, publish stream posts, pin up to 3 posts, schedule posts, manage student directory, and grade assignments.
+                  Full governance: Create/delete courses, publish stream posts, pin up to 3 posts, schedule posts, manage student directory, attendance, and grade assignments.
                 </p>
-                <div className="mt-2 text-[10px] font-mono bg-white dark:bg-slate-900 p-1.5 rounded border border-indigo-200 dark:border-indigo-800">
-                  kyaw.admin@classroomos.edu<br />
-                  pwd: admin123
+                <div className="mt-2 text-[10px] font-mono text-indigo-700 dark:text-indigo-300 bg-white dark:bg-slate-900 p-1.5 rounded border border-indigo-200 dark:border-indigo-800">
+                  Role Policy: Full Read / Write / Delete
                 </div>
               </div>
 
@@ -199,11 +198,10 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
                   👥 Co-Administrator
                 </span>
                 <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">
-                  Assistant instructor: Post lessons, announcements, schedule posts, pin posts, view and grade student assignment submissions.
+                  Assistant instructor: Create/delete courses, post lessons, announcements, schedule posts, pin posts, manage attendance, and grade student submissions.
                 </p>
-                <div className="mt-2 text-[10px] font-mono bg-white dark:bg-slate-900 p-1.5 rounded border border-purple-200 dark:border-purple-800">
-                  khinmyo.coadmin@classroomos.edu<br />
-                  pwd: coadmin123
+                <div className="mt-2 text-[10px] font-mono text-purple-700 dark:text-purple-300 bg-white dark:bg-slate-900 p-1.5 rounded border border-purple-200 dark:border-purple-800">
+                  Role Policy: Instructor Read / Write / Delete
                 </div>
               </div>
 
@@ -212,11 +210,10 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
                   🎓 Students
                 </span>
                 <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">
-                  Learners: View enrolled courses, submit homework, take quizzes, comment & like on stream posts (Post တင်ခွင့်မရှိပါ၊ Like နှင့် Comment သာ ပြုလုပ်နိုင်ပါသည်)။
+                  Learners: View enrolled courses, mark attendance, submit homework, take quizzes, comment & like on stream posts (Post တင်ခွင့်နှင့် ပုံပြောင်းခွင့် ကန့်သတ်ထားပါသည်)။
                 </p>
-                <div className="mt-2 text-[10px] font-mono bg-white dark:bg-slate-900 p-1.5 rounded border border-emerald-200 dark:border-emerald-800">
-                  aung.min@student.edu<br />
-                  pwd: student123
+                <div className="mt-2 text-[10px] font-mono text-emerald-700 dark:text-emerald-300 bg-white dark:bg-slate-900 p-1.5 rounded border border-emerald-200 dark:border-emerald-800">
+                  Role Policy: Enrolled Cohort RLS Only
                 </div>
               </div>
             </div>
@@ -331,10 +328,10 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
 
           {/* Copyable SQL Schema */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <span className="font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2 text-xs">
                 <FileCode className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                <span>Supabase PostgreSQL Schema & RLS SQL Script</span>
+                <span>Supabase PostgreSQL Schema, RLS & Data API Grants (Oct 30+ Compliant)</span>
               </span>
               <button
                 type="button"

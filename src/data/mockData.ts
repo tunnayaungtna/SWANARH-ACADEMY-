@@ -1,4 +1,4 @@
-import { User, Course, CoursePost, Assignment, Quiz, StudentProgress, AssignmentSubmission, QuizSubmission, NotificationItem } from '../types/classroom';
+import { User, Course, CoursePost, Assignment, Quiz, StudentProgress, AssignmentSubmission, QuizSubmission, NotificationItem, AttendanceSession } from '../types/classroom';
 
 export const INITIAL_USERS: User[] = [
   {
@@ -124,22 +124,13 @@ export const INITIAL_POSTS: CoursePost[] = [
     authorName: 'Dr. Kyaw Swar',
     authorRole: 'admin',
     authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-    title: '🔴 Live Zoom Lecture: Distributed Caching & Redis Sliding-Window Q&A',
-    content: 'Students of Batch 2026-A, today we will hold our live architectural review on Zoom. Tap "Launch in Zoom App" to join directly with your attendance pre-filled in the native app. If you do not have the native Zoom app installed, you can use the browser fallback.',
+    title: '📌 Live Lecture: Distributed Caching & Redis Sliding-Window Q&A',
+    content: 'Students of Batch 2026-A, today we will hold our live architectural review session. You can join directly using the class link below:\nhttps://us02web.zoom.us/j/84920193847?pwd=CloudArch2026',
     postType: 'lesson',
     isPinned: true,
     pinOrder: 1,
     pinnedAt: '2026-10-16T15:30:00.000Z',
     status: 'published',
-    zoomMeeting: {
-      meetingId: '84920193847',
-      passcode: 'CloudArch2026',
-      rawUrl: 'https://us02web.zoom.us/j/84920193847?pwd=CloudArch2026',
-      deepLink: 'zoomus://zoom.us/join?confno=84920193847&pwd=CloudArch2026',
-      browserFallbackUrl: 'https://zoom.us/wc/84920193847/join?pwd=CloudArch2026',
-      scheduledTime: 'Today at 4:00 PM (MMT)',
-      topic: 'Live Microservices Architecture & Redis Rate Limiting Hands-on Demo',
-    },
     likes: ['user-student-1', 'user-student-2'],
     comments: [
       {
@@ -149,7 +140,7 @@ export const INITIAL_POSTS: CoursePost[] = [
         authorName: 'Aung Min',
         authorRole: 'student',
         authorAvatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
-        content: 'Sayar, I tested the Launch button and it opened my Zoom Desktop app right away!',
+        content: 'Thank you Sayar, the link works directly when clicked!',
         createdAt: '10 mins ago',
       },
     ],
@@ -515,6 +506,7 @@ export const INITIAL_PROGRESS: StudentProgress[] = [
       studentName: 'Aung Min',
       issuedAt: 'October 15, 2026',
       gradeAverage: 98,
+      attendancePercentage: 100,
       verificationUrl: 'https://classroomos.edu/verify/CERT-EDU-2026-8819',
       instructorSignature: 'Dr. Kyaw Swar (Dean)',
     },
@@ -577,3 +569,109 @@ export const INITIAL_NOTIFICATIONS: NotificationItem[] = [
     createdAt: '1 day ago',
   },
 ];
+
+export const INITIAL_ATTENDANCE_SESSIONS: AttendanceSession[] = [
+  {
+    id: 'att-sess-103',
+    courseId: 'course-web-arch',
+    date: '2026-10-26',
+    displayDate: 'Oct 26, 2026',
+    title: 'Lecture 03: Distributed Caching & Live Q&A Check-in',
+    isOpen: true,
+    openedBy: 'Dr. Kyaw Swar',
+    createdAt: 'Today · 09:00 AM',
+    records: {
+      'user-student-1': {
+        studentId: 'user-student-1',
+        studentName: 'Aung Min',
+        status: 'present',
+        checkedInAt: '09:04 AM',
+        checkedInBy: 'student',
+      },
+    },
+  },
+  {
+    id: 'att-sess-102',
+    courseId: 'course-web-arch',
+    date: '2026-10-20',
+    displayDate: 'Oct 20, 2026',
+    title: 'Lecture 02: Edge Microservices & Rate Limiting',
+    isOpen: false,
+    openedBy: 'Dr. Kyaw Swar',
+    createdAt: 'Oct 20, 2026 · 09:00 AM',
+    records: {
+      'user-student-1': {
+        studentId: 'user-student-1',
+        studentName: 'Aung Min',
+        status: 'present',
+        checkedInAt: '08:58 AM',
+        checkedInBy: 'student',
+      },
+      'user-student-2': {
+        studentId: 'user-student-2',
+        studentName: 'Su Su Win',
+        status: 'present',
+        checkedInAt: '09:02 AM',
+        checkedInBy: 'student',
+      },
+    },
+  },
+  {
+    id: 'att-sess-101',
+    courseId: 'course-web-arch',
+    date: '2026-10-14',
+    displayDate: 'Oct 14, 2026',
+    title: 'Lecture 01: Secure Edge Video Delivery & Orientation',
+    isOpen: false,
+    openedBy: 'Dr. Kyaw Swar',
+    createdAt: 'Oct 14, 2026 · 09:00 AM',
+    records: {
+      'user-student-1': {
+        studentId: 'user-student-1',
+        studentName: 'Aung Min',
+        status: 'present',
+        checkedInAt: '08:55 AM',
+        checkedInBy: 'student',
+      },
+      'user-student-2': {
+        studentId: 'user-student-2',
+        studentName: 'Su Su Win',
+        status: 'late',
+        checkedInAt: '09:20 AM',
+        checkedInBy: 'instructor',
+        note: 'Joined 20 mins late',
+      },
+    },
+  },
+  {
+    id: 'att-sess-201',
+    courseId: 'course-data-sci',
+    date: '2026-10-26',
+    displayDate: 'Oct 26, 2026',
+    title: 'Module 01: Supervised Learning & Linear Regression Check-in',
+    isOpen: true,
+    openedBy: 'Dr. Kyaw Swar',
+    createdAt: 'Today · 10:00 AM',
+    records: {
+      'user-student-1': {
+        studentId: 'user-student-1',
+        studentName: 'Aung Min',
+        status: 'present',
+        checkedInAt: '10:01 AM',
+        checkedInBy: 'student',
+      },
+    },
+  },
+  {
+    id: 'att-sess-301',
+    courseId: 'course-cyber-sec',
+    date: '2026-10-26',
+    displayDate: 'Oct 26, 2026',
+    title: 'Module 01: Zero-Trust Defense & Threat Analysis Check-in',
+    isOpen: true,
+    openedBy: 'Dr. Kyaw Swar',
+    createdAt: 'Today · 01:00 PM',
+    records: {},
+  },
+];
+

@@ -35,7 +35,7 @@ export const ProfilePictureModal: React.FC<ProfilePictureModalProps> = ({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  if (!isOpen) return null;
+  if (!isOpen || (user.role !== 'admin' && user.role !== 'co_admin')) return null;
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

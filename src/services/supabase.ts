@@ -1,5 +1,14 @@
 import { createClient } from '@supabase/supabase-js';
-import { User, UserRole, Course, CoursePost } from '../types/classroom';
+import {
+  User,
+  UserRole,
+  Course,
+  CoursePost,
+  Assignment,
+  AssignmentSubmission,
+  Quiz,
+  AttendanceSession,
+} from '../types/classroom';
 
 // Supabase Project Credentials provided by user
 export const SUPABASE_CONFIG = {
@@ -109,6 +118,11 @@ CREATE POLICY "Admins and Co-admins can insert courses"
 DROP POLICY IF EXISTS "Admins and Co-admins can update courses" ON public.courses;
 CREATE POLICY "Admins and Co-admins can update courses"
   ON public.courses FOR UPDATE
+  USING (true);
+
+DROP POLICY IF EXISTS "Admins and Co-admins can delete courses" ON public.courses;
+CREATE POLICY "Admins and Co-admins can delete courses"
+  ON public.courses FOR DELETE
   USING (true);
 
 -- 4. Course Posts Table (Stream Feed, Multi-pin, Scheduled posts)
@@ -223,7 +237,24 @@ CREATE POLICY "Quizzes viewable" ON public.quizzes FOR ALL USING (true);
 DROP POLICY IF EXISTS "Quiz submissions viewable" ON public.quiz_submissions;
 CREATE POLICY "Quiz submissions viewable" ON public.quiz_submissions FOR ALL USING (true);
 
--- 7. Seed Initial Demo Accounts (Admin, Co-Admin, Students)
+-- 7. Attendance Sessions Table
+CREATE TABLE IF NOT EXISTS public.attendance_sessions (
+  id TEXT PRIMARY KEY,
+  course_id TEXT NOT NULL REFERENCES public.courses(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  display_date TEXT NOT NULL,
+  title TEXT NOT NULL,
+  is_open BOOLEAN DEFAULT TRUE,
+  opened_by TEXT NOT NULL,
+  records JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE public.attendance_sessions ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Attendance sessions full access" ON public.attendance_sessions;
+CREATE POLICY "Attendance sessions full access" ON public.attendance_sessions FOR ALL USING (true);
+
+-- 8. Seed Initial Demo Accounts (Admin, Co-Admin, Students)
 INSERT INTO public.profiles (id, name, username, email, role, phone, avatar, title, gender, address)
 VALUES
   ('user-admin-1', 'Dr. Kyaw Swar', 'kyawswar.admin', 'kyaw.admin@classroomos.edu', 'admin', '+95 9 791 234567', 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80', 'Dean of Computing & Lead Instructor', 'male', 'No. 45, Pyay Road, Kamayut, Yangon'),
@@ -237,6 +268,19 @@ ON CONFLICT (id) DO UPDATE SET
   title = EXCLUDED.title,
   gender = EXCLUDED.gender,
   address = EXCLUDED.address;
+
+-- Grant schema usage and table permissions for Supabase Data API (Oct 30+ compliance)
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+
+-- Ensure any future tables created in public schema automatically receive grants
+ALTER DEFAULT PRIVILEGES IN SCHEMA public 
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO anon, authenticated, service_role;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public 
+GRANT USAGE, SELECT ON SEQUENCES TO anon, authenticated, service_role;
 `;
 
 export class SupabaseService {
@@ -408,10 +452,14 @@ export class SupabaseService {
   }
 
   /**
-   * Delete a profile from Supabase
+   * Delete a profile and all associated student submissions from Supabase SQL database
    */
   static async deleteProfile(userId: string): Promise<boolean> {
     try {
+      await Promise.allSettled([
+        supabase.from('assignment_submissions').delete().eq('student_id', userId),
+        supabase.from('quiz_submissions').delete().eq('student_id', userId),
+      ]);
       const { error } = await supabase.from('profiles').delete().eq('id', userId);
       return !error;
     } catch {
@@ -454,15 +502,248 @@ export class SupabaseService {
   }
 
   /**
-   * Sync all local users and courses to Supabase
+   * Delete a classroom/course and all its child records from Supabase SQL database
+   */
+  static async deleteCourse(courseId: string): Promise<boolean> {
+    try {
+      // Explicitly delete child records first in case ON DELETE CASCADE wasn't applied on older tables
+      await Promise.allSettled([
+        supabase.from('posts').delete().eq('course_id', courseId),
+        supabase.from('assignments').delete().eq('course_id', courseId),
+        supabase.from('quizzes').delete().eq('course_id', courseId),
+        supabase.from('attendance_sessions').delete().eq('course_id', courseId),
+      ]);
+      const { error } = await supabase.from('courses').delete().eq('id', courseId);
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Upsert a stream post (including comments & likes) to Supabase SQL database
+   */
+  static async upsertPost(post: CoursePost): Promise<boolean> {
+    try {
+      const safeAttachments = (post.attachments || []).map((att) => ({
+        ...att,
+        // Avoid sending oversized data URLs > 100KB to JSONB column
+        url: att.url && att.url.length > 100000 ? '#attachment' : att.url,
+      }));
+
+      const { error } = await supabase.from('posts').upsert(
+        {
+          id: post.id,
+          course_id: post.courseId,
+          author_id: post.authorId,
+          author_name: post.authorName,
+          author_role: post.authorRole,
+          author_avatar: post.authorAvatar || '',
+          title: post.title,
+          content: post.content,
+          post_type: post.postType,
+          status: post.status || 'published',
+          scheduled_for: post.scheduledFor || null,
+          scheduled_for_display: post.scheduledForDisplay || null,
+          is_pinned: Boolean(post.isPinned),
+          pinned_at: post.pinnedAt || null,
+          pin_order: post.pinOrder ?? null,
+          attachments: safeAttachments,
+          likes: post.likes || [],
+          comments: post.comments || [],
+        },
+        { onConflict: 'id' }
+      );
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Auto-delete a post from Supabase SQL database
+   */
+  static async deletePost(postId: string): Promise<boolean> {
+    try {
+      const { error } = await supabase.from('posts').delete().eq('id', postId);
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Upsert an assignment to Supabase SQL database
+   */
+  static async upsertAssignment(assignment: Assignment): Promise<boolean> {
+    try {
+      const { error } = await supabase.from('assignments').upsert(
+        {
+          id: assignment.id,
+          course_id: assignment.courseId,
+          title: assignment.title,
+          description: assignment.description,
+          due_date: assignment.dueDate,
+          total_points: assignment.maxPoints || 100,
+        },
+        { onConflict: 'id' }
+      );
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Auto-delete an assignment and its submissions from Supabase SQL database
+   */
+  static async deleteAssignment(assignmentId: string): Promise<boolean> {
+    try {
+      await supabase.from('assignment_submissions').delete().eq('assignment_id', assignmentId);
+      const { error } = await supabase.from('assignments').delete().eq('id', assignmentId);
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Upsert an assignment submission to Supabase SQL database
+   */
+  static async upsertAssignmentSubmission(sub: AssignmentSubmission): Promise<boolean> {
+    try {
+      const { error } = await supabase.from('assignment_submissions').upsert(
+        {
+          id: sub.id,
+          assignment_id: sub.assignmentId,
+          student_id: sub.studentId,
+          student_name: sub.studentName,
+          student_avatar: sub.studentAvatar || '',
+          files: sub.fileAttachment ? [sub.fileAttachment] : [],
+          notes: sub.submissionText || '',
+          grade: sub.grade ?? null,
+          feedback: sub.feedback ?? null,
+        },
+        { onConflict: 'id' }
+      );
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Auto-delete an assignment submission from Supabase SQL database
+   */
+  static async deleteAssignmentSubmission(submissionId: string): Promise<boolean> {
+    try {
+      const { error } = await supabase.from('assignment_submissions').delete().eq('id', submissionId);
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Upsert a quiz to Supabase SQL database
+   */
+  static async upsertQuiz(quiz: Quiz): Promise<boolean> {
+    try {
+      const { error } = await supabase.from('quizzes').upsert(
+        {
+          id: quiz.id,
+          course_id: quiz.courseId,
+          title: quiz.title,
+          time_limit_minutes: quiz.durationMinutes || 30,
+          passing_score: quiz.passingScore || 70,
+          questions: quiz.questions || [],
+        },
+        { onConflict: 'id' }
+      );
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Auto-delete a quiz and its submissions from Supabase SQL database
+   */
+  static async deleteQuiz(quizId: string): Promise<boolean> {
+    try {
+      await supabase.from('quiz_submissions').delete().eq('quiz_id', quizId);
+      const { error } = await supabase.from('quizzes').delete().eq('id', quizId);
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Upsert an attendance session to Supabase SQL database
+   */
+  static async upsertAttendanceSession(session: AttendanceSession): Promise<boolean> {
+    try {
+      const { error } = await supabase.from('attendance_sessions').upsert(
+        {
+          id: session.id,
+          course_id: session.courseId,
+          date: session.date,
+          display_date: session.displayDate,
+          title: session.title,
+          is_open: session.isOpen,
+          opened_by: session.openedBy,
+          records: session.records || {},
+        },
+        { onConflict: 'id' }
+      );
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Auto-delete an attendance session from Supabase SQL database
+   */
+  static async deleteAttendanceSession(sessionId: string): Promise<boolean> {
+    try {
+      const { error } = await supabase.from('attendance_sessions').delete().eq('id', sessionId);
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Sync all local users, courses, posts, assignments, quizzes, attendance, and purge deleted IDs in Supabase
    */
   static async syncAllData(
     users: User[],
-    courses: Course[]
+    courses: Course[],
+    posts: CoursePost[] = [],
+    assignments: Assignment[] = [],
+    quizzes: Quiz[] = [],
+    attendanceSessions: AttendanceSession[] = [],
+    deletedIds: string[] = []
   ): Promise<{ success: boolean; syncedUsers: number; syncedCourses: number; error?: string }> {
     let syncedUsers = 0;
     let syncedCourses = 0;
     let lastError: string | undefined;
+
+    // 1. Purge any deleted IDs from Supabase SQL tables first
+    if (deletedIds.length > 0) {
+      await Promise.allSettled([
+        supabase.from('courses').delete().in('id', deletedIds),
+        supabase.from('profiles').delete().in('id', deletedIds),
+        supabase.from('posts').delete().in('id', deletedIds),
+        supabase.from('assignments').delete().in('id', deletedIds),
+        supabase.from('assignment_submissions').delete().in('id', deletedIds),
+        supabase.from('quizzes').delete().in('id', deletedIds),
+        supabase.from('quiz_submissions').delete().in('id', deletedIds),
+        supabase.from('attendance_sessions').delete().in('id', deletedIds),
+      ]);
+    }
 
     for (const u of users) {
       const res = await this.upsertProfile(u);
@@ -480,6 +761,22 @@ export class SupabaseService {
       } else if (!lastError) {
         lastError = res.error;
       }
+    }
+
+    for (const p of posts) {
+      await this.upsertPost(p);
+    }
+
+    for (const a of assignments) {
+      await this.upsertAssignment(a);
+    }
+
+    for (const q of quizzes) {
+      await this.upsertQuiz(q);
+    }
+
+    for (const att of attendanceSessions) {
+      await this.upsertAttendanceSession(att);
     }
 
     return {

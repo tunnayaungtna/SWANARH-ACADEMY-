@@ -3,19 +3,242 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
-    <title>Classroom OS - Secure Online Learning Platform</title>
+    <meta name="theme-color" content="#059669" />
+    <meta name="application-name" content="SwanArh Classroom" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="SwanArh Classroom" />
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <script>
+      window.__pwaDeferredPrompt = null;
+      window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        window.__pwaDeferredPrompt = e;
+        window.dispatchEvent(new Event('pwa-prompt-ready'));
+      });
+      window.addEventListener('appinstalled', function () {
+        window.__pwaDeferredPrompt = null;
+        window.dispatchEvent(new Event('pwa-installed'));
+      });
+
+      // Self-healing cache & service worker manager to prevent white-screen stalls on app reopen
+      (function () {
+        if ('caches' in window) {
+          caches.keys().then(function (keys) {
+            keys.forEach(function (key) {
+              if (key !== 'swanarh-classroom-v5') {
+                caches.delete(key).catch(function () {});
+              }
+            });
+          }).catch(function () {});
+        }
+
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then(function (registrations) {
+            registrations.forEach(function (reg) {
+              if (reg.active && reg.active.scriptURL && reg.active.scriptURL.indexOf('dev-sw.js') !== -1) {
+                reg.unregister().catch(function () {});
+              }
+            });
+          }).catch(function () {});
+
+          window.addEventListener('load', function () {
+            navigator.serviceWorker
+              .register('/sw.js', { scope: '/', updateViaCache: 'none' })
+              .then(function (reg) {
+                reg.update().catch(function () {});
+              })
+              .catch(function () {});
+          });
+        }
+      })();
+    </script>
+    <title>SwanArh Classroom - Dr. Si Thu Aung · Swanarh Academy</title>
     <meta name="description" content="Secure online classroom platform with role-based access control, course isolation, anti-piracy watermarked video delivery, interactive classwork feeds, quizzes, and automated certificate generation." />
-    <meta property="og:title" content="Classroom OS - Secure Online Learning Platform" />
+    <meta property="og:title" content="SwanArh Classroom - Dr. Si Thu Aung · Swanarh Academy" />
     <meta property="og:description" content="Secure online classroom platform with role-based access control, course isolation, anti-piracy watermarked video delivery, interactive classwork feeds, quizzes, and automated certificate generation." />
+    <meta property="og:image" content="/pwa-512x512.png" />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+      @keyframes swanarh-spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+      @keyframes swanarh-pulse {
+        0%, 100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.04); opacity: 0.92; }
+      }
+      @keyframes swanarh-bar {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(250%); }
+      }
+      .swanarh-boot-screen {
+        min-height: 100vh;
+        min-height: 100dvh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: radial-gradient(circle at top, #ecfdf5 0%, #f8fafc 55%, #f1f5f9 100%);
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        color: #0f172a;
+        padding: 24px;
+        box-sizing: border-box;
+        text-align: center;
+      }
+      .swanarh-boot-card {
+        background: #ffffff;
+        border: 1px solid #d1fae5;
+        border-radius: 28px;
+        padding: 36px 28px;
+        max-width: 360px;
+        width: 100%;
+        box-shadow: 0 20px 45px -15px rgba(5, 150, 105, 0.14), 0 4px 12px -2px rgba(15, 23, 42, 0.05);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      .swanarh-boot-logo-wrap {
+        position: relative;
+        width: 92px;
+        height: 92px;
+        border-radius: 24px;
+        padding: 6px;
+        background: #ffffff;
+        border: 2px solid #a7f3d0;
+        box-shadow: 0 10px 25px -5px rgba(5, 150, 105, 0.2);
+        margin-bottom: 18px;
+        animation: swanarh-pulse 2.2s ease-in-out infinite;
+      }
+      .swanarh-boot-logo {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        border-radius: 18px;
+      }
+      .swanarh-boot-title {
+        font-size: 21px;
+        font-weight: 800;
+        color: #0f172a;
+        margin: 0 0 4px 0;
+        letter-spacing: -0.02em;
+      }
+      .swanarh-boot-sub {
+        font-size: 11px;
+        font-weight: 700;
+        color: #059669;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin: 0 0 20px 0;
+      }
+      .swanarh-boot-progress {
+        width: 180px;
+        height: 5px;
+        background: #e2e8f0;
+        border-radius: 999px;
+        overflow: hidden;
+        position: relative;
+        margin-bottom: 14px;
+      }
+      .swanarh-boot-progress-bar {
+        width: 45%;
+        height: 100%;
+        background: linear-gradient(90deg, #10b981, #059669);
+        border-radius: 999px;
+        animation: swanarh-bar 1.25s ease-in-out infinite;
+      }
+      .swanarh-boot-status {
+        font-size: 12.5px;
+        color: #475569;
+        font-weight: 600;
+        margin: 0;
+      }
+      .swanarh-boot-retry {
+        margin-top: 18px;
+        display: none;
+        background: #059669;
+        color: #ffffff;
+        border: none;
+        border-radius: 12px;
+        padding: 10px 18px;
+        font-size: 12.5px;
+        font-weight: 700;
+        cursor: pointer;
+        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
+      }
+    </style>
   </head>
-  <body>
-    <div id="root"></div>
+  <body style="margin: 0; padding: 0; background-color: #f8fafc;">
+    <div id="root">
+      <div class="swanarh-boot-screen">
+        <div class="swanarh-boot-card">
+          <div class="swanarh-boot-logo-wrap">
+            <img src="/pwa-192x192.png" alt="SwanArh Classroom" class="swanarh-boot-logo" />
+          </div>
+          <h1 class="swanarh-boot-title">SwanArh Classroom</h1>
+          <p class="swanarh-boot-sub">Dr. Si Thu Aung · Swanarh Academy</p>
+          <div class="swanarh-boot-progress">
+            <div class="swanarh-boot-progress-bar"></div>
+          </div>
+          <p id="swanarh-boot-text" class="swanarh-boot-status">စာသင်ခန်း စနစ်ကို ဖွင့်နေပါသည်...</p>
+          <button
+            id="swanarh-boot-retry-btn"
+            type="button"
+            class="swanarh-boot-retry"
+            onclick="window.clearAndReloadSwanArh && window.clearAndReloadSwanArh()"
+          >
+            ပြန်လည်စတင်ရန် (Tap to Reload)
+          </button>
+        </div>
+      </div>
+    </div>
+    <script>
+      window.clearAndReloadSwanArh = function () {
+        var btn = document.getElementById('swanarh-boot-retry-btn');
+        if (btn) btn.textContent = 'ပြန်လည်ချိတ်ဆက်နေပါသည်...';
+        var tasks = [];
+        if ('caches' in window) {
+          tasks.push(
+            caches.keys().then(function (keys) {
+              return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+            })
+          );
+        }
+        if ('serviceWorker' in navigator) {
+          tasks.push(
+            navigator.serviceWorker.getRegistrations().then(function (regs) {
+              return Promise.all(regs.map(function (r) { return r.unregister(); }));
+            })
+          );
+        }
+        Promise.all(tasks)
+          .catch(function () {})
+          .finally(function () {
+            window.location.replace('/?t=' + Date.now());
+          });
+      };
+
+      setTimeout(function () {
+        if (!window.__swanarhMounted) {
+          var txt = document.getElementById('swanarh-boot-text');
+          var btn = document.getElementById('swanarh-boot-retry-btn');
+          if (txt) {
+            txt.textContent = 'ဆာဗာနှင့် ချိတ်ဆက်နေပါသည်... ခေတ္တစောင့်ပါ သို့မဟုတ် အောက်ပါခလုတ်ကို နှိပ်ပါ။';
+          }
+          if (btn) {
+            btn.style.display = 'inline-block';
+          }
+        }
+      }, 5000);
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

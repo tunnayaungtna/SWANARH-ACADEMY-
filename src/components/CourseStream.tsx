@@ -1,13 +1,12 @@
 import React, { useState, useRef } from 'react';
-import { Course, CoursePost, User, VideoAsset, ZoomMeetingDetails, Attachment } from '../types/classroom';
+import { Course, CoursePost, User, VideoAsset, Attachment } from '../types/classroom';
 import { SecureVideoPlayer } from './SecureVideoPlayer';
-import { ZoomMeetingCard } from './ZoomMeetingCard';
 import { EditPostModal } from './EditPostModal';
 import { PinSwapModal } from './PinSwapModal';
 import { CourseBannerModal } from './CourseBannerModal';
 import { useBackHandler } from '../utils/backNavigation';
-import { parseZoomUrl } from '../utils/zoomDeepLink';
 import { formatFileSize, getFileTypeCategory } from '../utils/fileHelpers';
+import { renderTextWithLinks } from '../utils/linkify';
 import { ClassroomDB } from '../services/storage';
 import {
   MessageSquare,
@@ -43,6 +42,8 @@ import {
   Users,
   FilePlus,
   FileUp,
+  CalendarCheck,
+  Hand,
 } from 'lucide-react';
 
 interface CourseStreamProps {
@@ -51,6 +52,7 @@ interface CourseStreamProps {
   posts: CoursePost[];
   onRefresh: () => void;
   textProtectionEnabled: boolean;
+  onOpenAttendance?: () => void;
 }
 
 export const CourseStream: React.FC<CourseStreamProps> = ({
@@ -59,6 +61,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   posts,
   onRefresh,
   textProtectionEnabled,
+  onOpenAttendance,
 }) => {
   // Post Composer State (for Admin/Instructor)
   const [isComposing, setIsComposing] = useState(false);
@@ -77,17 +80,12 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Zoom Deep Link Meeting state (Optional)
-  const [includeZoom, setIncludeZoom] = useState(false);
-  const [zoomMeetingUrl, setZoomMeetingUrl] = useState('');
-  const [zoomTopic, setZoomTopic] = useState('');
-  const [zoomTime, setZoomTime] = useState('');
-
   // Modals state
   const [editingPost, setEditingPost] = useState<CoursePost | null>(null);
   const [pinSwapTarget, setPinSwapTarget] = useState<CoursePost | null>(null);
   const [previewImage, setPreviewImage] = useState<{ url: string; name: string } | null>(null);
   const [showBannerModal, setShowBannerModal] = useState(false);
+  const [postToDeleteId, setPostToDeleteId] = useState<string | null>(null);
 
   // Step-by-step mobile Back button handlers for Stream modals & composer
   useBackHandler(isComposing, () => setIsComposing(false));
@@ -95,6 +93,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   useBackHandler(!!pinSwapTarget, () => setPinSwapTarget(null));
   useBackHandler(!!previewImage, () => setPreviewImage(null));
   useBackHandler(showBannerModal, () => setShowBannerModal(false));
+  useBackHandler(!!postToDeleteId, () => setPostToDeleteId(null));
 
   // Scheduled posts drawer expand state
   const [scheduledDrawerOpen, setScheduledDrawerOpen] = useState(true);
@@ -210,25 +209,6 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
       return;
     }
 
-    let zoomMeeting: ZoomMeetingDetails | undefined = undefined;
-    if (includeZoom && zoomMeetingUrl.trim()) {
-      const parsed = parseZoomUrl(zoomMeetingUrl.trim(), currentUser.name);
-      if (parsed.isValid) {
-        zoomMeeting = {
-          meetingId: parsed.meetingId,
-          passcode: parsed.passcode,
-          rawUrl: parsed.rawUrl,
-          deepLink: parsed.deepLink,
-          browserFallbackUrl: parsed.browserFallbackUrl,
-          scheduledTime:
-            zoomTime ||
-            'Today at ' +
-              new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          topic: zoomTopic || postTitle,
-        };
-      }
-    }
-
     let scheduledFor: string | undefined = undefined;
     let scheduledForDisplay: string | undefined = undefined;
     if (publishMode === 'schedule' && scheduledDateTime) {
@@ -253,7 +233,6 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
         title: postTitle.trim(),
         content: postContent.trim(),
         postType,
-        zoomMeeting,
         attachments: attachedFiles.length > 0 ? attachedFiles : undefined,
         status: publishMode === 'schedule' ? 'scheduled' : 'published',
         scheduledFor,
@@ -275,10 +254,6 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
     setPostTitle('');
     setPostContent('');
     setAttachedFiles([]);
-    setIncludeZoom(false);
-    setZoomMeetingUrl('');
-    setZoomTopic('');
-    setZoomTime('');
     setPublishMode('now');
     setScheduledDateTime('');
     setPinUponPublish(false);
@@ -336,12 +311,16 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   };
 
   const handleDeletePost = (postId: string) => {
-    if (confirm('ဤ Post ကို အတန်း Stream ထဲမှ လုံးဝ ဖျက်လိုပါသလား?')) {
-      ClassroomDB.deletePost(postId, currentUser);
-      setSuccessToast('Post အား ဖျက်ပစ်ပြီးပါပြီ');
-      setTimeout(() => setSuccessToast(null), 2500);
-      onRefresh();
-    }
+    setPostToDeleteId(postId);
+  };
+
+  const handleConfirmDeletePost = () => {
+    if (!postToDeleteId) return;
+    ClassroomDB.deletePost(postToDeleteId, currentUser);
+    setPostToDeleteId(null);
+    setSuccessToast('Post အား App နှင့် Supabase SQL Database မှ ဖျက်သိမ်းပြီးပါပြီ');
+    setTimeout(() => setSuccessToast(null), 2500);
+    onRefresh();
   };
 
   const handleToggleLike = (postId: string) => {
@@ -362,6 +341,15 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
 
     setCommentInputs((prev) => ({ ...prev, [postId]: '' }));
     onRefresh();
+  };
+
+  const handleDeleteComment = (postId: string, commentId: string) => {
+    const ok = ClassroomDB.deleteComment(postId, commentId, currentUser);
+    if (ok) {
+      setSuccessToast('Comment အား App နှင့် SQL Database မှ ဖျက်သိမ်းပြီးပါပြီ');
+      setTimeout(() => setSuccessToast(null), 2500);
+      onRefresh();
+    }
   };
 
   const handleLessonViewed = (lessonPostId: string) => {
@@ -631,7 +619,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                     {p.title}
                   </h4>
                   <p className="text-[11px] text-slate-600 dark:text-slate-300 line-clamp-2 mt-1 leading-relaxed">
-                    {p.content}
+                    {renderTextWithLinks(p.content)}
                   </p>
                 </div>
 
@@ -864,22 +852,6 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                       <span>Add File (ဖိုင်ထည့်ရန်)</span>
                     </label>
 
-                    {/* Include Live Zoom Meeting Button (Instructors only) */}
-                    {isInstructor && (
-                      <button
-                        type="button"
-                        onClick={() => setIncludeZoom(!includeZoom)}
-                        className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
-                          includeZoom
-                            ? 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border-blue-300 dark:border-blue-700'
-                            : 'bg-white dark:bg-slate-800 hover:bg-blue-50 dark:hover:bg-blue-950/40 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
-                        }`}
-                      >
-                        <Laptop className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                        <span>{includeZoom ? 'Zoom Attached ✓' : '+ Zoom Link'}</span>
-                      </button>
-                    )}
-
                     {/* Pin to Top Button (Instructors only, up to 3 pins) */}
                     {isInstructor && (
                       <button
@@ -909,51 +881,6 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                     Drag & drop files or click Add File
                   </span>
                 </div>
-
-                {/* Optional Zoom Meeting Input Box */}
-                {includeZoom && (
-                  <div className="mt-3 p-3 bg-white dark:bg-slate-900 rounded-xl border border-blue-200 dark:border-blue-800/60 space-y-2 animate-fade-in">
-                    <div className="flex items-center justify-between text-xs font-semibold text-blue-700 dark:text-blue-300">
-                      <span className="flex items-center gap-1.5">
-                        <Laptop className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                        Live Zoom Meeting Details
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIncludeZoom(false);
-                          setZoomMeetingUrl('');
-                        }}
-                        className="text-slate-400 hover:text-rose-500 p-0.5 rounded cursor-pointer"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                    <input
-                      type="url"
-                      placeholder="Paste Zoom Meeting Invitation URL (https://zoom.us/j/...)..."
-                      value={zoomMeetingUrl}
-                      onChange={(e) => setZoomMeetingUrl(e.target.value)}
-                      className="w-full px-2.5 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-xs font-mono"
-                    />
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <input
-                        type="text"
-                        placeholder="Meeting Topic (e.g., Live Q&A Session)"
-                        value={zoomTopic}
-                        onChange={(e) => setZoomTopic(e.target.value)}
-                        className="w-full px-2.5 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-xs"
-                      />
-                      <input
-                        type="text"
-                        placeholder="Scheduled Time (e.g., Today at 4:00 PM)"
-                        value={zoomTime}
-                        onChange={(e) => setZoomTime(e.target.value)}
-                        className="w-full px-2.5 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-xs font-mono"
-                      />
-                    </div>
-                  </div>
-                )}
 
                 {/* Google Classroom Style Attached Files Grid Cards */}
                 {attachedFiles.length > 0 && (
@@ -1101,9 +1028,6 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                       ? `📎 ${attachedFiles.length} file(s) attached`
                       : 'No files attached'}
                   </span>
-                  {includeZoom && (
-                    <span className="text-blue-600 dark:text-blue-400 font-medium">· 💻 Zoom included</span>
-                  )}
                   {pinUponPublish && (
                     <span className="text-amber-600 dark:text-amber-400 font-semibold">· 📌 Will be pinned</span>
                   )}
@@ -1364,17 +1288,10 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                       {post.title}
                     </h3>
                     <p className="text-xs sm:text-sm text-slate-700 dark:text-slate-300 mt-1.5 leading-relaxed whitespace-pre-line">
-                      {post.content}
+                      {renderTextWithLinks(post.content)}
                     </p>
                   </div>
                 </div>
-
-                {/* Live Zoom Meeting Deep Link Card */}
-                {post.zoomMeeting && (
-                  <div className="px-3.5 sm:px-5 py-1">
-                    <ZoomMeetingCard meeting={post.zoomMeeting} currentUser={currentUser} />
-                  </div>
-                )}
 
                 {/* Video Asset Section */}
                 {post.videoAsset && (
@@ -1471,7 +1388,8 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                                 onClick={(e) => {
                                   if (att.url === '#') {
                                     e.preventDefault();
-                                    alert(`Downloading file: ${att.name} (${att.size}) for ${currentUser.name}`);
+                                    setSuccessToast(`ဖိုင် ဒေါင်းလုဒ်ဆွဲနေပါသည်: ${att.name} (${att.size})`);
+                                    setTimeout(() => setSuccessToast(null), 3500);
                                   }
                                 }}
                                 className="p-1.5 text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-950/50 transition-colors shrink-0"
@@ -1525,36 +1443,52 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                     {/* Existing Comments */}
                     {post.comments.length > 0 && (
                       <div className="space-y-2.5">
-                        {post.comments.map((comm) => (
-                          <div key={comm.id} className="flex items-start gap-2.5 text-xs">
-                            <img
-                              src={comm.authorAvatar}
-                              alt={comm.authorName}
-                              referrerPolicy="no-referrer"
-                              className="w-7 h-7 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0 mt-0.5"
-                            />
-                            <div className="flex-1 bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800 shadow-2xs">
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="flex items-center gap-1.5">
-                                  <span className="font-semibold text-slate-900 dark:text-slate-100">
-                                    {comm.authorName}
-                                  </span>
-                                  {comm.authorRole === 'admin' && (
-                                    <span className="text-[9px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1 rounded">
-                                      Instructor
+                        {post.comments.map((comm) => {
+                          const canDeleteComment =
+                            isInstructor || comm.authorId === currentUser.id;
+                          return (
+                            <div key={comm.id} className="flex items-start gap-2.5 text-xs">
+                              <img
+                                src={comm.authorAvatar}
+                                alt={comm.authorName}
+                                referrerPolicy="no-referrer"
+                                className="w-7 h-7 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0 mt-0.5"
+                              />
+                              <div className="flex-1 bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800 shadow-2xs">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-semibold text-slate-900 dark:text-slate-100">
+                                      {comm.authorName}
                                     </span>
-                                  )}
+                                    {(comm.authorRole === 'admin' || comm.authorRole === 'co_admin') && (
+                                      <span className="text-[9px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1 rounded">
+                                        Instructor
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[10px] text-slate-400 dark:text-slate-500 font-mono">
+                                      {comm.createdAt}
+                                    </span>
+                                    {canDeleteComment && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteComment(post.id, comm.id)}
+                                        className="p-0.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded transition-colors cursor-pointer"
+                                        title="Delete comment (SQL Auto-Delete)"
+                                      >
+                                        <Trash2 className="w-3 h-3" />
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
-                                <span className="text-[10px] text-slate-400 dark:text-slate-500 font-mono">
-                                  {comm.createdAt}
-                                </span>
+                                <p className="text-slate-700 dark:text-slate-300 mt-1 leading-relaxed whitespace-pre-line">
+                                  {renderTextWithLinks(comm.content)}
+                                </p>
                               </div>
-                              <p className="text-slate-700 dark:text-slate-300 mt-1 leading-relaxed">
-                                {comm.content}
-                              </p>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
 
@@ -1676,6 +1610,45 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
             onRefresh();
           }}
         />
+      )}
+
+      {/* Delete Post Confirmation Modal */}
+      {postToDeleteId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-sm">
+          <div className="relative w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-rose-100 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                  Delete Post (ပို့စ်ကို ဖျက်သိမ်းရန် အတည်ပြုပါ)
+                </h3>
+                <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                  ဤ Post ကို အတန်း Stream နှင့် Supabase SQL Database ထဲမှ အပြီးတိုင် ဖျက်သိမ်းလိုပါသလား?
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setPostToDeleteId(null)}
+                className="px-3.5 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 cursor-pointer"
+              >
+                မဖျက်တော့ပါ (Cancel)
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeletePost}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete Post & SQL Row</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

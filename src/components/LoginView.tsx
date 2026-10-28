@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ClassroomDB } from '../services/storage';
 import { User, UserRole } from '../types/classroom';
 import { AcademyLogo } from './AcademyLogo';
+import { PWAInstallButton } from './PWAInstallButton';
 import {
   ShieldCheck,
   Lock,
@@ -83,36 +84,37 @@ export const LoginView: React.FC<LoginViewProps> = ({
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col justify-between transition-colors duration-200">
       {/* Top Bar */}
-      <header className="w-full border-b border-slate-200/80 dark:border-slate-800/80 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-8 h-16 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3 min-w-0">
+      <header className="sticky top-0 z-30 w-full border-b border-slate-200/80 dark:border-slate-800/80 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
+        <div className="max-w-7xl mx-auto px-4 sm:px-8 h-16 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
             <AcademyLogo size="sm" />
             <div className="truncate">
-              <span className="text-base sm:text-lg font-bold tracking-tight text-slate-900 dark:text-white block leading-tight truncate">
-                SWANARH ACADEMY
+              <span className="text-sm sm:text-lg font-bold tracking-tight text-slate-900 dark:text-white block leading-tight truncate">
+                SwanArh Classroom
               </span>
-              <span className="text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold tracking-wide block leading-tight">
-                DR. SI THU AUNG · CLASSROOM OS
+              <span className="text-[10px] sm:text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold tracking-wide block leading-tight truncate">
+                DR. SI THU AUNG · SWANARH ACADEMY
               </span>
             </div>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <PWAInstallButton variant="login" />
             <button
               type="button"
               onClick={onToggleTheme}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 transition-colors cursor-pointer whitespace-nowrap"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 transition-colors cursor-pointer whitespace-nowrap"
               title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
             >
               {theme === 'dark' ? (
                 <>
                   <Sun className="w-3.5 h-3.5 text-amber-400" />
-                  <span className="hidden xs:inline">Light Mode</span>
+                  <span className="hidden sm:inline">Light Mode</span>
                 </>
               ) : (
                 <>
                   <Moon className="w-3.5 h-3.5 text-slate-600" />
-                  <span className="hidden xs:inline">Dark Mode</span>
+                  <span className="hidden sm:inline">Dark Mode</span>
                 </>
               )}
             </button>
@@ -121,10 +123,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
       </header>
 
       {/* Main Content Split Layout */}
-      <main className="max-w-6xl w-full mx-auto px-4 sm:px-8 py-8 sm:py-12 my-auto">
+      <main className="max-w-6xl w-full mx-auto px-4 sm:px-8 py-6 sm:py-10 my-auto">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-center">
           {/* Left Column: Academy Brand Showcase & Official White Crest Logo */}
-          <div className="lg:col-span-5 flex flex-col items-center lg:items-start text-center lg:text-left space-y-6">
+          <div className="lg:col-span-5 flex flex-col items-center lg:items-start text-center lg:text-left space-y-5">
             {/* Official Logo Showcase Badge */}
             <div className="p-2.5 rounded-full bg-white shadow-xl border border-slate-200/90 dark:border-slate-700">
               <AcademyLogo size="xl" />
@@ -175,8 +177,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
             </div>
           </div>
 
-          {/* Right Column: Dedicated Sign In Card */}
-          <div className="lg:col-span-7 w-full max-w-xl mx-auto">
+          {/* Right Column: Device-Aware Direct Install Card + Dedicated Sign In Card */}
+          <div className="lg:col-span-7 w-full max-w-xl mx-auto space-y-4">
+            {/* Device-Aware Direct App Install Banner */}
+            <PWAInstallButton variant="login-device-card" />
+
             <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200/90 dark:border-slate-800 overflow-hidden transition-colors">
               {/* Card Header Banner */}
               <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-850 flex items-center justify-between">

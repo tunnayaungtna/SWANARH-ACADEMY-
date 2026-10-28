@@ -11,6 +11,7 @@ import {
 } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
 import { useBackHandler } from '../utils/backNavigation';
+import { renderTextWithLinks } from '../utils/linkify';
 import {
   FileText,
   HelpCircle,
@@ -24,6 +25,8 @@ import {
   BookOpen,
   ArrowRight,
   ShieldCheck,
+  CalendarCheck,
+  Trash2,
 } from 'lucide-react';
 
 interface ClassworkViewProps {
@@ -34,6 +37,7 @@ interface ClassworkViewProps {
   progress: StudentProgress;
   onRefresh: () => void;
   onOpenCertificate: (cert: CertificateData) => void;
+  onOpenAttendance?: () => void;
 }
 
 export const ClassworkView: React.FC<ClassworkViewProps> = ({
@@ -44,6 +48,7 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
   progress,
   onRefresh,
   onOpenCertificate,
+  onOpenAttendance,
 }) => {
   // Submission dialog state for students
   const [activeAssignmentForSubmit, setActiveAssignmentForSubmit] = useState<Assignment | null>(null);
@@ -74,13 +79,15 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
   useBackHandler(!!selectedSubmissionToGrade, () => setSelectedSubmissionToGrade(null));
   useBackHandler(!!activeQuiz, () => setActiveQuiz(null));
 
-  // Calculate overall course progress percentage
+  // Calculate overall course progress percentage & attendance percentage
   const totalItems = (course.totalLessons || 1) + assignments.length + quizzes.length;
   const completedItems =
     progress.completedLessonIds.length +
     progress.completedAssignmentIds.length +
     progress.passedQuizIds.length;
   const progressPct = Math.min(100, Math.round((completedItems / totalItems) * 100));
+  const attendanceStats = ClassroomDB.getStudentAttendanceStats(course.id, currentUser.id);
+  const canClaimCertificate = progressPct >= 75 && attendanceStats.percentage >= 75;
 
   const handleStudentSubmitHomework = (e: React.FormEvent) => {
     e.preventDefault();
@@ -132,10 +139,30 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
     onRefresh();
   };
 
+  const isInstructor = currentUser.role === 'admin' || currentUser.role === 'co_admin';
+
   const handleClaimCertificate = () => {
     const cert = ClassroomDB.issueCertificate(currentUser, course);
     onRefresh();
     onOpenCertificate(cert);
+  };
+
+  const handleDeleteQuiz = (quizId: string) => {
+    ClassroomDB.deleteQuiz(quizId, currentUser);
+    onRefresh();
+  };
+
+  const handleDeleteAssignment = (assignmentId: string) => {
+    ClassroomDB.deleteAssignment(assignmentId, currentUser);
+    onRefresh();
+  };
+
+  const handleDeleteSubmission = (submissionId: string) => {
+    ClassroomDB.deleteSubmission(submissionId, currentUser);
+    if (selectedSubmissionToGrade?.id === submissionId) {
+      setSelectedSubmissionToGrade(null);
+    }
+    onRefresh();
   };
 
   return (
@@ -144,20 +171,34 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
       <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs p-5 transition-colors">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-850">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                Course Progress & Completion
+                Course Progress & Certificate Eligibility
               </span>
               <span className="text-xs font-mono font-medium text-indigo-600 dark:text-indigo-400">
-                · {progressPct}% Completed
+                · Coursework: {progressPct}%
+              </span>
+              <span className="text-xs font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                · Attendance: {attendanceStats.percentage}%
               </span>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Complete lessons, submit required assignments, and pass quizzes to unlock your verified credential.
+              သင်တန်းဆင်းလက်မှတ် (Certificate) ရရှိရန် သင်ခန်းစာပြီးစီးမှု ≥75% နှင့် အတန်းတက်ရောက်မှု (Attendance) ≥75% ပြည့်မီရန် လိုအပ်ပါသည်။
             </p>
           </div>
 
-          <div>
+          <div className="flex items-center gap-2 flex-wrap">
+            {onOpenAttendance && (
+              <button
+                type="button"
+                onClick={onOpenAttendance}
+                className="flex items-center gap-1.5 px-3 py-2 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+              >
+                <CalendarCheck className="w-4 h-4" />
+                <span>Attendance ({attendanceStats.percentage}%)</span>
+              </button>
+            )}
+
             {progress.certificate ? (
               <button
                 onClick={() => onOpenCertificate(progress.certificate!)}
@@ -166,7 +207,7 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
                 <Award className="w-4 h-4" />
                 <span>View Certificate ({progress.certificate.certificateId})</span>
               </button>
-            ) : progressPct >= 75 ? (
+            ) : canClaimCertificate ? (
               <button
                 onClick={handleClaimCertificate}
                 className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-xs transition-all hover:scale-102 cursor-pointer"
@@ -177,7 +218,9 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
             ) : (
               <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700">
                 <Clock className="w-4 h-4 text-slate-400" />
-                <span>Certificate unlocks at 75% complete</span>
+                <span>
+                  Requires ≥75% Coursework & ≥75% Attendance
+                </span>
               </div>
             )}
           </div>
@@ -192,10 +235,13 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
             />
           </div>
 
-          <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 mt-2 font-mono">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400 mt-2 font-mono">
             <span>{progress.completedLessonIds.length} Lessons Viewed</span>
             <span>{progress.completedAssignmentIds.length} Assignments Submitted</span>
             <span>{progress.passedQuizIds.length} Quizzes Passed</span>
+            <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
+              Attendance: {attendanceStats.presentCount + attendanceStats.lateCount}/{attendanceStats.totalSessions} Sessions ({attendanceStats.percentage}%)
+            </span>
           </div>
         </div>
       </div>
@@ -228,16 +274,28 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
                     <span className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 font-mono">
                       MCQ Assessment
                     </span>
-                    {hasPassed ? (
-                      <span className="flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-200/60 dark:border-emerald-800/60">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                        <span>Passed ({latestSub?.score || 100}%)</span>
-                      </span>
-                    ) : (
-                      <span className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded-full font-medium border border-amber-200/60 dark:border-amber-800/60">
-                        Passing Score: {quiz.passingScore}%
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {hasPassed ? (
+                        <span className="flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-200/60 dark:border-emerald-800/60">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                          <span>Passed ({latestSub?.score || 100}%)</span>
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded-full font-medium border border-amber-200/60 dark:border-amber-800/60">
+                          Passing Score: {quiz.passingScore}%
+                        </span>
+                      )}
+                      {isInstructor && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteQuiz(quiz.id)}
+                          className="p-1 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                          title="Delete Quiz & SQL Data"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mt-2">{quiz.title}</h3>
@@ -298,18 +356,31 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
               >
                 <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
                   <div className="flex-1">
-                    <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 font-mono">
-                      <span>Due: {assignment.dueDate}</span>
-                      <span>·</span>
-                      <span>Max Points: {assignment.maxPoints} pts</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 font-mono">
+                        <span>Due: {assignment.dueDate}</span>
+                        <span>·</span>
+                        <span>Max Points: {assignment.maxPoints} pts</span>
+                      </div>
+                      {isInstructor && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteAssignment(assignment.id)}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
+                          title="Delete Assignment & SQL Data"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Delete</span>
+                        </button>
+                      )}
                     </div>
 
                     <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100 mt-1">
                       {assignment.title}
                     </h3>
 
-                    <p className="text-xs text-slate-700 dark:text-slate-300 mt-2 leading-relaxed">
-                      {assignment.description}
+                    <p className="text-xs text-slate-700 dark:text-slate-300 mt-2 leading-relaxed whitespace-pre-line">
+                      {renderTextWithLinks(assignment.description)}
                     </p>
 
                     {/* Rubric Matrix */}
@@ -413,22 +484,22 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
 
       {/* Student Upload Homework Modal - Responsive Mobile & Desktop */}
       {activeAssignmentForSubmit && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-sm overflow-y-auto">
-          <div className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-slate-200 p-4 sm:p-6 max-h-[92vh] overflow-y-auto">
-            <h3 className="text-base font-semibold text-slate-900">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/75 backdrop-blur-sm overflow-y-auto">
+          <div className="relative w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-4 sm:p-6 max-h-[92vh] overflow-y-auto transition-colors">
+            <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
               Submit Assignment: {activeAssignmentForSubmit.title}
             </h3>
-            <p className="text-xs text-slate-500 mt-1">
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
               Upload your assignment files (PDF, ZIP, or Code) and write submission notes.
             </p>
 
             <form onSubmit={handleStudentSubmitHomework} className="space-y-4 mt-4">
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1.5">
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
                   Attachment File
                 </label>
-                <div className="border-2 border-dashed border-slate-200 rounded-xl p-5 text-center bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer">
-                  <Upload className="w-6 h-6 text-slate-400 mx-auto mb-1.5" />
+                <div className="border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl p-5 text-center bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer">
+                  <Upload className="w-6 h-6 text-slate-400 dark:text-slate-500 mx-auto mb-1.5" />
                   <input
                     type="file"
                     id="homework-file-input"
@@ -441,22 +512,22 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
                     }}
                   />
                   <label htmlFor="homework-file-input" className="cursor-pointer">
-                    <span className="text-xs font-semibold text-indigo-600 hover:underline">
+                    <span className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline">
                       Click to choose file
                     </span>{' '}
-                    <span className="text-xs text-slate-500">or drop here</span>
-                    <p className="text-[11px] text-slate-400 mt-1">PDF, ZIP, or SQL files up to 25MB</p>
+                    <span className="text-xs text-slate-500 dark:text-slate-400">or drop here</span>
+                    <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">PDF, ZIP, or SQL files up to 25MB</p>
                   </label>
                 </div>
                 {submissionFileName && (
-                  <p className="text-xs text-indigo-600 font-medium mt-1.5">
+                  <p className="text-xs text-indigo-600 dark:text-indigo-400 font-medium mt-1.5 break-all">
                     Selected: {submissionFileName}
                   </p>
                 )}
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                   Private Note to Instructor
                 </label>
                 <textarea
@@ -464,15 +535,15 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
                   value={submissionComment}
                   onChange={(e) => setSubmissionComment(e.target.value)}
                   placeholder="Explain your approach, assumptions, or implementation highlights..."
-                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500"
+                  className="w-full px-3 py-2 text-xs bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:border-indigo-500"
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setActiveAssignmentForSubmit(null)}
-                  className="px-3 py-1.5 text-xs text-slate-600 hover:text-slate-900 cursor-pointer"
+                  className="px-3 py-1.5 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -491,14 +562,14 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
 
       {/* Admin Review & Grade Submissions Modal */}
       {activeAssignmentForGrading && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm">
-          <div className="relative w-full max-w-2xl bg-white rounded-xl shadow-2xl border border-slate-200 p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/75 backdrop-blur-sm overflow-y-auto">
+          <div className="relative w-full max-w-2xl bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-4 sm:p-6 max-h-[90vh] overflow-y-auto transition-colors">
+            <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
               <div>
-                <h3 className="text-base font-semibold text-slate-900">
+                <h3 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-slate-100">
                   Grade Submissions: {activeAssignmentForGrading.title}
                 </h3>
-                <span className="text-xs text-slate-500">
+                <span className="text-xs text-slate-500 dark:text-slate-400">
                   Max: {activeAssignmentForGrading.maxPoints} pts
                 </span>
               </div>
@@ -507,71 +578,84 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
                   setActiveAssignmentForGrading(null);
                   setSelectedSubmissionToGrade(null);
                 }}
-                className="text-xs text-slate-500 hover:text-slate-900 cursor-pointer"
+                className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-xs font-medium text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white cursor-pointer"
               >
-                Close
+                ✕ Close
               </button>
             </div>
 
             {/* List of Student Submissions */}
             <div className="space-y-3 mt-4">
               {ClassroomDB.getSubmissions(activeAssignmentForGrading.id, currentUser).length === 0 ? (
-                <p className="text-xs text-slate-500 py-4 text-center">
+                <p className="text-xs text-slate-500 dark:text-slate-400 py-6 text-center">
                   No submissions submitted yet by students in this batch.
                 </p>
               ) : (
                 ClassroomDB.getSubmissions(activeAssignmentForGrading.id, currentUser).map((sub) => (
                   <div
                     key={sub.id}
-                    className="p-4 rounded-lg border border-slate-200 bg-slate-50 flex items-start justify-between gap-4"
+                    className="p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:gap-4"
                   >
-                    <div className="flex items-start gap-3">
+                    <div className="flex items-start gap-3 min-w-0">
                       <img
                         src={sub.studentAvatar}
                         alt={sub.studentName}
-                        className="w-9 h-9 rounded-full object-cover border border-slate-200"
+                        referrerPolicy="no-referrer"
+                        className="w-9 h-9 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
                       />
-                      <div>
-                        <span className="text-xs font-semibold text-slate-900 block">
+                      <div className="min-w-0 flex-1">
+                        <span className="text-xs font-semibold text-slate-900 dark:text-slate-100 block truncate">
                           {sub.studentName}
                         </span>
-                        <span className="text-[11px] text-slate-500 font-mono">
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
                           Submitted: {sub.submittedAt}
                         </span>
-                        <p className="text-xs text-slate-700 mt-1.5 italic">
-                          "{sub.submissionText}"
+                        <p className="text-xs text-slate-700 dark:text-slate-300 mt-1.5 italic whitespace-pre-line break-words">
+                          "{renderTextWithLinks(sub.submissionText)}"
                         </p>
-                        <div className="text-[11px] text-indigo-600 font-mono mt-1">
+                        <div className="text-[11px] text-indigo-600 dark:text-indigo-400 font-mono mt-1 break-all">
                           File: {sub.fileAttachment?.name} ({sub.fileAttachment?.size})
                         </div>
                       </div>
                     </div>
 
-                    <div className="text-right shrink-0">
+                    <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2 shrink-0 border-t sm:border-t-0 border-slate-200/70 dark:border-slate-700/70 pt-2.5 sm:pt-0">
                       {sub.status === 'graded' ? (
-                        <div className="mb-2">
-                          <span className="text-xs font-bold font-mono text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
+                        <div>
+                          <span className="text-xs font-bold font-mono text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/60 px-2 py-0.5 rounded">
                             {sub.grade} / {activeAssignmentForGrading.maxPoints} pts
                           </span>
                         </div>
                       ) : (
-                        <div className="mb-2">
-                          <span className="text-[11px] font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded">
+                        <div>
+                          <span className="text-[11px] font-medium text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800/60 px-2 py-0.5 rounded">
                             Pending Grade
                           </span>
                         </div>
                       )}
 
-                      <button
-                        onClick={() => {
-                          setSelectedSubmissionToGrade(sub);
-                          setGradeInput(sub.grade || 95);
-                          setFeedbackInput(sub.feedback || 'Good work on architecture design.');
-                        }}
-                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg shadow-sm transition-colors cursor-pointer"
-                      >
-                        {sub.status === 'graded' ? 'Edit Grade' : 'Grade Submission'}
-                      </button>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          onClick={() => {
+                            setSelectedSubmissionToGrade(sub);
+                            setGradeInput(sub.grade || 95);
+                            setFeedbackInput(sub.feedback || 'Good work on architecture design.');
+                          }}
+                          className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg shadow-sm transition-colors cursor-pointer"
+                        >
+                          {sub.status === 'graded' ? 'Edit Grade' : 'Grade Submission'}
+                        </button>
+                        {isInstructor && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteSubmission(sub.id)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg transition-colors cursor-pointer"
+                            title="Delete Submission & SQL Row"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))
@@ -582,15 +666,15 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
             {selectedSubmissionToGrade && (
               <form
                 onSubmit={handleAdminGradeSubmit}
-                className="mt-5 p-4 rounded-xl border border-indigo-200 bg-indigo-50/50 space-y-3"
+                className="mt-5 p-4 rounded-xl border border-indigo-200 dark:border-indigo-800/60 bg-indigo-50/50 dark:bg-indigo-950/30 space-y-3"
               >
-                <div className="text-xs font-semibold text-indigo-950">
+                <div className="text-xs font-semibold text-indigo-950 dark:text-indigo-200">
                   Grading: {selectedSubmissionToGrade.studentName}
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
                   <div>
-                    <label className="block text-slate-700 mb-1">
+                    <label className="block text-slate-700 dark:text-slate-300 mb-1">
                       Score (out of {activeAssignmentForGrading.maxPoints})
                     </label>
                     <input
@@ -599,18 +683,18 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
                       max={activeAssignmentForGrading.maxPoints}
                       value={gradeInput}
                       onChange={(e) => setGradeInput(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 border border-slate-300 rounded bg-white font-mono"
+                      className="w-full px-2.5 py-1.5 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 font-mono"
                       required
                     />
                   </div>
 
                   <div>
-                    <label className="block text-slate-700 mb-1">Instructor Feedback</label>
+                    <label className="block text-slate-700 dark:text-slate-300 mb-1">Instructor Feedback</label>
                     <input
                       type="text"
                       value={feedbackInput}
                       onChange={(e) => setFeedbackInput(e.target.value)}
-                      className="w-full px-2.5 py-1.5 border border-slate-300 rounded bg-white text-xs"
+                      className="w-full px-2.5 py-1.5 border border-slate-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-xs"
                       required
                     />
                   </div>
@@ -620,7 +704,7 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
                   <button
                     type="button"
                     onClick={() => setSelectedSubmissionToGrade(null)}
-                    className="px-3 py-1 text-xs text-slate-600 hover:text-slate-900 cursor-pointer"
+                    className="px-3 py-1 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white cursor-pointer"
                   >
                     Cancel
                   </button>
@@ -640,14 +724,14 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
       {/* Interactive MCQ Quiz Runner Modal - Responsive Mobile & Desktop */}
       {activeQuiz && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-md overflow-y-auto">
-          <div className="relative w-full max-w-xl bg-white rounded-2xl shadow-2xl border border-slate-200 p-4 sm:p-6 max-h-[92vh] overflow-y-auto">
+          <div className="relative w-full max-w-xl bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-4 sm:p-6 max-h-[92vh] overflow-y-auto transition-colors">
             {!quizSubmittedResult ? (
               <div>
                 {/* Quiz Header */}
-                <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
                   <div>
-                    <h3 className="text-base font-semibold text-slate-900">{activeQuiz.title}</h3>
-                    <div className="flex items-center gap-2 text-xs text-slate-500 font-mono mt-0.5">
+                    <h3 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-slate-100">{activeQuiz.title}</h3>
+                    <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 font-mono mt-0.5">
                       <span>
                         Question {currentQuestionIndex + 1} of {activeQuiz.questions.length}
                       </span>
@@ -658,15 +742,15 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
 
                   <button
                     onClick={() => setActiveQuiz(null)}
-                    className="text-xs text-slate-400 hover:text-slate-700 cursor-pointer"
+                    className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-xs text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white cursor-pointer"
                   >
                     Exit
                   </button>
                 </div>
 
                 {/* Current Question Body */}
-                <div className="py-6">
-                  <p className="text-sm font-semibold text-slate-900 leading-snug">
+                <div className="py-5 sm:py-6">
+                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 leading-snug">
                     {activeQuiz.questions[currentQuestionIndex].question}
                   </p>
 
@@ -679,17 +763,17 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
                         <div
                           key={optIdx}
                           onClick={() => handleSelectQuizOption(qId, optIdx)}
-                          className={`p-3 rounded-lg border text-xs cursor-pointer transition-all flex items-start gap-3 ${
+                          className={`p-3 rounded-xl border text-xs cursor-pointer transition-all flex items-start gap-3 ${
                             isSelected
-                              ? 'border-indigo-600 bg-indigo-50/70 text-indigo-950 font-medium shadow-xs'
-                              : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700'
+                              ? 'border-indigo-600 dark:border-indigo-500 bg-indigo-50/70 dark:bg-indigo-950/50 text-indigo-950 dark:text-indigo-200 font-medium shadow-xs'
+                              : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-300'
                           }`}
                         >
                           <span
                             className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 mt-0.5 text-[10px] font-mono ${
                               isSelected
                                 ? 'border-indigo-600 bg-indigo-600 text-white'
-                                : 'border-slate-300 text-slate-500'
+                                : 'border-slate-300 dark:border-slate-600 text-slate-500 dark:text-slate-400'
                             }`}
                           >
                             {String.fromCharCode(65 + optIdx)}
@@ -702,12 +786,12 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
                 </div>
 
                 {/* Navigation & Submit Bar */}
-                <div className="flex items-center justify-between pt-4 border-t border-slate-100">
+                <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-slate-800">
                   <button
                     type="button"
                     disabled={currentQuestionIndex === 0}
                     onClick={() => setCurrentQuestionIndex((prev) => prev - 1)}
-                    className="px-3 py-1.5 text-xs text-slate-600 hover:text-slate-900 disabled:opacity-30 cursor-pointer"
+                    className="px-3 py-1.5 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white disabled:opacity-30 cursor-pointer"
                   >
                     Previous
                   </button>
@@ -717,7 +801,7 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
                       <button
                         type="button"
                         onClick={() => setCurrentQuestionIndex((prev) => prev + 1)}
-                        className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-medium rounded-lg transition-colors cursor-pointer"
+                        className="px-4 py-2 bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white text-xs font-medium rounded-lg transition-colors cursor-pointer"
                       >
                         Next Question
                       </button>
@@ -739,8 +823,8 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
                 <div
                   className={`w-14 h-14 rounded-full mx-auto flex items-center justify-center ${
                     quizSubmittedResult.passed
-                      ? 'bg-emerald-100 text-emerald-600'
-                      : 'bg-rose-100 text-rose-600'
+                      ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400'
+                      : 'bg-rose-100 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400'
                   }`}
                 >
                   {quizSubmittedResult.passed ? (
@@ -751,13 +835,13 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
                 </div>
 
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900">
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">
                     {quizSubmittedResult.passed ? 'Assessment Passed!' : 'Did Not Meet Passing Mark'}
                   </h3>
-                  <div className="text-2xl font-bold font-mono text-indigo-600 mt-1">
+                  <div className="text-2xl font-bold font-mono text-indigo-600 dark:text-indigo-400 mt-1">
                     {quizSubmittedResult.score}%
                   </div>
-                  <p className="text-xs text-slate-500 mt-1">
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                     {quizSubmittedResult.passed
                       ? 'Congratulations! Your score has been recorded and accredited toward your certificate.'
                       : `Passing threshold is ${activeQuiz.passingScore}%. You may review the explanations below and retake.`}
@@ -765,24 +849,24 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
                 </div>
 
                 {/* Explanations Review */}
-                <div className="text-left max-h-60 overflow-y-auto space-y-2.5 p-3 rounded-lg bg-slate-50 border border-slate-200">
+                <div className="text-left max-h-60 overflow-y-auto space-y-2.5 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800">
                   {activeQuiz.questions.map((q, idx) => {
                     const studentChoice = selectedAnswers[q.id];
                     const isCorrect = studentChoice === q.correctIndex;
 
                     return (
-                      <div key={q.id} className="text-xs p-2.5 rounded bg-white border border-slate-200">
-                        <div className="font-semibold text-slate-900 flex items-center gap-1.5">
+                      <div key={q.id} className="text-xs p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                        <div className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
                           <span>{idx + 1}.</span>
                           <span>{q.question}</span>
                         </div>
-                        <div className="mt-1 text-[11px] text-slate-600">
+                        <div className="mt-1 text-[11px] text-slate-600 dark:text-slate-400">
                           <span className="font-semibold">Your Answer: </span>
-                          <span className={isCorrect ? 'text-emerald-600' : 'text-rose-600'}>
+                          <span className={isCorrect ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
                             {q.options[studentChoice] || 'Unanswered'}
                           </span>
                         </div>
-                        <p className="mt-1 text-[11px] text-indigo-900 bg-indigo-50/70 p-1.5 rounded">
+                        <p className="mt-1 text-[11px] text-indigo-900 dark:text-indigo-200 bg-indigo-50/70 dark:bg-indigo-950/40 p-1.5 rounded">
                           💡 {q.explanation}
                         </p>
                       </div>
@@ -793,7 +877,7 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
                 <div className="pt-2">
                   <button
                     onClick={() => setActiveQuiz(null)}
-                    className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-medium rounded-lg transition-colors cursor-pointer"
+                    className="px-5 py-2 bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white text-xs font-medium rounded-lg transition-colors cursor-pointer"
                   >
                     Finish Review
                   </button>

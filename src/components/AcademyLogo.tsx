@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 interface AcademyLogoProps {
   className?: string;
@@ -9,6 +9,8 @@ export const AcademyLogo: React.FC<AcademyLogoProps> = ({
   className = '',
   size = 'lg',
 }) => {
+  const [imgError, setImgError] = useState(false);
+
   const dimensions = {
     sm: 'w-10 h-10',
     md: 'w-16 h-16',
@@ -19,13 +21,21 @@ export const AcademyLogo: React.FC<AcademyLogoProps> = ({
   return (
     <div
       className={`relative inline-flex items-center justify-center rounded-full bg-white shadow-md overflow-hidden shrink-0 select-none ${dimensions} ${className}`}
-      title="Dr. Si Thu Aung · Swanarh Academy"
+      title="SwanArh Classroom · Dr. Si Thu Aung · Swanarh Academy"
     >
-      <svg
-        viewBox="0 0 400 400"
-        className="w-full h-full"
-        xmlns="http://www.w3.org/2000/svg"
-      >
+      {!imgError ? (
+        <img
+          src="/assets/aistudio/IMG_20261027_041802_240_9c16671f.jpg"
+          alt="Dr. Si Thu Aung · Swanarh Academy"
+          onError={() => setImgError(true)}
+          className="w-full h-full object-contain p-0.5 rounded-full bg-white"
+        />
+      ) : (
+        <svg
+          viewBox="0 0 400 400"
+          className="w-full h-full"
+          xmlns="http://www.w3.org/2000/svg"
+        >
         <defs>
           {/* Top arc for DR. SI THU AUNG - centered in the outer white band */}
           <path
@@ -233,7 +243,8 @@ export const AcademyLogo: React.FC<AcademyLogoProps> = ({
           <ellipse cx="228" cy="246" rx="4" ry="9.5" transform="rotate(-35 228 246)" />
           <ellipse cx="219" cy="267" rx="4.5" ry="9.5" transform="rotate(68 219 267)" />
         </g>
-      </svg>
+        </svg>
+      )}
     </div>
   );
 };

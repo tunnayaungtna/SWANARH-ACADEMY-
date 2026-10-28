@@ -105,8 +105,9 @@ export const CertificateModal: React.FC<CertificateModalProps> = ({ certificate,
     // Achievement stats
     ctx.fillStyle = '#0f172a';
     ctx.font = '500 16px "Plus Jakarta Sans", sans-serif';
+    const attPct = certificate.attendancePercentage ?? 100;
     ctx.fillText(
-      `Final Evaluation Score: ${certificate.gradeAverage}% · Grade: High Distinction`,
+      `Final Evaluation Score: ${certificate.gradeAverage}% · Attendance Rate: ${attPct}% · Grade: High Distinction`,
       600,
       485
     );

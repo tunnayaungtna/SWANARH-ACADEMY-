@@ -3,6 +3,7 @@ import { User, NotificationItem } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
 import { ProfilePictureModal } from './ProfilePictureModal';
 import { AcademyLogo } from './AcademyLogo';
+import { PWAInstallButton } from './PWAInstallButton';
 import { useBackHandler } from '../utils/backNavigation';
 import {
   Bell,
@@ -133,7 +134,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             className="text-base sm:text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer text-left flex items-center gap-2"
           >
             <AcademyLogo size="sm" />
-            <span>Swanarh Academy</span>
+            <span>SwanArh Classroom</span>
           </button>
 
           <span className="text-[10px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 hidden xs:inline-block">
@@ -176,8 +177,11 @@ export const Navbar: React.FC<NavbarProps> = ({
           )}
         </nav>
 
-        {/* Zone 3: Actions (Theme Toggle, Notifications, Profile Switcher & Mobile Menu Toggle) */}
+        {/* Zone 3: Actions (PWA Install, Theme Toggle, Notifications, Profile Switcher & Mobile Menu Toggle) */}
         <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+          {/* In-App PWA Install Button */}
+          <PWAInstallButton variant="navbar" />
+
           {/* Dark / Light Mode Toggle Button */}
           <button
             type="button"
@@ -301,18 +305,20 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </div>
                 </div>
 
-                {/* Account Actions: Profile Picture & Password */}
+                {/* Account Actions: Profile Picture (Admin & Co-Admin only) & Password */}
                 <div className="pt-1.5 border-t border-slate-100 dark:border-slate-800 space-y-0.5">
-                  <button
-                    onClick={() => {
-                      setShowUserDropdown(false);
-                      setShowProfilePictureModal(true);
-                    }}
-                    className="w-full flex items-center gap-2 p-2 rounded-lg text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer font-medium"
-                  >
-                    <Camera className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-                    <span>Change Profile Picture (ဓာတ်ပုံ ပြောင်းမည်)</span>
-                  </button>
+                  {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
+                    <button
+                      onClick={() => {
+                        setShowUserDropdown(false);
+                        setShowProfilePictureModal(true);
+                      }}
+                      className="w-full flex items-center gap-2 p-2 rounded-lg text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer font-medium"
+                    >
+                      <Camera className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                      <span>Change Profile Picture (ဓာတ်ပုံ ပြောင်းမည်)</span>
+                    </button>
+                  )}
 
                   <button
                     onClick={() => {
@@ -367,7 +373,11 @@ export const Navbar: React.FC<NavbarProps> = ({
               <div>
                 <div className="text-xs font-bold text-slate-900 dark:text-slate-100">{currentUser.name}</div>
                 <div className="text-[10px] text-slate-500 dark:text-slate-400 capitalize">
-                  {currentUser.role === 'admin' ? 'Faculty / Admin (ဆရာ)' : 'Student (ကျောင်းသား)'}
+                  {currentUser.role === 'admin'
+                    ? 'Faculty / Admin (ဆရာ)'
+                    : currentUser.role === 'co_admin'
+                    ? 'Co-Admin (တွဲဖက် အက်ဒမင်)'
+                    : 'Student (ကျောင်းသား)'}
                 </div>
               </div>
             </div>
@@ -383,6 +393,9 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           <div className="grid grid-cols-1 gap-1 text-xs font-medium">
+            {/* Mobile PWA Install Button */}
+            <PWAInstallButton variant="mobile-drawer" />
+
             {/* Mobile Theme Toggle */}
             <button
               onClick={onToggleTheme}
@@ -425,17 +438,19 @@ export const Navbar: React.FC<NavbarProps> = ({
               </button>
             )}
 
-            {/* Profile Picture Option in Mobile Drawer */}
-            <button
-              onClick={() => {
-                setIsMobileMenuOpen(false);
-                setShowProfilePictureModal(true);
-              }}
-              className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-left cursor-pointer"
-            >
-              <Camera className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-              <span>Change Profile Picture (ပရိုဖိုင်ဓာတ်ပုံ ပြောင်းမည်)</span>
-            </button>
+            {/* Profile Picture Option in Mobile Drawer (Admin & Co-Admin only) */}
+            {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
+              <button
+                onClick={() => {
+                  setIsMobileMenuOpen(false);
+                  setShowProfilePictureModal(true);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-left cursor-pointer"
+              >
+                <Camera className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <span>Change Profile Picture (ပရိုဖိုင်ဓာတ်ပုံ ပြောင်းမည်)</span>
+              </button>
+            )}
 
             <button
               onClick={() => {
@@ -479,8 +494,8 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
       )}
 
-      {/* Profile Picture Modal */}
-      {showProfilePictureModal && (
+      {/* Profile Picture Modal (Admin & Co-Admin only) */}
+      {showProfilePictureModal && (currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
         <ProfilePictureModal
           user={currentUser}
           isOpen={showProfilePictureModal}

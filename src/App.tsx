@@ -13,6 +13,7 @@ import { CreateCourseModal } from './components/CreateCourseModal';
 import { AdminStudentDirectoryModal } from './components/AdminStudentDirectoryModal';
 import { LoginView } from './components/LoginView';
 import { SupabaseModal } from './components/SupabaseModal';
+import { OfflineIndicator } from './components/PWAInstallButton';
 import {
   BookOpen,
   Plus,
@@ -57,6 +58,8 @@ export default function App() {
   const [showCreateCourseModal, setShowCreateCourseModal] = useState(false);
   const [showStudentDirectoryModal, setShowStudentDirectoryModal] = useState(false);
   const [showSupabaseModal, setShowSupabaseModal] = useState(false);
+  const [showResetConfirmModal, setShowResetConfirmModal] = useState(false);
+  const [appBannerError, setAppBannerError] = useState<string | null>(null);
 
   // Mobile Back Key step-by-step navigation handlers (outer to inner)
   useBackHandler(!!selectedCourse, () => setSelectedCourse(null));
@@ -66,6 +69,7 @@ export default function App() {
   useBackHandler(showCreateCourseModal, () => setShowCreateCourseModal(false));
   useBackHandler(showStudentDirectoryModal, () => setShowStudentDirectoryModal(false));
   useBackHandler(showSupabaseModal, () => setShowSupabaseModal(false));
+  useBackHandler(showResetConfirmModal, () => setShowResetConfirmModal(false));
 
   // Performance & Security Settings
   const [isLowBandwidth, setIsLowBandwidth] = useState(false);
@@ -124,6 +128,26 @@ export default function App() {
         refreshData();
       }
     });
+
+    // Multi-user / multi-tab synchronization
+    const handleStorageChange = () => {
+      refreshData();
+    };
+    window.addEventListener('storage', handleStorageChange);
+
+    // Periodic background sync with Supabase for online multi-user consistency
+    const syncInterval = setInterval(() => {
+      ClassroomDB.pullFromSupabase().then((updated) => {
+        if (updated) {
+          refreshData();
+        }
+      });
+    }, 25000);
+
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      clearInterval(syncInterval);
+    };
   }, []);
 
   const handleSelectUser = (user: User) => {
@@ -160,7 +184,8 @@ export default function App() {
     if (!currentUser) return;
     const check = ClassroomDB.getCourseById(course.id, currentUser);
     if (!check.course) {
-      alert(check.error || 'Access Denied: You are not enrolled in this course.');
+      setAppBannerError(check.error || 'Access Denied: You are not enrolled in this course.');
+      setTimeout(() => setAppBannerError(null), 5000);
       return;
     }
 
@@ -172,15 +197,14 @@ export default function App() {
   };
 
   const handleResetData = () => {
-    if (
-      confirm(
-        'Reset classroom database to initial state? All test submissions, comments, and batches will be restored.'
-      )
-    ) {
-      ClassroomDB.resetAll();
-      setSelectedCourse(null);
-      refreshData();
-    }
+    setShowResetConfirmModal(true);
+  };
+
+  const confirmResetData = () => {
+    ClassroomDB.resetAll();
+    setSelectedCourse(null);
+    setShowResetConfirmModal(false);
+    refreshData();
   };
 
   // If user is not authenticated, display the dedicated Login View
@@ -240,6 +264,20 @@ export default function App() {
 
       {/* Main Container - Responsive padding for mobile & desktop screens */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-4 sm:py-8">
+        {appBannerError && (
+          <div className="mb-4 p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800/70 text-rose-800 dark:text-rose-200 text-xs flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+              <span>{appBannerError}</span>
+            </div>
+            <button
+              onClick={() => setAppBannerError(null)}
+              className="text-xs font-semibold underline cursor-pointer shrink-0"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         {selectedCourse ? (
           /* Active Course Workspace (Stream, Classwork, People, Quizzes, Video) */
           <CourseDetail
@@ -391,6 +429,7 @@ export default function App() {
                           currentUser={currentUser}
                           progress={studentProg}
                           onSelectCourse={handleOpenCourse}
+                          onRefresh={refreshData}
                         />
                       );
                     })}

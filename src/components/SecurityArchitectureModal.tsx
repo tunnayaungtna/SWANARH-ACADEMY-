@@ -220,7 +220,20 @@ CREATE TABLE student_certificates (
   grade_average NUMERIC(5,2) NOT NULL,
   verification_hash VARCHAR(128) NOT NULL,
   UNIQUE(course_id, student_id)
-);`;
+);
+
+-- Grant schema usage and table permissions for Supabase Data API (Oct 30+ compliance)
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+
+-- Ensure any future tables created in public schema automatically receive grants
+ALTER DEFAULT PRIVILEGES IN SCHEMA public 
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO anon, authenticated, service_role;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public 
+GRANT USAGE, SELECT ON SEQUENCES TO anon, authenticated, service_role;`;
 
   const rlsPolicyCode = `-- ========================================================
 -- POSTGRESQL ROW-LEVEL SECURITY (RLS) POLICIES
@@ -288,7 +301,20 @@ WITH CHECK (
     WHERE a.id = assignment_submissions.assignment_id
       AND ce.student_id = auth.uid()
   )
-);`;
+);
+
+-- Grant schema usage and table permissions for Supabase Data API (Oct 30+ compliance)
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+
+-- Ensure any future tables created in public schema automatically receive grants
+ALTER DEFAULT PRIVILEGES IN SCHEMA public 
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO anon, authenticated, service_role;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public 
+GRANT USAGE, SELECT ON SEQUENCES TO anon, authenticated, service_role;`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md overflow-y-auto">
@@ -351,8 +377,8 @@ WITH CHECK (
             onClick={() => setActiveTab('video')}
             className={`px-3.5 py-2 font-medium border-b-2 transition-colors cursor-pointer whitespace-nowrap ${
               activeTab === 'video'
-                ? 'border-indigo-600 text-indigo-600'
-                : 'border-transparent text-slate-600 hover:text-slate-900'
+                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
             4. Anti-Piracy & DRM Pipeline
@@ -361,8 +387,8 @@ WITH CHECK (
             onClick={() => setActiveTab('roadmap')}
             className={`px-3.5 py-2 font-medium border-b-2 transition-colors cursor-pointer whitespace-nowrap ${
               activeTab === 'roadmap'
-                ? 'border-indigo-600 text-indigo-600'
-                : 'border-transparent text-slate-600 hover:text-slate-900'
+                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
             5. Step-by-Step Roadmap
@@ -371,8 +397,8 @@ WITH CHECK (
             onClick={() => setActiveTab('zoom')}
             className={`px-3.5 py-2 font-medium border-b-2 transition-colors cursor-pointer whitespace-nowrap ${
               activeTab === 'zoom'
-                ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-slate-600 hover:text-slate-900'
+                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
+                : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
             6. Zoom Deep Linking Spec
@@ -380,65 +406,65 @@ WITH CHECK (
         </div>
 
         {/* Content Area */}
-        <div className="p-6 overflow-y-auto space-y-6 flex-1 text-slate-800 text-xs">
+        <div className="p-4 sm:p-6 overflow-y-auto space-y-6 flex-1 text-slate-800 dark:text-slate-200 text-xs">
           {/* TAB 1: TECH STACK RECOMMENDATION */}
           {activeTab === 'stack' && (
             <div className="space-y-6">
-              <div className="p-4 rounded-xl bg-indigo-50 border border-indigo-200">
-                <span className="font-semibold text-indigo-950 block text-sm">
+              <div className="p-4 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60">
+                <span className="font-semibold text-indigo-950 dark:text-indigo-200 block text-sm">
                   Recommended Production Architecture: Next.js + PostgreSQL / Supabase + Bunny Stream
                 </span>
-                <p className="text-indigo-800 mt-1 leading-relaxed">
+                <p className="text-indigo-800 dark:text-indigo-300 mt-1 leading-relaxed">
                   Balancing development speed, low ongoing infrastructure cost, strict row-level security, and seamless mobile responsiveness across low-bandwidth environments.
                 </p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="p-4 rounded-xl border border-slate-200 bg-white space-y-2">
-                  <div className="font-semibold text-slate-900 text-sm flex items-center gap-2">
-                    <Server className="w-4 h-4 text-indigo-600" />
+                <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/50 space-y-2">
+                  <div className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
+                    <Server className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                     <span>Layer 1: Frontend (Next.js / Vite React + Tailwind)</span>
                   </div>
-                  <ul className="space-y-1.5 text-slate-600 list-disc pl-4">
-                    <li><strong className="text-slate-800">Mobile-First Touch UI:</strong> 80%+ mobile student traffic; lightweight bundle under 120KB.</li>
-                    <li><strong className="text-slate-800">Low-Bandwidth Mode:</strong> Dynamic image/asset reduction and client-side caching.</li>
-                    <li><strong className="text-slate-800">HTML5 Canvas Credentials:</strong> Instant client-side certificate rendering & PDF generation with zero external latency.</li>
+                  <ul className="space-y-1.5 text-slate-600 dark:text-slate-400 list-disc pl-4">
+                    <li><strong className="text-slate-800 dark:text-slate-200">Mobile-First Touch UI:</strong> 80%+ mobile student traffic; lightweight bundle under 120KB.</li>
+                    <li><strong className="text-slate-800 dark:text-slate-200">Low-Bandwidth Mode:</strong> Dynamic image/asset reduction and client-side caching.</li>
+                    <li><strong className="text-slate-800 dark:text-slate-200">HTML5 Canvas Credentials:</strong> Instant client-side certificate rendering & PDF generation with zero external latency.</li>
                   </ul>
                 </div>
 
-                <div className="p-4 rounded-xl border border-slate-200 bg-white space-y-2">
-                  <div className="font-semibold text-slate-900 text-sm flex items-center gap-2">
-                    <Database className="w-4 h-4 text-indigo-600" />
+                <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/50 space-y-2">
+                  <div className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
+                    <Database className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                     <span>Layer 2: Database & Authorization (PostgreSQL + RLS)</span>
                   </div>
-                  <ul className="space-y-1.5 text-slate-600 list-disc pl-4">
-                    <li><strong className="text-slate-800">Kernel-Level RLS:</strong> Authorization policies execute inside Postgres, not just middleware.</li>
-                    <li><strong className="text-slate-800">Data Isolation:</strong> Unenrolled students are physically incapable of leaking rows.</li>
-                    <li><strong className="text-slate-800">Composite Indexes:</strong> Fast pagination on course feeds as student counts scale into thousands.</li>
+                  <ul className="space-y-1.5 text-slate-600 dark:text-slate-400 list-disc pl-4">
+                    <li><strong className="text-slate-800 dark:text-slate-200">Kernel-Level RLS:</strong> Authorization policies execute inside Postgres, not just middleware.</li>
+                    <li><strong className="text-slate-800 dark:text-slate-200">Data Isolation:</strong> Unenrolled students are physically incapable of leaking rows.</li>
+                    <li><strong className="text-slate-800 dark:text-slate-200">Composite Indexes:</strong> Fast pagination on course feeds as student counts scale into thousands.</li>
                   </ul>
                 </div>
 
-                <div className="p-4 rounded-xl border border-slate-200 bg-white space-y-2">
-                  <div className="font-semibold text-slate-900 text-sm flex items-center gap-2">
-                    <Lock className="w-4 h-4 text-indigo-600" />
+                <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/50 space-y-2">
+                  <div className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
+                    <Lock className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                     <span>Layer 3: Video Hosting (Bunny Stream / Cloudflare Stream)</span>
                   </div>
-                  <ul className="space-y-1.5 text-slate-600 list-disc pl-4">
-                    <li><strong className="text-slate-800">Domain-Restricted Embeds:</strong> Only requests with verified Referer/Origin headers are served.</li>
-                    <li><strong className="text-slate-800">Signed Token URLs:</strong> HLS m3u8 manifests expire after 30 minutes; MP4 files are disabled.</li>
-                    <li><strong className="text-slate-800">Dynamic Forensic Watermark:</strong> Student username/phone floating across frames to prevent screen recorders.</li>
+                  <ul className="space-y-1.5 text-slate-600 dark:text-slate-400 list-disc pl-4">
+                    <li><strong className="text-slate-800 dark:text-slate-200">Domain-Restricted Embeds:</strong> Only requests with verified Referer/Origin headers are served.</li>
+                    <li><strong className="text-slate-800 dark:text-slate-200">Signed Token URLs:</strong> HLS m3u8 manifests expire after 30 minutes; MP4 files are disabled.</li>
+                    <li><strong className="text-slate-800 dark:text-slate-200">Dynamic Forensic Watermark:</strong> Student username/phone floating across frames to prevent screen recorders.</li>
                   </ul>
                 </div>
 
-                <div className="p-4 rounded-xl border border-slate-200 bg-white space-y-2">
-                  <div className="font-semibold text-slate-900 text-sm flex items-center gap-2">
-                    <Layers className="w-4 h-4 text-indigo-600" />
+                <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/50 space-y-2">
+                  <div className="font-semibold text-slate-900 dark:text-slate-100 text-sm flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                     <span>Layer 4: Rate Limiting & Edge Defense (Redis Sliding Window)</span>
                   </div>
-                  <ul className="space-y-1.5 text-slate-600 list-disc pl-4">
-                    <li><strong className="text-slate-800">Comment & Like Throttling:</strong> Max 6 comments/min per student to prevent spam.</li>
-                    <li><strong className="text-slate-800">Login Protection:</strong> Exponential backoff after 5 failed authentication attempts.</li>
-                    <li><strong className="text-slate-800">Content Protection:</strong> Clipboard copy event blocking & disabled right-click context menu.</li>
+                  <ul className="space-y-1.5 text-slate-600 dark:text-slate-400 list-disc pl-4">
+                    <li><strong className="text-slate-800 dark:text-slate-200">Comment & Like Throttling:</strong> Max 6 comments/min per student to prevent spam.</li>
+                    <li><strong className="text-slate-800 dark:text-slate-200">Login Protection:</strong> Exponential backoff after failed authentication attempts.</li>
+                    <li><strong className="text-slate-800 dark:text-slate-200">Content Protection:</strong> Clipboard copy event blocking & disabled right-click context menu.</li>
                   </ul>
                 </div>
               </div>
@@ -448,13 +474,13 @@ WITH CHECK (
           {/* TAB 2: COMPLETE DATABASE SCHEMA DDL */}
           {activeTab === 'schema' && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-slate-900">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <span className="font-semibold text-slate-900 dark:text-slate-100">
                   PostgreSQL Production Tables (Users, Courses, Enrollments, Posts, Quizzes, Certificates)
                 </span>
                 <button
                   onClick={() => handleCopy(sqlSchemaCode, 'schema')}
-                  className="flex items-center gap-1 px-3 py-1 bg-slate-900 text-white rounded text-xs hover:bg-slate-800 cursor-pointer"
+                  className="flex items-center justify-center gap-1 px-3 py-1.5 bg-slate-900 dark:bg-indigo-600 text-white rounded-lg text-xs hover:bg-slate-800 dark:hover:bg-indigo-700 cursor-pointer shrink-0"
                 >
                   {copiedKey === 'schema' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                   <span>{copiedKey === 'schema' ? 'Copied DDL' : 'Copy SQL Schema'}</span>
@@ -470,17 +496,17 @@ WITH CHECK (
           {/* TAB 3: ROW-LEVEL SECURITY */}
           {activeTab === 'rls' && (
             <div className="space-y-4">
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-900">
+              <div className="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 rounded-lg text-amber-900 dark:text-amber-200">
                 <span className="font-semibold">Why UI filtering is NOT enough:</span> If a student tampers with client-side state or makes direct API calls to <code className="font-mono">/api/courses/course-401</code>, RLS ensures the PostgreSQL query engine evaluates whether an active enrollment row exists. If unenrolled, Postgres returns zero rows (or 403 Forbidden).
               </div>
 
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-slate-900">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <span className="font-semibold text-slate-900 dark:text-slate-100">
                   Row-Level Security Policies (SQL)
                 </span>
                 <button
                   onClick={() => handleCopy(rlsPolicyCode, 'rls')}
-                  className="flex items-center gap-1 px-3 py-1 bg-slate-900 text-white rounded text-xs hover:bg-slate-800 cursor-pointer"
+                  className="flex items-center justify-center gap-1 px-3 py-1.5 bg-slate-900 dark:bg-indigo-600 text-white rounded-lg text-xs hover:bg-slate-800 dark:hover:bg-indigo-700 cursor-pointer shrink-0"
                 >
                   {copiedKey === 'rls' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                   <span>{copiedKey === 'rls' ? 'Copied RLS' : 'Copy RLS Script'}</span>
@@ -497,36 +523,36 @@ WITH CHECK (
           {activeTab === 'video' && (
             <div className="space-y-4 leading-relaxed">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
-                  <div className="font-semibold text-slate-900 mb-1">1. URL Obfuscation & Tokens</div>
-                  <p className="text-slate-600 text-[11px]">
+                <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800">
+                  <div className="font-semibold text-slate-900 dark:text-slate-100 mb-1">1. URL Obfuscation & Tokens</div>
+                  <p className="text-slate-600 dark:text-slate-400 text-[11px]">
                     Video URLs are never embedded as raw .mp4 in the DOM. Server-side middleware issues short-lived SHA256 signed tokens for HLS playlist segments (.ts chunks). Direct file download requests return HTTP 403.
                   </p>
                 </div>
 
-                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
-                  <div className="font-semibold text-slate-900 mb-1">2. Domain-Restricted Embeds</div>
-                  <p className="text-slate-600 text-[11px]">
+                <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800">
+                  <div className="font-semibold text-slate-900 dark:text-slate-100 mb-1">2. Domain-Restricted Embeds</div>
+                  <p className="text-slate-600 dark:text-slate-400 text-[11px]">
                     Bunny Stream or Vimeo Private delivery restricts origin headers strictly to the authorized platform domain. Hotlinking from other websites or third-party players is rejected.
                   </p>
                 </div>
 
-                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
-                  <div className="font-semibold text-slate-900 mb-1">3. Dynamic Floating Watermark</div>
-                  <p className="text-slate-600 text-[11px]">
+                <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800">
+                  <div className="font-semibold text-slate-900 dark:text-slate-100 mb-1">3. Dynamic Floating Watermark</div>
+                  <p className="text-slate-600 dark:text-slate-400 text-[11px]">
                     The authenticated student's full name, email, phone number, and IP/timestamp randomly drift across coordinates in the video frame every 3-7 seconds. If recorded via OBS/phone camera, the leaker is forensically identified.
                   </p>
                 </div>
               </div>
 
-              <div className="p-4 rounded-xl border border-slate-200 bg-white">
-                <div className="font-semibold text-slate-900 text-sm mb-2">
+              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/50">
+                <div className="font-semibold text-slate-900 dark:text-slate-100 text-sm mb-2">
                   Client-Side Text Selection & Right-Click Disabling
                 </div>
-                <p className="text-slate-600 text-[11px] mb-2">
+                <p className="text-slate-600 dark:text-slate-400 text-[11px] mb-2">
                   To prevent bulk copy-pasting of proprietary course material and exam prompts:
                 </p>
-                <div className="p-2.5 bg-slate-900 text-emerald-300 font-mono text-[11px] rounded whitespace-pre">
+                <div className="p-2.5 bg-slate-900 text-emerald-300 font-mono text-[11px] rounded overflow-x-auto whitespace-pre">
                   <code>
                     {'onContextMenu={(e) => e.preventDefault()}  // Blocks right-click inspect\nclassName="select-none"                     // Prevents text highlighting'}
                   </code>
@@ -539,41 +565,41 @@ WITH CHECK (
           {activeTab === 'roadmap' && (
             <div className="space-y-4">
               <div className="space-y-3">
-                <div className="p-3.5 rounded-lg border border-slate-200 bg-slate-50 flex items-start gap-3">
+                <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 flex items-start gap-3">
                   <span className="w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold shrink-0 text-xs">1</span>
                   <div>
-                    <span className="font-semibold text-slate-900 block">Step 1: Database Migration & Schema Seeding</span>
-                    <p className="text-slate-600 text-[11px] mt-0.5">
+                    <span className="font-semibold text-slate-900 dark:text-slate-100 block">Step 1: Database Migration & Schema Seeding</span>
+                    <p className="text-slate-600 dark:text-slate-400 text-[11px] mt-0.5">
                       Run PostgreSQL DDL script to create tables, foreign keys, and enable Row-Level Security policies. Populate admin role and default student batches.
                     </p>
                   </div>
                 </div>
 
-                <div className="p-3.5 rounded-lg border border-slate-200 bg-slate-50 flex items-start gap-3">
+                <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 flex items-start gap-3">
                   <span className="w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold shrink-0 text-xs">2</span>
                   <div>
-                    <span className="font-semibold text-slate-900 block">Step 2: Video Provider Integration (Bunny Stream / Mux)</span>
-                    <p className="text-slate-600 text-[11px] mt-0.5">
+                    <span className="font-semibold text-slate-900 dark:text-slate-100 block">Step 2: Video Provider Integration (Bunny Stream / Mux)</span>
+                    <p className="text-slate-600 dark:text-slate-400 text-[11px] mt-0.5">
                       Configure Bunny Stream API keys, enable Token Authentication with 30-minute expiry, and lock Allowed Referrers to your platform production domain.
                     </p>
                   </div>
                 </div>
 
-                <div className="p-3.5 rounded-lg border border-slate-200 bg-slate-50 flex items-start gap-3">
+                <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 flex items-start gap-3">
                   <span className="w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold shrink-0 text-xs">3</span>
                   <div>
-                    <span className="font-semibold text-slate-900 block">Step 3: Edge Rate Limiting & Auth Endpoints</span>
-                    <p className="text-slate-600 text-[11px] mt-0.5">
+                    <span className="font-semibold text-slate-900 dark:text-slate-100 block">Step 3: Edge Rate Limiting & Auth Endpoints</span>
+                    <p className="text-slate-600 dark:text-slate-400 text-[11px] mt-0.5">
                       Mount sliding-window middleware on comments, likes, and login endpoints using Redis / Upstash to neutralize automated spam bots.
                     </p>
                   </div>
                 </div>
 
-                <div className="p-3.5 rounded-lg border border-slate-200 bg-slate-50 flex items-start gap-3">
+                <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 flex items-start gap-3">
                   <span className="w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold shrink-0 text-xs">4</span>
                   <div>
-                    <span className="font-semibold text-slate-900 block">Step 4: Automated Grading & Certificate Engine</span>
-                    <p className="text-slate-600 text-[11px] mt-0.5">
+                    <span className="font-semibold text-slate-900 dark:text-slate-100 block">Step 4: Automated Grading & Certificate Engine</span>
+                    <p className="text-slate-600 dark:text-slate-400 text-[11px] mt-0.5">
                       Activate the MCQ scoring engine and trigger official signed PDF/Canvas certificates when curriculum progress milestones (75% - 100%) are unlocked.
                     </p>
                   </div>
@@ -585,41 +611,41 @@ WITH CHECK (
           {/* TAB 6: ZOOM DEEP LINKING SPEC */}
           {activeTab === 'zoom' && (
             <div className="space-y-4">
-              <div className="p-4 rounded-xl bg-blue-50 border border-blue-200">
-                <span className="font-semibold text-blue-950 block text-sm">
+              <div className="p-4 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/60">
+                <span className="font-semibold text-blue-950 dark:text-blue-200 block text-sm">
                   Zoom Native App Deep Linking & Auto-Launch Architecture
                 </span>
-                <p className="text-blue-800 mt-1 leading-relaxed">
+                <p className="text-blue-800 dark:text-blue-300 mt-1 leading-relaxed">
                   Bypasses browser web-client redirection by constructing <code className="font-mono font-bold">zoomus://</code> custom protocol links. Directly opens the native Zoom application installed on Windows, macOS, Android, and iOS devices with authenticated student attendance pre-filled.
                 </p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="p-4 rounded-xl border border-slate-200 bg-white space-y-2">
-                  <div className="font-semibold text-slate-900 text-sm">
+                <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/50 space-y-2">
+                  <div className="font-semibold text-slate-900 dark:text-slate-100 text-sm">
                     1. URI Scheme Protocol Format
                   </div>
-                  <div className="p-2.5 bg-slate-950 text-blue-300 font-mono text-[11px] rounded whitespace-pre-wrap">
+                  <div className="p-2.5 bg-slate-950 text-blue-300 font-mono text-[11px] rounded whitespace-pre-wrap break-all">
                     {'zoomus://zoom.us/join?confno={MEETING_ID}&pwd={PASSWORD}&uname={STUDENT_NAME}'}
                   </div>
-                  <ul className="space-y-1 text-slate-600 list-disc pl-4 text-[11px]">
-                    <li><strong className="text-slate-800">confno:</strong> Extracted 9 to 11 digit meeting number.</li>
-                    <li><strong className="text-slate-800">pwd:</strong> Meeting security passcode.</li>
-                    <li><strong className="text-slate-800">uname:</strong> URL-encoded student full name for automatic attendance check-in.</li>
+                  <ul className="space-y-1 text-slate-600 dark:text-slate-400 list-disc pl-4 text-[11px]">
+                    <li><strong className="text-slate-800 dark:text-slate-200">confno:</strong> Extracted 9 to 11 digit meeting number.</li>
+                    <li><strong className="text-slate-800 dark:text-slate-200">pwd:</strong> Meeting security passcode.</li>
+                    <li><strong className="text-slate-800 dark:text-slate-200">uname:</strong> URL-encoded student full name for automatic attendance check-in.</li>
                   </ul>
                 </div>
 
-                <div className="p-4 rounded-xl border border-slate-200 bg-white space-y-2">
-                  <div className="font-semibold text-slate-900 text-sm">
+                <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/50 space-y-2">
+                  <div className="font-semibold text-slate-900 dark:text-slate-100 text-sm">
                     2. Graceful Fallback Strategy
                   </div>
-                  <p className="text-slate-600 text-[11px] leading-relaxed">
+                  <p className="text-slate-600 dark:text-slate-400 text-[11px] leading-relaxed">
                     If the client device does not have Zoom installed or browser security policies suppress custom protocol launches:
                   </p>
-                  <div className="p-2.5 bg-slate-100 text-slate-800 font-mono text-[11px] rounded">
+                  <div className="p-2.5 bg-slate-100 dark:bg-slate-900 text-slate-800 dark:text-slate-200 font-mono text-[11px] rounded break-all">
                     {'Fallback Web Client: https://zoom.us/wc/{MEETING_ID}/join?pwd={PASSWORD}'}
                   </div>
-                  <p className="text-slate-500 text-[11px]">
+                  <p className="text-slate-500 dark:text-slate-400 text-[11px]">
                     The UI automatically provides a 1-click "Join via Browser" escape hatch after timeout.
                   </p>
                 </div>
@@ -627,13 +653,13 @@ WITH CHECK (
 
               {/* Backend Implementation Code */}
               <div className="space-y-2 pt-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-slate-900">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <span className="font-semibold text-slate-900 dark:text-slate-100">
                     Backend Parser & API Controller (Node.js / Express)
                   </span>
                   <button
                     onClick={() => handleCopy(zoomBackendCode, 'zoom')}
-                    className="flex items-center gap-1 px-3 py-1 bg-slate-900 text-white rounded text-xs hover:bg-slate-800 cursor-pointer"
+                    className="flex items-center justify-center gap-1 px-3 py-1.5 bg-slate-900 dark:bg-indigo-600 text-white rounded-lg text-xs hover:bg-slate-800 dark:hover:bg-indigo-700 cursor-pointer shrink-0"
                   >
                     {copiedKey === 'zoom' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                     <span>{copiedKey === 'zoom' ? 'Copied Zoom Code' : 'Copy Zoom Handler'}</span>

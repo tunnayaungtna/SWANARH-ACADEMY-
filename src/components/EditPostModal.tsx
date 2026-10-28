@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { CoursePost, User, Attachment, ZoomMeetingDetails } from '../types/classroom';
+import { CoursePost, User, Attachment } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
-import { parseZoomUrl } from '../utils/zoomDeepLink';
 import { formatFileSize, getFileTypeCategory } from '../utils/fileHelpers';
 import {
   X,
@@ -41,10 +40,6 @@ export const EditPostModal: React.FC<EditPostModalProps> = ({
   const [isScheduled, setIsScheduled] = useState(false);
   const [scheduledDateTime, setScheduledDateTime] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [includeZoom, setIncludeZoom] = useState(false);
-  const [zoomUrl, setZoomUrl] = useState('');
-  const [zoomTopic, setZoomTopic] = useState('');
-  const [zoomTime, setZoomTime] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -58,10 +53,6 @@ export const EditPostModal: React.FC<EditPostModalProps> = ({
       setIsScheduled(post.status === 'scheduled');
       setScheduledDateTime(post.scheduledFor ? post.scheduledFor.slice(0, 16) : '');
       setAttachments(post.attachments || []);
-      setIncludeZoom(!!post.zoomMeeting);
-      setZoomUrl(post.zoomMeeting?.rawUrl || '');
-      setZoomTopic(post.zoomMeeting?.topic || '');
-      setZoomTime(post.zoomMeeting?.scheduledTime || '');
       setErrorMsg(null);
     }
   }, [post, isOpen]);
@@ -130,29 +121,13 @@ export const EditPostModal: React.FC<EditPostModalProps> = ({
       return;
     }
 
-    let zoomMeeting: ZoomMeetingDetails | undefined = undefined;
-    if (includeZoom && zoomUrl.trim()) {
-      const parsed = parseZoomUrl(zoomUrl.trim(), currentUser.name);
-      if (parsed.isValid) {
-        zoomMeeting = {
-          meetingId: parsed.meetingId,
-          passcode: parsed.passcode,
-          rawUrl: parsed.rawUrl,
-          deepLink: parsed.deepLink,
-          browserFallbackUrl: parsed.browserFallbackUrl,
-          scheduledTime: zoomTime || 'As scheduled',
-          topic: zoomTopic || title.trim(),
-        };
-      }
-    }
-
     const updates: Partial<CoursePost> = {
       title: title.trim(),
       content: content.trim(),
       postType,
       isPinned,
       attachments: attachments.length > 0 ? attachments : undefined,
-      zoomMeeting,
+      zoomMeeting: undefined,
     };
 
     // If pin status changed
@@ -491,50 +466,6 @@ export const EditPostModal: React.FC<EditPostModalProps> = ({
                     </button>
                   </div>
                 ))}
-              </div>
-            )}
-          </div>
-
-          {/* Zoom Meeting Section (Optional) */}
-          <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={includeZoom}
-                onChange={(e) => setIncludeZoom(e.target.checked)}
-                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-              />
-              <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                <Video className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                Zoom Meeting Link
-              </span>
-            </label>
-
-            {includeZoom && (
-              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 space-y-2">
-                <input
-                  type="url"
-                  placeholder="Paste Zoom Meeting Invitation URL..."
-                  value={zoomUrl}
-                  onChange={(e) => setZoomUrl(e.target.value)}
-                  className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-hidden"
-                />
-                <div className="grid grid-cols-2 gap-2">
-                  <input
-                    type="text"
-                    placeholder="Topic (Optional)"
-                    value={zoomTopic}
-                    onChange={(e) => setZoomTopic(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-hidden"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Meeting Time (e.g. 4:00 PM)"
-                    value={zoomTime}
-                    onChange={(e) => setZoomTime(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-hidden"
-                  />
-                </div>
               </div>
             )}
           </div>

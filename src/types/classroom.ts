@@ -160,6 +160,29 @@ export interface Course {
   totalQuizzes: number;
 }
 
+export type AttendanceStatus = 'present' | 'late' | 'excused' | 'absent';
+
+export interface AttendanceRecord {
+  studentId: string;
+  studentName: string;
+  status: AttendanceStatus;
+  checkedInAt?: string;
+  checkedInBy: 'student' | 'instructor';
+  note?: string;
+}
+
+export interface AttendanceSession {
+  id: string;
+  courseId: string;
+  date: string; // YYYY-MM-DD
+  displayDate: string; // e.g. "Oct 26, 2026"
+  title: string; // e.g. "Lecture 03: Daily Class Check-in"
+  isOpen: boolean; // When true, students can click "Present" themselves
+  openedBy: string;
+  createdAt: string;
+  records: Record<string, AttendanceRecord>; // keyed by studentId
+}
+
 export interface CertificateData {
   certificateId: string;
   courseId: string;
@@ -169,6 +192,7 @@ export interface CertificateData {
   studentName: string;
   issuedAt: string;
   gradeAverage: number;
+  attendancePercentage?: number;
   verificationUrl: string;
   instructorSignature: string;
 }
@@ -193,3 +217,4 @@ export interface NotificationItem {
   isRead: boolean;
   createdAt: string;
 }
+

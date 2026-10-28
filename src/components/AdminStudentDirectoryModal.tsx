@@ -23,6 +23,8 @@ import {
   GraduationCap,
   Briefcase,
   Layers,
+  Download,
+  CalendarCheck,
 } from 'lucide-react';
 
 interface AdminStudentDirectoryModalProps {
@@ -60,6 +62,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [userToDelete, setUserToDelete] = useState<User | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -85,8 +88,30 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
 
   // Revealed passwords state per user
   const [revealedPasswords, setRevealedPasswords] = useState<Record<string, boolean>>({});
+  const [selectedCsvCourseId, setSelectedCsvCourseId] = useState<string>(courses[0]?.id || 'all');
 
   if (!isOpen) return null;
+
+  const handleExportAttendanceCSV = (courseId: string) => {
+    if (courseId === 'all') {
+      const res = ClassroomDB.downloadAllClassesAttendanceCSV();
+      if (res.success) {
+        setToastMsg(
+          `📥 အတန်းအားလုံး၏ Attendance Report CSV (${res.filename}) ကို အောင်မြင်စွာ ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ!`
+        );
+        setTimeout(() => setToastMsg(null), 4000);
+      }
+      return;
+    }
+
+    const res = ClassroomDB.downloadClassAttendanceCSV(courseId);
+    if (res.success) {
+      setToastMsg(
+        `📥 Attendance Report CSV (${res.filename}) ကို အောင်မြင်စွာ ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ!`
+      );
+      setTimeout(() => setToastMsg(null), 4000);
+    }
+  };
 
   const allUsers = ClassroomDB.getAllUsers();
   const staffUsers = allUsers.filter((u) => u.role === 'admin' || u.role === 'co_admin');
@@ -304,7 +329,8 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     if (!resettingUser) return;
 
     if (!newUserPassword.trim() || newUserPassword.trim().length < 4) {
-      alert('စကားဝှက်အသစ်သည် အနည်းဆုံး ၄ လုံး ရှိရပါမည်။');
+      setToastMsg('⚠️ စကားဝှက်အသစ်သည် အနည်းဆုံး ၄ လုံး ရှိရပါမည်။');
+      setTimeout(() => setToastMsg(null), 3500);
       return;
     }
 
@@ -316,25 +342,28 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
       onRefresh();
       setTimeout(() => setToastMsg(null), 3500);
     } else {
-      alert(res.error || 'စကားဝှက် ပြောင်းလဲရာတွင် အမှားဖြစ်ပေါ်ခဲ့ပါသည်။');
+      setToastMsg(res.error || 'စကားဝှက် ပြောင်းလဲရာတွင် အမှားဖြစ်ပေါ်ခဲ့ပါသည်။');
+      setTimeout(() => setToastMsg(null), 3500);
     }
   };
 
   const handleDeleteUser = (user: User) => {
-    if (
-      confirm(
-        `အသုံးပြုသူ "${user.name}" (@${user.username}) (${user.role}) ကို စနစ်တစ်ခုလုံးမှ လုံးဝ ဖျက်သိမ်းလိုပါသလား?`
-      )
-    ) {
-      const res = ClassroomDB.deleteUser(user.id);
-      if (!res.success) {
-        alert(res.error || 'အသုံးပြုသူအား ဖျက်သိမ်း၍ မရပါ');
-        return;
-      }
-      setToastMsg(`အကောင့် "${user.name}" ကို စနစ်မှ ဖျက်သိမ်းပြီးပါပြီ။`);
-      onRefresh();
+    setUserToDelete(user);
+  };
+
+  const confirmDeleteUser = () => {
+    if (!userToDelete) return;
+    const user = userToDelete;
+    setUserToDelete(null);
+    const res = ClassroomDB.deleteUser(user.id);
+    if (!res.success) {
+      setToastMsg(res.error || 'အသုံးပြုသူအား ဖျက်သိမ်း၍ မရပါ');
       setTimeout(() => setToastMsg(null), 3500);
+      return;
     }
+    setToastMsg(`အကောင့် "${user.name}" ကို စနစ်နှင့် SQL Database မှ အောင်မြင်စွာ ဖျက်သိမ်းပြီးပါပြီ။`);
+    onRefresh();
+    setTimeout(() => setToastMsg(null), 3500);
   };
 
   const toggleRevealPassword = (userId: string) => {
@@ -576,66 +605,68 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                   </div>
                 </div>
 
-                {/* Profile Picture Selection */}
-                <div className="p-3 bg-white dark:bg-slate-800 rounded-xl border border-indigo-100 dark:border-slate-700 space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <label className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                      <Camera className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                      <span>Profile Picture (ကိုယ်ရေးဓာတ်ပုံ သို့မဟုတ် Avatar ရွေးချယ်ပါ)</span>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 rounded-lg text-[11px] font-medium cursor-pointer"
-                    >
-                      <Upload className="w-3 h-3" />
-                      <span>ပုံတင်မည် (Upload)</span>
-                    </button>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/*"
-                      onChange={handleAvatarFileUpload}
-                      className="hidden"
-                    />
-                  </div>
+                {/* Profile Picture Selection (Only for Admin & Co-Admin accounts) */}
+                {(selectedRole === 'admin' || selectedRole === 'co_admin') && (
+                  <div className="p-3 bg-white dark:bg-slate-800 rounded-xl border border-indigo-100 dark:border-slate-700 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <label className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                        <Camera className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                        <span>Profile Picture (Admin / Co-Admin ကိုယ်ရေးဓာတ်ပုံ ရွေးချယ်ပါ)</span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 rounded-lg text-[11px] font-medium cursor-pointer"
+                      >
+                        <Upload className="w-3 h-3" />
+                        <span>ပုံတင်မည် (Upload)</span>
+                      </button>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={handleAvatarFileUpload}
+                        className="hidden"
+                      />
+                    </div>
 
-                  <div className="flex items-center gap-3">
-                    <img
-                      src={avatar}
-                      alt="Selected preview"
-                      className="w-14 h-14 rounded-full object-cover border-2 border-indigo-500 shadow-xs shrink-0"
-                    />
-                    <div className="flex-1 overflow-x-auto pb-1">
-                      <div className="flex items-center gap-2">
-                        {PRESET_AVATARS.map((p) => (
-                          <button
-                            type="button"
-                            key={p.id}
-                            onClick={() => setAvatar(p.url)}
-                            className={`relative rounded-full p-0.5 transition-all shrink-0 cursor-pointer ${
-                              avatar === p.url
-                                ? 'ring-2 ring-indigo-600 scale-105'
-                                : 'opacity-70 hover:opacity-100'
-                            }`}
-                            title={p.name}
-                          >
-                            <img
-                              src={p.url}
-                              alt={p.name}
-                              className="w-9 h-9 rounded-full object-cover"
-                            />
-                            {avatar === p.url && (
-                              <div className="absolute inset-0 bg-indigo-600/30 rounded-full flex items-center justify-center">
-                                <Check className="w-3.5 h-3.5 text-white stroke-[3]" />
-                              </div>
-                            )}
-                          </button>
-                        ))}
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={avatar}
+                        alt="Selected preview"
+                        className="w-14 h-14 rounded-full object-cover border-2 border-indigo-500 shadow-xs shrink-0"
+                      />
+                      <div className="flex-1 overflow-x-auto pb-1">
+                        <div className="flex items-center gap-2">
+                          {PRESET_AVATARS.map((p) => (
+                            <button
+                              type="button"
+                              key={p.id}
+                              onClick={() => setAvatar(p.url)}
+                              className={`relative rounded-full p-0.5 transition-all shrink-0 cursor-pointer ${
+                                avatar === p.url
+                                  ? 'ring-2 ring-indigo-600 scale-105'
+                                  : 'opacity-70 hover:opacity-100'
+                              }`}
+                              title={p.name}
+                            >
+                              <img
+                                src={p.url}
+                                alt={p.name}
+                                className="w-9 h-9 rounded-full object-cover"
+                              />
+                              {avatar === p.url && (
+                                <div className="absolute inset-0 bg-indigo-600/30 rounded-full flex items-center justify-center">
+                                  <Check className="w-3.5 h-3.5 text-white stroke-[3]" />
+                                </div>
+                              )}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
+                )}
 
                 {/* Name & Username */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -901,6 +932,47 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
               </form>
             ) : null}
 
+            {/* Class Attendance Report CSV Export Bar (For Admins & Co-Admins) */}
+            <div className="p-3.5 sm:p-4 rounded-xl border border-emerald-200 dark:border-emerald-800/70 bg-emerald-50/60 dark:bg-emerald-950/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-start sm:items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-emerald-600 text-white shrink-0">
+                  <CalendarCheck className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                    Export Class Attendance Report (CSV ဖိုင်ထုတ်ယူရန်)
+                  </h4>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-300">
+                    အတန်းတစ်ခုချင်းစီအလိုက် ကျောင်းသားများ၏ တက်ရောက်မှု ရာခိုင်နှုန်း (%) နှင့် နေ့စွဲအလိုက် Attendance မှတ်တမ်းအပြည့်အစုံကို CSV (Excel) ဖိုင်အဖြစ် ဒေါင်းလုဒ်ဆွဲနိုင်ပါသည်။
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <select
+                  value={selectedCsvCourseId}
+                  onChange={(e) => setSelectedCsvCourseId(e.target.value)}
+                  className="px-3 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-emerald-300 dark:border-emerald-700 rounded-lg text-slate-900 dark:text-white focus:outline-hidden"
+                >
+                  {courses.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.code} — {c.title} ({c.enrolledStudentIds.length} students)
+                    </option>
+                  ))}
+                  <option value="all">All Classes Combined Report</option>
+                </select>
+
+                <button
+                  type="button"
+                  onClick={() => handleExportAttendanceCSV(selectedCsvCourseId)}
+                  className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Export Attendance CSV</span>
+                </button>
+              </div>
+            </div>
+
             {/* Filter Tabs & Search bar */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               {/* Role Filter Tabs */}
@@ -982,14 +1054,16 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                             }}
                             className="w-11 h-11 rounded-full object-cover border border-slate-200 dark:border-slate-700"
                           />
-                          <button
-                            type="button"
-                            onClick={() => setEditingAvatarUser(user)}
-                            className="absolute inset-0 bg-slate-900/60 rounded-full opacity-0 group-hover/avatar:opacity-100 flex items-center justify-center text-white transition-opacity cursor-pointer"
-                            title="Edit Profile Picture"
-                          >
-                            <Camera className="w-4 h-4" />
-                          </button>
+                          {(user.role === 'admin' || user.role === 'co_admin') && (
+                            <button
+                              type="button"
+                              onClick={() => setEditingAvatarUser(user)}
+                              className="absolute inset-0 bg-slate-900/60 rounded-full opacity-0 group-hover/avatar:opacity-100 flex items-center justify-center text-white transition-opacity cursor-pointer"
+                              title="Edit Profile Picture (Admin / Co-Admin Only)"
+                            >
+                              <Camera className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
 
                         <div className="min-w-0 space-y-1">
@@ -1100,6 +1174,12 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                             <div className="flex flex-wrap items-center gap-1.5">
                               {courses.map((course) => {
                                 const isEnrolled = course.enrolledStudentIds.includes(user.id);
+                                const attPct = isEnrolled
+                                  ? ClassroomDB.calculateTotalAttendancePercentage(
+                                      course.id,
+                                      user.id
+                                    )
+                                  : null;
 
                                 return (
                                   <button
@@ -1114,14 +1194,16 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                                     }`}
                                     title={
                                       isEnrolled
-                                        ? `Click to remove from ${course.code}`
+                                        ? `Attendance: ${attPct}% — Click to remove from ${course.code}`
                                         : `Click to enroll in ${course.code}`
                                     }
                                   >
                                     {isEnrolled ? (
                                       <>
                                         <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-                                        <span>{course.code}</span>
+                                        <span>
+                                          {course.code} ({attPct}%)
+                                        </span>
                                       </>
                                     ) : (
                                       <>
@@ -1211,11 +1293,48 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
               </div>
             </div>
           )}
+
+          {/* Delete User Confirmation Modal Dialog */}
+          {userToDelete && (
+            <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 z-20">
+              <div className="bg-white dark:bg-slate-850 rounded-2xl p-5 border border-slate-200 dark:border-slate-700 shadow-2xl max-w-sm w-full space-y-4 text-xs">
+                <div className="flex items-start gap-3">
+                  <div className="p-2.5 rounded-xl bg-rose-100 dark:bg-rose-950/80 text-rose-600 dark:text-rose-400 shrink-0">
+                    <Trash2 className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-sm text-slate-900 dark:text-white">
+                      အကောင့်ဖျက်သိမ်းရန် အတည်ပြုပါ
+                    </h4>
+                    <p className="text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                      အသုံးပြုသူ <strong>"{userToDelete.name}"</strong> (@{userToDelete.username}) အား စနစ်နှင့် SQL Database တစ်ခုလုံးမှ လုံးဝ ဖျက်သိမ်းလိုပါသလား?
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setUserToDelete(null)}
+                    className="px-3.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-semibold cursor-pointer"
+                  >
+                    မဖျက်တော့ပါ
+                  </button>
+                  <button
+                    type="button"
+                    onClick={confirmDeleteUser}
+                    className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-semibold cursor-pointer shadow-xs"
+                  >
+                    သေချာပါသည်၊ ဖျက်မည်
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Profile Picture Modal for Admin to change profile picture */}
-      {editingAvatarUser && (
+      {/* Profile Picture Modal for Admin & Co-Admin accounts only */}
+      {editingAvatarUser && (editingAvatarUser.role === 'admin' || editingAvatarUser.role === 'co_admin') && (
         <ProfilePictureModal
           user={editingAvatarUser}
           isOpen={true}
