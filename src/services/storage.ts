@@ -847,70 +847,81 @@ export class ClassroomDB {
     );
   }
 
+  private static activePullPromise: Promise<boolean> | null = null;
+
   /**
    * Pull latest users and courses from Supabase into local storage
    * while respecting locally deleted IDs so deleted items never reappear.
+   * Deduplicates concurrent calls so startup never fires duplicate network requests.
    */
   static async pullFromSupabase(): Promise<boolean> {
-    try {
-      const deletedSet = new Set(this.getDeletedIds());
-      const [remoteProfiles, remoteCourses] = await Promise.all([
-        SupabaseService.getRemoteProfiles(),
-        SupabaseService.getRemoteCourses(),
-      ]);
-
-      let updated = false;
-
-      if (remoteProfiles && remoteProfiles.length > 0) {
-        const localUsers = this.getAllUsers().filter((u) => !deletedSet.has(u.id));
-        const userMap = new Map<string, User>();
-        localUsers.forEach((u) => userMap.set(u.id, u));
-        remoteProfiles.forEach((ru) => {
-          if (deletedSet.has(ru.id)) {
-            // If it was deleted locally, ensure it's also deleted in Supabase
-            SupabaseService.deleteProfile(ru.id).catch(() => {});
-            return;
-          }
-          const existing = userMap.get(ru.id);
-          userMap.set(ru.id, {
-            ...existing,
-            ...ru,
-            password:
-              ru.password ||
-              existing?.password ||
-              (ru.role === 'admin' ? 'admin123' : ru.role === 'co_admin' ? 'coadmin123' : 'student123'),
-          });
-        });
-        this.setItem(STORAGE_KEYS.USERS, Array.from(userMap.values()));
-        updated = true;
-      }
-
-      if (remoteCourses) {
-        const localCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter(
-          (c) => !deletedSet.has(c.id)
-        );
-        const courseMap = new Map<string, Course>();
-        localCourses.forEach((c) => courseMap.set(c.id, c));
-        remoteCourses.forEach((rc) => {
-          if (deletedSet.has(rc.id)) {
-            // If it was deleted locally, ensure it's also deleted in Supabase
-            SupabaseService.deleteCourse(rc.id).catch(() => {});
-            return;
-          }
-          const existing = courseMap.get(rc.id);
-          courseMap.set(rc.id, {
-            ...existing,
-            ...rc,
-          });
-        });
-        this.setItem(STORAGE_KEYS.COURSES, Array.from(courseMap.values()));
-        updated = true;
-      }
-
-      return updated;
-    } catch {
-      return false;
+    if (this.activePullPromise) {
+      return this.activePullPromise;
     }
+
+    this.activePullPromise = (async () => {
+      try {
+        const deletedSet = new Set(this.getDeletedIds());
+        const [remoteProfiles, remoteCourses] = await Promise.all([
+          SupabaseService.getRemoteProfiles(),
+          SupabaseService.getRemoteCourses(),
+        ]);
+
+        let updated = false;
+
+        if (remoteProfiles && remoteProfiles.length > 0) {
+          const localUsers = this.getAllUsers().filter((u) => !deletedSet.has(u.id));
+          const userMap = new Map<string, User>();
+          localUsers.forEach((u) => userMap.set(u.id, u));
+          remoteProfiles.forEach((ru) => {
+            if (deletedSet.has(ru.id)) {
+              SupabaseService.deleteProfile(ru.id).catch(() => {});
+              return;
+            }
+            const existing = userMap.get(ru.id);
+            userMap.set(ru.id, {
+              ...existing,
+              ...ru,
+              password:
+                ru.password ||
+                existing?.password ||
+                (ru.role === 'admin' ? 'admin123' : ru.role === 'co_admin' ? 'coadmin123' : 'student123'),
+            });
+          });
+          this.setItem(STORAGE_KEYS.USERS, Array.from(userMap.values()));
+          updated = true;
+        }
+
+        if (remoteCourses) {
+          const localCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter(
+            (c) => !deletedSet.has(c.id)
+          );
+          const courseMap = new Map<string, Course>();
+          localCourses.forEach((c) => courseMap.set(c.id, c));
+          remoteCourses.forEach((rc) => {
+            if (deletedSet.has(rc.id)) {
+              SupabaseService.deleteCourse(rc.id).catch(() => {});
+              return;
+            }
+            const existing = courseMap.get(rc.id);
+            courseMap.set(rc.id, {
+              ...existing,
+              ...rc,
+            });
+          });
+          this.setItem(STORAGE_KEYS.COURSES, Array.from(courseMap.values()));
+          updated = true;
+        }
+
+        return updated;
+      } catch {
+        return false;
+      } finally {
+        this.activePullPromise = null;
+      }
+    })();
+
+    return this.activePullPromise;
   }
 
   // Posts / Stream Feed

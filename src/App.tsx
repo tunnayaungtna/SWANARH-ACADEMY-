@@ -1,39 +1,37 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { User, Course, CoursePost, Assignment, Quiz, StudentProgress, CertificateData, NotificationItem } from './types/classroom';
 import { ClassroomDB } from './services/storage';
 import { useBackHandler } from './utils/backNavigation';
-import { Navbar } from './components/Navbar';
-import { CourseCard } from './components/CourseCard';
-import { CourseDetail } from './components/CourseDetail';
-import { LowBandwidthBar } from './components/LowBandwidthBar';
-import { CertificateModal } from './components/CertificateModal';
-import { SecurityArchitectureModal } from './components/SecurityArchitectureModal';
-import { SecurityControlsModal } from './components/SecurityControlsModal';
-import { CreateCourseModal } from './components/CreateCourseModal';
-import { AdminStudentDirectoryModal } from './components/AdminStudentDirectoryModal';
 import { LoginView } from './components/LoginView';
-import { SupabaseModal } from './components/SupabaseModal';
-import { OfflineIndicator } from './components/PWAInstallButton';
 import {
   BookOpen,
   Plus,
   ShieldCheck,
   Users,
-  Award,
   AlertTriangle,
   Lock,
   Layers,
-  Sparkles,
-  ExternalLink,
   LogOut,
-  UserPlus,
   Search,
   Database,
 } from 'lucide-react';
 
+// Lazy-load authenticated dashboard, course workspace, and modal components
+// so opening the link renders the Login Page immediately without downloading 20+ extra modules
+const Navbar = lazy(() => import('./components/Navbar').then((m) => ({ default: m.Navbar })));
+const CourseCard = lazy(() => import('./components/CourseCard').then((m) => ({ default: m.CourseCard })));
+const CourseDetail = lazy(() => import('./components/CourseDetail').then((m) => ({ default: m.CourseDetail })));
+const LowBandwidthBar = lazy(() => import('./components/LowBandwidthBar').then((m) => ({ default: m.LowBandwidthBar })));
+const CertificateModal = lazy(() => import('./components/CertificateModal').then((m) => ({ default: m.CertificateModal })));
+const SecurityArchitectureModal = lazy(() => import('./components/SecurityArchitectureModal').then((m) => ({ default: m.SecurityArchitectureModal })));
+const SecurityControlsModal = lazy(() => import('./components/SecurityControlsModal').then((m) => ({ default: m.SecurityControlsModal })));
+const CreateCourseModal = lazy(() => import('./components/CreateCourseModal').then((m) => ({ default: m.CreateCourseModal })));
+const AdminStudentDirectoryModal = lazy(() => import('./components/AdminStudentDirectoryModal').then((m) => ({ default: m.AdminStudentDirectoryModal })));
+const SupabaseModal = lazy(() => import('./components/SupabaseModal').then((m) => ({ default: m.SupabaseModal })));
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(() => ClassroomDB.getCurrentUser());
-  const [allUsers, setAllUsers] = useState<User[]>(() => ClassroomDB.getAllUsers());
+  const [allUsers, setAllUsers] = useState<User[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [selectedCourse, setSelectedCourse] = useState<Course | null>(null);
   const [courseSearch, setCourseSearch] = useState('');
@@ -121,13 +119,23 @@ export default function App() {
   };
 
   useEffect(() => {
-    ClassroomDB.init();
-    refreshData();
-    ClassroomDB.pullFromSupabase().then((updated) => {
-      if (updated) {
-        refreshData();
-      }
-    });
+    // Allow first paint of LoginView to complete immediately before running storage init & network sync
+    const initTimer = setTimeout(() => {
+      ClassroomDB.init();
+      refreshData();
+      ClassroomDB.pullFromSupabase().then((updated) => {
+        if (updated) {
+          refreshData();
+        }
+      });
+    }, 60);
+
+    // Preload core dashboard components quietly in the background after LoginView is painted
+    const preloadTimer = setTimeout(() => {
+      import('./components/Navbar').catch(() => {});
+      import('./components/CourseCard').catch(() => {});
+      import('./components/LowBandwidthBar').catch(() => {});
+    }, 1000);
 
     // Multi-user / multi-tab synchronization
     const handleStorageChange = () => {
@@ -145,6 +153,8 @@ export default function App() {
     }, 25000);
 
     return () => {
+      clearTimeout(initTimer);
+      clearTimeout(preloadTimer);
       window.removeEventListener('storage', handleStorageChange);
       clearInterval(syncInterval);
     };
@@ -207,7 +217,7 @@ export default function App() {
     refreshData();
   };
 
-  // If user is not authenticated, display the dedicated Login View
+  // If user is not authenticated, display the dedicated Login View immediately
   if (!currentUser) {
     return (
       <>
@@ -220,11 +230,14 @@ export default function App() {
           theme={theme}
           onToggleTheme={handleToggleTheme}
         />
-        {/* Technical Architecture Modal available even from Login view */}
-        <SecurityArchitectureModal
-          isOpen={showArchitectureModal}
-          onClose={() => setShowArchitectureModal(false)}
-        />
+        {showArchitectureModal && (
+          <Suspense fallback={null}>
+            <SecurityArchitectureModal
+              isOpen={showArchitectureModal}
+              onClose={() => setShowArchitectureModal(false)}
+            />
+          </Suspense>
+        )}
       </>
     );
   }
@@ -235,32 +248,34 @@ export default function App() {
         securitySettings.textProtectionEnabled ? 'select-none' : ''
       }`}
     >
-      {/* Low Bandwidth Optimization Bar */}
-      <LowBandwidthBar
-        isLowBandwidth={isLowBandwidth}
-        onToggle={() => setIsLowBandwidth(!isLowBandwidth)}
-      />
+      <Suspense fallback={null}>
+        {/* Low Bandwidth Optimization Bar */}
+        <LowBandwidthBar
+          isLowBandwidth={isLowBandwidth}
+          onToggle={() => setIsLowBandwidth(!isLowBandwidth)}
+        />
 
-      {/* Top Bar Contract Navbar */}
-      <Navbar
-        currentUser={currentUser}
-        allUsers={allUsers}
-        onSelectUser={handleSelectUser}
-        onLogout={handleLogout}
-        onOpenArchitecture={() => setShowArchitectureModal(true)}
-        onOpenSecurity={() => setShowSecurityModal(true)}
-        onOpenStudentDirectory={() => setShowStudentDirectoryModal(true)}
-        onResetData={handleResetData}
-        onNavigateHome={() => setSelectedCourse(null)}
-        notifications={notifications}
-        onRefreshNotifications={refreshData}
-        theme={theme}
-        onToggleTheme={handleToggleTheme}
-        onUpdateCurrentUser={(updated) => {
-          setCurrentUser(updated);
-          refreshData();
-        }}
-      />
+        {/* Top Bar Contract Navbar */}
+        <Navbar
+          currentUser={currentUser}
+          allUsers={allUsers}
+          onSelectUser={handleSelectUser}
+          onLogout={handleLogout}
+          onOpenArchitecture={() => setShowArchitectureModal(true)}
+          onOpenSecurity={() => setShowSecurityModal(true)}
+          onOpenStudentDirectory={() => setShowStudentDirectoryModal(true)}
+          onResetData={handleResetData}
+          onNavigateHome={() => setSelectedCourse(null)}
+          notifications={notifications}
+          onRefreshNotifications={refreshData}
+          theme={theme}
+          onToggleTheme={handleToggleTheme}
+          onUpdateCurrentUser={(updated) => {
+            setCurrentUser(updated);
+            refreshData();
+          }}
+        />
+      </Suspense>
 
       {/* Main Container - Responsive padding for mobile & desktop screens */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-4 sm:py-8">
@@ -280,18 +295,26 @@ export default function App() {
         )}
         {selectedCourse ? (
           /* Active Course Workspace (Stream, Classwork, People, Quizzes, Video) */
-          <CourseDetail
-            course={selectedCourse}
-            currentUser={currentUser}
-            posts={posts}
-            assignments={assignments}
-            quizzes={quizzes}
-            progress={progress}
-            onBack={() => setSelectedCourse(null)}
-            onRefresh={refreshData}
-            onOpenCertificate={(cert) => setActiveCertificate(cert)}
-            textProtectionEnabled={securitySettings.textProtectionEnabled}
-          />
+          <Suspense
+            fallback={
+              <div className="py-16 text-center text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+                သင်ခန်းစာအခန်းကို ဖွင့်နေပါသည်...
+              </div>
+            }
+          >
+            <CourseDetail
+              course={selectedCourse}
+              currentUser={currentUser}
+              posts={posts}
+              assignments={assignments}
+              quizzes={quizzes}
+              progress={progress}
+              onBack={() => setSelectedCourse(null)}
+              onRefresh={refreshData}
+              onOpenCertificate={(cert) => setActiveCertificate(cert)}
+              textProtectionEnabled={securitySettings.textProtectionEnabled}
+            />
+          </Suspense>
         ) : (
           /* Dashboard: Course Catalog & Strict Enrollment View */
           <div className="space-y-6 sm:space-y-8">
@@ -408,82 +431,96 @@ export default function App() {
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-                  {courses
-                    .filter((c) => {
-                      if (!courseSearch.trim()) return true;
-                      const q = courseSearch.toLowerCase();
-                      return (
-                        c.title.toLowerCase().includes(q) ||
-                        c.code.toLowerCase().includes(q) ||
-                        c.batch.toLowerCase().includes(q)
-                      );
-                    })
-                    .map((course) => {
-                      const studentProg = ClassroomDB.getStudentProgress(currentUser.id, course.id);
+                <Suspense fallback={null}>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+                    {courses
+                      .filter((c) => {
+                        if (!courseSearch.trim()) return true;
+                        const q = courseSearch.toLowerCase();
+                        return (
+                          c.title.toLowerCase().includes(q) ||
+                          c.code.toLowerCase().includes(q) ||
+                          c.batch.toLowerCase().includes(q)
+                        );
+                      })
+                      .map((course) => {
+                        const studentProg = ClassroomDB.getStudentProgress(currentUser.id, course.id);
 
-                      return (
-                        <CourseCard
-                          key={course.id}
-                          course={course}
-                          currentUser={currentUser}
-                          progress={studentProg}
-                          onSelectCourse={handleOpenCourse}
-                          onRefresh={refreshData}
-                        />
-                      );
-                    })}
-                </div>
+                        return (
+                          <CourseCard
+                            key={course.id}
+                            course={course}
+                            currentUser={currentUser}
+                            progress={studentProg}
+                            onSelectCourse={handleOpenCourse}
+                            onRefresh={refreshData}
+                          />
+                        );
+                      })}
+                  </div>
+                </Suspense>
               )}
             </div>
           </div>
         )}
       </main>
 
-      {/* Verified Certificate Modal */}
-      {activeCertificate && (
-        <CertificateModal
-          certificate={activeCertificate}
-          isOpen={!!activeCertificate}
-          onClose={() => setActiveCertificate(null)}
-        />
-      )}
+      <Suspense fallback={null}>
+        {/* Verified Certificate Modal */}
+        {activeCertificate && (
+          <CertificateModal
+            certificate={activeCertificate}
+            isOpen={!!activeCertificate}
+            onClose={() => setActiveCertificate(null)}
+          />
+        )}
 
-      {/* Technical Architecture & Deliverables Modal */}
-      <SecurityArchitectureModal
-        isOpen={showArchitectureModal}
-        onClose={() => setShowArchitectureModal(false)}
-      />
+        {/* Technical Architecture & Deliverables Modal */}
+        {showArchitectureModal && (
+          <SecurityArchitectureModal
+            isOpen={showArchitectureModal}
+            onClose={() => setShowArchitectureModal(false)}
+          />
+        )}
 
-      {/* Content Security & Watermark Settings Modal */}
-      <SecurityControlsModal
-        isOpen={showSecurityModal}
-        onClose={() => setShowSecurityModal(false)}
-        currentUser={currentUser}
-        onUpdate={refreshData}
-      />
+        {/* Content Security & Watermark Settings Modal */}
+        {showSecurityModal && (
+          <SecurityControlsModal
+            isOpen={showSecurityModal}
+            onClose={() => setShowSecurityModal(false)}
+            currentUser={currentUser}
+            onUpdate={refreshData}
+          />
+        )}
 
-      {/* Admin Create Course & Batch Modal */}
-      <CreateCourseModal
-        isOpen={showCreateCourseModal}
-        onClose={() => setShowCreateCourseModal(false)}
-        currentUser={currentUser}
-        onCourseCreated={() => refreshData()}
-      />
+        {/* Admin Create Course & Batch Modal */}
+        {showCreateCourseModal && (
+          <CreateCourseModal
+            isOpen={showCreateCourseModal}
+            onClose={() => setShowCreateCourseModal(false)}
+            currentUser={currentUser}
+            onCourseCreated={() => refreshData()}
+          />
+        )}
 
-      {/* Admin Student Directory & Enrolment Manager Modal */}
-      <AdminStudentDirectoryModal
-        isOpen={showStudentDirectoryModal}
-        onClose={() => setShowStudentDirectoryModal(false)}
-        courses={courses}
-        onRefresh={refreshData}
-      />
+        {/* Admin Student Directory & Enrolment Manager Modal */}
+        {showStudentDirectoryModal && (
+          <AdminStudentDirectoryModal
+            isOpen={showStudentDirectoryModal}
+            onClose={() => setShowStudentDirectoryModal(false)}
+            courses={courses}
+            onRefresh={refreshData}
+          />
+        )}
 
-      {/* Supabase Integration & SQL Setup Modal */}
-      <SupabaseModal
-        isOpen={showSupabaseModal}
-        onClose={() => setShowSupabaseModal(false)}
-      />
+        {/* Supabase Integration & SQL Setup Modal */}
+        {showSupabaseModal && (
+          <SupabaseModal
+            isOpen={showSupabaseModal}
+            onClose={() => setShowSupabaseModal(false)}
+          />
+        )}
+      </Suspense>
 
       {/* Quiet Footer */}
       <footer className="mt-auto border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 py-6 text-center text-xs text-slate-500 dark:text-slate-400">

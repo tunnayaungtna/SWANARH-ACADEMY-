@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { OFFICIAL_ACADEMY_LOGO } from '../assets/officialLogoData';
 import {
   usePWAInstall,
   useOnlineStatus,
@@ -143,7 +144,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ variant = 'n
                 {/* Official App Icon & Title */}
                 <div className="mx-auto w-20 h-20 rounded-2xl shadow-md border border-emerald-200 dark:border-emerald-800/80 bg-white p-1.5 flex items-center justify-center">
                   <img
-                    src="/pwa-512x512.png"
+                    src={OFFICIAL_ACADEMY_LOGO}
                     alt="SwanArh Classroom Icon"
                     className="w-full h-full rounded-xl object-contain"
                   />
@@ -370,7 +371,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ variant = 'n
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5">
             <div className="flex items-center gap-3 min-w-0">
               <img
-                src="/pwa-512x512.png"
+                src={OFFICIAL_ACADEMY_LOGO}
                 alt="SwanArh Classroom App Icon"
                 className="w-12 h-12 rounded-xl shadow-xs border border-slate-200/90 dark:border-slate-700 bg-white shrink-0 object-contain"
               />

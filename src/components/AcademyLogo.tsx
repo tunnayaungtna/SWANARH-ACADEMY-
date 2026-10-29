@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { OFFICIAL_ACADEMY_LOGO } from '../assets/officialLogoData';
 
 interface AcademyLogoProps {
   className?: string;
@@ -25,7 +26,7 @@ export const AcademyLogo: React.FC<AcademyLogoProps> = ({
     >
       {!imgError ? (
         <img
-          src="/assets/aistudio/IMG_20261027_041802_240_9c16671f.jpg"
+          src={OFFICIAL_ACADEMY_LOGO}
           alt="Dr. Si Thu Aung · Swanarh Academy"
           onError={() => setImgError(true)}
           className="w-full h-full object-contain p-0.5 rounded-full bg-white"

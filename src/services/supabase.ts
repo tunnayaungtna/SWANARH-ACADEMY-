@@ -17,12 +17,12 @@ export const SUPABASE_CONFIG = {
   jwksUrl: import.meta.env.VITE_SUPABASE_JWKS_URL || 'https://wxfassadxuxfvywvnlxs.supabase.co/auth/v1/.well-known/jwks.json',
 };
 
-// Initialize Supabase Client for client-side queries and authentication
+// Initialize Supabase Client for client-side queries
 export const supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.publishableKey, {
   auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false,
   },
 });
 

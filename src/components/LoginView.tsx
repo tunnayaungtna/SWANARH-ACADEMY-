@@ -43,14 +43,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [isLoading, setIsLoading] = useState(false);
 
   React.useEffect(() => {
-    // Clear any old custom logo override from localStorage so the official logo always shows
     try {
       localStorage.removeItem('classroom_custom_academy_logo');
       localStorage.removeItem('classroom_custom_academy_logo_v2');
     } catch {
       // ignore
     }
-    ClassroomDB.pullFromSupabase().catch(() => {});
   }, []);
 
   const handleSwitchTab = (role: UserRole) => {
@@ -65,11 +63,22 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
-    setIsLoading(true);
     setErrorMessage(null);
 
-    // Ensure latest accounts & enrollments from Supabase are pulled before verifying login
-    await ClassroomDB.pullFromSupabase();
+    // Fast path: check local credentials immediately (0ms delay)
+    const immediateRes = ClassroomDB.login(identifier, password, activeRole);
+    if (immediateRes.user) {
+      onLoginSuccess(immediateRes.user);
+      ClassroomDB.pullFromSupabase().catch(() => {});
+      return;
+    }
+
+    // Fallback: if account was recently added on another device, sync from Supabase with a 2.5s timeout
+    setIsLoading(true);
+    await Promise.race([
+      ClassroomDB.pullFromSupabase(),
+      new Promise((resolve) => setTimeout(resolve, 2500)),
+    ]);
 
     const res = ClassroomDB.login(identifier, password, activeRole);
     setIsLoading(false);
