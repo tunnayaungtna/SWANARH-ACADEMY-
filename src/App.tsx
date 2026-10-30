@@ -3,6 +3,9 @@ import { User, Course, CoursePost, Assignment, Quiz, StudentProgress, Certificat
 import { ClassroomDB } from './services/storage';
 import { useBackHandler } from './utils/backNavigation';
 import { LoginView } from './components/LoginView';
+import { Navbar } from './components/Navbar';
+import { CourseCard } from './components/CourseCard';
+import { LowBandwidthBar } from './components/LowBandwidthBar';
 import {
   BookOpen,
   Plus,
@@ -16,23 +19,37 @@ import {
   Database,
 } from 'lucide-react';
 
-// Lazy-load authenticated dashboard, course workspace, and modal components
-// so opening the link renders the Login Page immediately without downloading 20+ extra modules
-const Navbar = lazy(() => import('./components/Navbar').then((m) => ({ default: m.Navbar })));
-const CourseCard = lazy(() => import('./components/CourseCard').then((m) => ({ default: m.CourseCard })));
-const CourseDetail = lazy(() => import('./components/CourseDetail').then((m) => ({ default: m.CourseDetail })));
-const LowBandwidthBar = lazy(() => import('./components/LowBandwidthBar').then((m) => ({ default: m.LowBandwidthBar })));
-const CertificateModal = lazy(() => import('./components/CertificateModal').then((m) => ({ default: m.CertificateModal })));
-const SecurityArchitectureModal = lazy(() => import('./components/SecurityArchitectureModal').then((m) => ({ default: m.SecurityArchitectureModal })));
-const SecurityControlsModal = lazy(() => import('./components/SecurityControlsModal').then((m) => ({ default: m.SecurityControlsModal })));
-const CreateCourseModal = lazy(() => import('./components/CreateCourseModal').then((m) => ({ default: m.CreateCourseModal })));
-const AdminStudentDirectoryModal = lazy(() => import('./components/AdminStudentDirectoryModal').then((m) => ({ default: m.AdminStudentDirectoryModal })));
-const SupabaseModal = lazy(() => import('./components/SupabaseModal').then((m) => ({ default: m.SupabaseModal })));
+// Resilient lazy loader for secondary modals & course detail workspace:
+// If a chunk fails to fetch after the phone has been idle for 2-3 hours, automatically recover
+function lazyWithRetry<T extends React.ComponentType<any>>(
+  factory: () => Promise<{ default: T }>
+) {
+  return lazy(() =>
+    factory().catch((err) => {
+      console.warn('Dynamic chunk load failed after idle period, recovering:', err);
+      if (typeof window !== 'undefined' && (window as any).__swanarhForceRecover) {
+        (window as any).__swanarhForceRecover(false);
+      }
+      throw err;
+    })
+  );
+}
+
+const CourseDetail = lazyWithRetry(() => import('./components/CourseDetail').then((m) => ({ default: m.CourseDetail })));
+const CertificateModal = lazyWithRetry(() => import('./components/CertificateModal').then((m) => ({ default: m.CertificateModal })));
+const SecurityArchitectureModal = lazyWithRetry(() => import('./components/SecurityArchitectureModal').then((m) => ({ default: m.SecurityArchitectureModal })));
+const SecurityControlsModal = lazyWithRetry(() => import('./components/SecurityControlsModal').then((m) => ({ default: m.SecurityControlsModal })));
+const CreateCourseModal = lazyWithRetry(() => import('./components/CreateCourseModal').then((m) => ({ default: m.CreateCourseModal })));
+const AdminStudentDirectoryModal = lazyWithRetry(() => import('./components/AdminStudentDirectoryModal').then((m) => ({ default: m.AdminStudentDirectoryModal })));
+const SupabaseModal = lazyWithRetry(() => import('./components/SupabaseModal').then((m) => ({ default: m.SupabaseModal })));
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(() => ClassroomDB.getCurrentUser());
-  const [allUsers, setAllUsers] = useState<User[]>([]);
-  const [courses, setCourses] = useState<Course[]>([]);
+  const [allUsers, setAllUsers] = useState<User[]>(() => ClassroomDB.getAllUsers());
+  const [courses, setCourses] = useState<Course[]>(() => {
+    const user = ClassroomDB.getCurrentUser();
+    return user ? ClassroomDB.getCourses(user) : [];
+  });
   const [selectedCourse, setSelectedCourse] = useState<Course | null>(null);
   const [courseSearch, setCourseSearch] = useState('');
 
@@ -47,7 +64,10 @@ export default function App() {
     completedAssignmentIds: [],
     passedQuizIds: [],
   });
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>(() => {
+    const user = ClassroomDB.getCurrentUser();
+    return user ? ClassroomDB.getNotifications(user.id) : [];
+  });
 
   // Modals & Drawers
   const [activeCertificate, setActiveCertificate] = useState<CertificateData | null>(null);
@@ -119,7 +139,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Allow first paint of LoginView to complete immediately before running storage init & network sync
+    // Allow first paint of LoginView or Dashboard to complete immediately before running network sync
     const initTimer = setTimeout(() => {
       ClassroomDB.init();
       refreshData();
@@ -128,14 +148,7 @@ export default function App() {
           refreshData();
         }
       });
-    }, 60);
-
-    // Preload core dashboard components quietly in the background after LoginView is painted
-    const preloadTimer = setTimeout(() => {
-      import('./components/Navbar').catch(() => {});
-      import('./components/CourseCard').catch(() => {});
-      import('./components/LowBandwidthBar').catch(() => {});
-    }, 1000);
+    }, 50);
 
     // Multi-user / multi-tab synchronization
     const handleStorageChange = () => {
@@ -143,19 +156,37 @@ export default function App() {
     };
     window.addEventListener('storage', handleStorageChange);
 
+    // When reopening the installed PWA from the background after 2-3 hours,
+    // silently refresh local & remote data without showing any blocking loading screen
+    const handleWakeUp = () => {
+      if (document.visibilityState === 'visible') {
+        refreshData();
+        ClassroomDB.pullFromSupabase().then((updated) => {
+          if (updated) {
+            refreshData();
+          }
+        });
+      }
+    };
+    document.addEventListener('visibilitychange', handleWakeUp);
+    window.addEventListener('pageshow', handleWakeUp);
+
     // Periodic background sync with Supabase for online multi-user consistency
     const syncInterval = setInterval(() => {
-      ClassroomDB.pullFromSupabase().then((updated) => {
-        if (updated) {
-          refreshData();
-        }
-      });
+      if (document.visibilityState === 'visible') {
+        ClassroomDB.pullFromSupabase().then((updated) => {
+          if (updated) {
+            refreshData();
+          }
+        });
+      }
     }, 25000);
 
     return () => {
       clearTimeout(initTimer);
-      clearTimeout(preloadTimer);
       window.removeEventListener('storage', handleStorageChange);
+      document.removeEventListener('visibilitychange', handleWakeUp);
+      window.removeEventListener('pageshow', handleWakeUp);
       clearInterval(syncInterval);
     };
   }, []);

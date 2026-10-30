@@ -1,4 +1,4 @@
-const CACHE_NAME = 'swanarh-classroom-v6';
+const CACHE_NAME = 'swanarh-classroom-v7';
 
 self.addEventListener('install', () => {
   self.skipWaiting();
@@ -25,3 +25,4 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', () => {
   return;
 });
+

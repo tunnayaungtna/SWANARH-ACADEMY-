@@ -15,6 +15,8 @@
     <link rel="icon" type="image/svg+xml" href="./icon.svg" />
     <script>
       window.__pwaDeferredPrompt = null;
+      window.__swanarhMounted = false;
+
       window.addEventListener('beforeinstallprompt', function (e) {
         e.preventDefault();
         window.__pwaDeferredPrompt = e;
@@ -25,27 +27,118 @@
         window.dispatchEvent(new Event('pwa-installed'));
       });
 
-      // Clean up legacy caches & competing service workers asynchronously after load
-      window.addEventListener('load', function () {
-        if ('caches' in window) {
-          caches.keys().then(function (keys) {
-            keys.forEach(function (key) {
-              if (key !== 'swanarh-classroom-v6') {
-                caches.delete(key).catch(function () {});
-              }
-            });
-          }).catch(function () {});
+      // Immediately purge any stale Workbox or old version caches on startup
+      // (Do NOT wait for window.onload, because if a cached module hangs after 2-3 hours, onload never fires)
+      (function () {
+        try {
+          if ('caches' in window) {
+            caches.keys().then(function (keys) {
+              keys.forEach(function (key) {
+                if (key !== 'swanarh-classroom-v7') {
+                  caches.delete(key).catch(function () {});
+                }
+              });
+            }).catch(function () {});
+          }
+          if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function (registrations) {
+              registrations.forEach(function (reg) {
+                var scriptURL = (reg.active && reg.active.scriptURL) || (reg.installing && reg.installing.scriptURL) || (reg.waiting && reg.waiting.scriptURL) || '';
+                if (scriptURL.indexOf('dev-sw.js') !== -1 || scriptURL.indexOf('workbox') !== -1) {
+                  reg.unregister().catch(function () {});
+                } else {
+                  reg.update().catch(function () {});
+                }
+              });
+            }).catch(function () {});
+          }
+        } catch (e) {}
+      })();
+
+      // Self-healing recovery function: clears stale SW/caches and performs a fresh navigation
+      window.__swanarhForceRecover = function (manual) {
+        try {
+          if (!manual) {
+            var lastWake = parseInt(sessionStorage.getItem('__swanarh_wake_ts') || '0', 10);
+            var now = Date.now();
+            if (now - lastWake < 12000) {
+              return; // Prevent reload loop if already recovered in the last 12 seconds
+            }
+            sessionStorage.setItem('__swanarh_wake_ts', String(now));
+          } else {
+            sessionStorage.removeItem('__swanarh_wake_ts');
+          }
+
+          var promises = [];
+          if ('serviceWorker' in navigator) {
+            promises.push(
+              navigator.serviceWorker.getRegistrations().then(function (regs) {
+                return Promise.all(regs.map(function (r) { return r.unregister(); }));
+              }).catch(function () {})
+            );
+          }
+          if ('caches' in window) {
+            promises.push(
+              caches.keys().then(function (keys) {
+                return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+              }).catch(function () {})
+            );
+          }
+
+          Promise.all(promises).finally(function () {
+            var baseUrl = window.location.origin + window.location.pathname;
+            window.location.replace(baseUrl + '?wake=' + Date.now());
+          });
+        } catch (err) {
+          window.location.reload();
         }
+      };
 
+      // Catch module / chunk load failures that happen when reopening 2-3 hours later
+      window.addEventListener('error', function (e) {
+        var msg = (e && e.message) ? String(e.message) : '';
+        var isChunkOrScriptError =
+          msg.indexOf('Failed to fetch dynamically imported module') !== -1 ||
+          msg.indexOf('Importing a module script failed') !== -1 ||
+          msg.indexOf('ChunkLoadError') !== -1 ||
+          (e && e.target && e.target.tagName === 'SCRIPT');
+        if (isChunkOrScriptError && !window.__swanarhMounted) {
+          window.__swanarhForceRecover(false);
+        }
+      }, true);
+
+      window.addEventListener('unhandledrejection', function (e) {
+        var reason = (e && e.reason) ? String(e.reason.message || e.reason) : '';
+        if (
+          reason.indexOf('Failed to fetch dynamically imported module') !== -1 ||
+          reason.indexOf('Importing a module script failed') !== -1 ||
+          reason.indexOf('ChunkLoadError') !== -1
+        ) {
+          window.__swanarhForceRecover(false);
+        }
+      });
+
+      // Startup Watchdog:
+      // 1) At 1.8s, if React hasn't mounted yet, reveal the manual "Tap to Open Now" button so user is never stuck.
+      // 2) At 3.2s, if React still hasn't mounted, automatically clear stale SW/caches and wake up the session.
+      setTimeout(function () {
+        if (!window.__swanarhMounted) {
+          var rescueBox = document.getElementById('swanarh-rescue-box');
+          if (rescueBox) {
+            rescueBox.style.display = 'flex';
+          }
+        }
+      }, 1800);
+
+      setTimeout(function () {
+        if (!window.__swanarhMounted) {
+          window.__swanarhForceRecover(false);
+        }
+      }, 3200);
+
+      // Register lightweight icon-only Service Worker after load
+      window.addEventListener('load', function () {
         if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.getRegistrations().then(function (registrations) {
-            registrations.forEach(function (reg) {
-              if (reg.active && reg.active.scriptURL && reg.active.scriptURL.indexOf('dev-sw.js') !== -1) {
-                reg.unregister().catch(function () {});
-              }
-            });
-          }).catch(function () {});
-
           navigator.serviceWorker
             .register('./sw.js', { scope: './', updateViaCache: 'none' })
             .then(function (reg) {
@@ -73,7 +166,7 @@
   </head>
   <body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
     <div id="root">
-      <!-- Instant zero-dependency shell with inline vector Academy Crest (never 404s on GitHub Pages or subpaths) -->
+      <!-- Instant zero-dependency shell with inline vector Academy Crest and self-healing wake button -->
       <div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #f8fafc; padding: 20px; text-align: center;">
         <div style="width: 76px; height: 76px; border-radius: 999px; background: #ffffff; border: 2px solid #a7f3d0; box-shadow: 0 8px 20px -4px rgba(5, 150, 105, 0.18); display: flex; align-items: center; justify-content: center; margin-bottom: 12px; padding: 4px;">
           <svg viewBox="0 0 400 400" style="width: 100%; height: 100%;" xmlns="http://www.w3.org/2000/svg">
@@ -88,8 +181,21 @@
         </div>
         <div style="font-size: 18px; font-weight: 800; color: #0f172a; letter-spacing: -0.02em;">SwanArh Classroom</div>
         <div style="font-size: 11px; font-weight: 700; color: #059669; letter-spacing: 0.06em; margin-top: 2px;">DR. SI THU AUNG · SWANARH ACADEMY</div>
+        <div id="swanarh-rescue-box" style="display: none; flex-direction: column; align-items: center; gap: 10px; margin-top: 20px; max-width: 280px;">
+          <div style="font-size: 12px; color: #475569; line-height: 1.5;">
+            ချိတ်ဆက်မှု အသစ်ပြန်လည်ရယူနေပါသည်...
+          </div>
+          <button
+            type="button"
+            onclick="window.__swanarhForceRecover && window.__swanarhForceRecover(true)"
+            style="background: #059669; color: #ffffff; border: none; border-radius: 12px; padding: 10px 18px; font-size: 12px; font-weight: 700; cursor: pointer; box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);"
+          >
+            ချက်ချင်း ပြန်ဖွင့်ရန် (Tap to Open Now)
+          </button>
+        </div>
       </div>
     </div>
     <script type="module" src="./src/main.tsx"></script>
   </body>
 </html>
+
