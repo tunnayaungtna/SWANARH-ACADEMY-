@@ -179,7 +179,9 @@ export const CertificateModal: React.FC<CertificateModalProps> = ({ certificate,
     ctx.fillStyle = '#1e293b';
     ctx.font = 'italic bold 22px "Brush Script MT", cursive, serif';
     ctx.textAlign = 'center';
-    ctx.fillText('Dr. Kyaw Swar', sigX + 100, sigY - 2);
+    const instructorCleanName =
+      certificate.instructorSignature?.split(' (')[0]?.trim() || 'Dr. Si Thu Aung';
+    ctx.fillText(instructorCleanName, sigX + 100, sigY - 2);
 
     ctx.fillStyle = '#475569';
     ctx.font = '12px "Plus Jakarta Sans", sans-serif';

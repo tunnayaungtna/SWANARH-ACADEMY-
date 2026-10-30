@@ -24,13 +24,16 @@ export interface ParsedZoomMeeting {
 export function parseZoomUrl(inputUrl: string, studentName?: string): ParsedZoomMeeting {
   const cleanInput = inputUrl.trim();
 
-  // Default invalid result
+  // Default invalid result (never pass untrusted raw input into href/navigation)
+  const safeRawFallback =
+    /^https?:\/\//i.test(cleanInput) ? cleanInput : 'https://zoom.us/join';
+
   const invalidResult: ParsedZoomMeeting = {
     isValid: false,
     meetingId: '',
     rawUrl: cleanInput,
     deepLink: '',
-    browserFallbackUrl: cleanInput,
+    browserFallbackUrl: safeRawFallback,
   };
 
   if (!cleanInput) return invalidResult;
@@ -109,7 +112,9 @@ export function openZoomMeeting(
   onLaunchAttempt?: (status: 'launching' | 'fallback') => void
 ): void {
   if (!parsedMeeting.isValid) {
-    window.open(parsedMeeting.rawUrl, '_blank', 'noopener,noreferrer');
+    if (/^https?:\/\//i.test(parsedMeeting.browserFallbackUrl)) {
+      window.location.href = parsedMeeting.browserFallbackUrl;
+    }
     return;
   }
 

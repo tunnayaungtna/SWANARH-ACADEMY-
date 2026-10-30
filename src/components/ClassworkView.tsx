@@ -750,39 +750,47 @@ export const ClassworkView: React.FC<ClassworkViewProps> = ({
 
                 {/* Current Question Body */}
                 <div className="py-5 sm:py-6">
-                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 leading-snug">
-                    {activeQuiz.questions[currentQuestionIndex].question}
-                  </p>
+                  {activeQuiz.questions[currentQuestionIndex] ? (
+                    <>
+                      <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 leading-snug">
+                        {activeQuiz.questions[currentQuestionIndex].question}
+                      </p>
 
-                  <div className="mt-4 space-y-2.5">
-                    {activeQuiz.questions[currentQuestionIndex].options.map((opt, optIdx) => {
-                      const qId = activeQuiz.questions[currentQuestionIndex].id;
-                      const isSelected = selectedAnswers[qId] === optIdx;
+                      <div className="mt-4 space-y-2.5">
+                        {activeQuiz.questions[currentQuestionIndex].options.map((opt, optIdx) => {
+                          const qId = activeQuiz.questions[currentQuestionIndex].id;
+                          const isSelected = selectedAnswers[qId] === optIdx;
 
-                      return (
-                        <div
-                          key={optIdx}
-                          onClick={() => handleSelectQuizOption(qId, optIdx)}
-                          className={`p-3 rounded-xl border text-xs cursor-pointer transition-all flex items-start gap-3 ${
-                            isSelected
-                              ? 'border-indigo-600 dark:border-indigo-500 bg-indigo-50/70 dark:bg-indigo-950/50 text-indigo-950 dark:text-indigo-200 font-medium shadow-xs'
-                              : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-300'
-                          }`}
-                        >
-                          <span
-                            className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 mt-0.5 text-[10px] font-mono ${
-                              isSelected
-                                ? 'border-indigo-600 bg-indigo-600 text-white'
-                                : 'border-slate-300 dark:border-slate-600 text-slate-500 dark:text-slate-400'
-                            }`}
-                          >
-                            {String.fromCharCode(65 + optIdx)}
-                          </span>
-                          <span className="flex-1">{opt}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
+                          return (
+                            <div
+                              key={optIdx}
+                              onClick={() => handleSelectQuizOption(qId, optIdx)}
+                              className={`p-3 rounded-xl border text-xs cursor-pointer transition-all flex items-start gap-3 ${
+                                isSelected
+                                  ? 'border-indigo-600 dark:border-indigo-500 bg-indigo-50/70 dark:bg-indigo-950/50 text-indigo-950 dark:text-indigo-200 font-medium shadow-xs'
+                                  : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-300'
+                              }`}
+                            >
+                              <span
+                                className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 mt-0.5 text-[10px] font-mono ${
+                                  isSelected
+                                    ? 'border-indigo-600 bg-indigo-600 text-white'
+                                    : 'border-slate-300 dark:border-slate-600 text-slate-500 dark:text-slate-400'
+                                }`}
+                              >
+                                {String.fromCharCode(65 + optIdx)}
+                              </span>
+                              <span className="flex-1">{opt}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      ဤ Quiz တွင် မေးခွန်းများ မရှိသေးပါ။
+                    </p>
+                  )}
                 </div>
 
                 {/* Navigation & Submit Bar */}

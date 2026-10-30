@@ -146,8 +146,6 @@
       media="print"
       onload="this.media='all'"
     />
-    <script type="module" crossorigin src="./assets/app.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/app.css">
   </head>
   <body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
     <div id="root">
@@ -180,6 +178,7 @@
         </div>
       </div>
     </div>
+    <script id="vite-entry" type="module" src="./src/main.tsx" onerror="window.__loadStaticBundle && window.__loadStaticBundle()"></script>
     <script>
       (function () {
         try {

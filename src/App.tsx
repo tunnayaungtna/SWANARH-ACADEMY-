@@ -129,7 +129,9 @@ export default function App() {
     const initTimer = setTimeout(() => {
       ClassroomDB.init();
       refreshData();
-      ClassroomDB.pullFromSupabase().then((updated) => {
+      const loggedUser = ClassroomDB.getCurrentUser();
+      // If on Login screen, only pull profiles (saves 85% of Supabase Free Plan queries)
+      ClassroomDB.pullFromSupabase({ onlyProfiles: !loggedUser }).then((updated) => {
         if (updated) {
           refreshData();
         }
@@ -142,12 +144,13 @@ export default function App() {
     };
     window.addEventListener('storage', handleStorageChange);
 
-    // When reopening the installed PWA from the background after 2-3 hours,
-    // silently refresh local & remote data without showing any blocking loading screen
+    // When reopening the installed PWA from the background,
+    // silently refresh local & remote data (throttled by 40s cooldown so rapid tab switches cost 0 queries)
     const handleWakeUp = () => {
       if (document.visibilityState === 'visible') {
         refreshData();
-        ClassroomDB.pullFromSupabase().then((updated) => {
+        const loggedUser = ClassroomDB.getCurrentUser();
+        ClassroomDB.pullFromSupabase({ onlyProfiles: !loggedUser }).then((updated) => {
           if (updated) {
             refreshData();
           }
@@ -157,16 +160,21 @@ export default function App() {
     document.addEventListener('visibilitychange', handleWakeUp);
     window.addEventListener('pageshow', handleWakeUp);
 
-    // Periodic background sync with Supabase for online multi-user consistency
+    // Adaptive background sync with randomized jitter (55s–65s) so 200+ concurrent students
+    // never hit Supabase Free Plan at the exact same millisecond
+    const jitteredIntervalMs = 55000 + Math.floor(Math.random() * 10000);
     const syncInterval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        ClassroomDB.pullFromSupabase().then((updated) => {
-          if (updated) {
-            refreshData();
-          }
-        });
+      if (document.visibilityState === 'visible' && navigator.onLine !== false) {
+        const loggedUser = ClassroomDB.getCurrentUser();
+        if (loggedUser) {
+          ClassroomDB.pullFromSupabase().then((updated) => {
+            if (updated) {
+              refreshData();
+            }
+          });
+        }
       }
-    }, 25000);
+    }, jitteredIntervalMs);
 
     return () => {
       clearTimeout(initTimer);

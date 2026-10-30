@@ -281,9 +281,44 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO anon, authenticated, service_r
 
 ALTER DEFAULT PRIVILEGES IN SCHEMA public 
 GRANT USAGE, SELECT ON SEQUENCES TO anon, authenticated, service_role;
+
+-- 9. High-Concurrency Indexes for Supabase Free Plan Performance
+CREATE INDEX IF NOT EXISTS idx_profiles_username ON public.profiles (username);
+CREATE INDEX IF NOT EXISTS idx_profiles_email ON public.profiles (email);
+CREATE INDEX IF NOT EXISTS idx_posts_course_id ON public.posts (course_id);
+CREATE INDEX IF NOT EXISTS idx_assignments_course_id ON public.assignments (course_id);
+CREATE INDEX IF NOT EXISTS idx_submissions_assignment_id ON public.assignment_submissions (assignment_id);
+CREATE INDEX IF NOT EXISTS idx_submissions_student_id ON public.assignment_submissions (student_id);
+CREATE INDEX IF NOT EXISTS idx_quizzes_course_id ON public.quizzes (course_id);
+CREATE INDEX IF NOT EXISTS idx_quiz_submissions_quiz_id ON public.quiz_submissions (quiz_id);
+CREATE INDEX IF NOT EXISTS idx_attendance_course_id ON public.attendance_sessions (course_id);
 `;
 
+const DEFAULT_FALLBACK_AVATAR =
+  'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80';
+const DEFAULT_FALLBACK_BANNER =
+  'https://images.unsplash.com/photo-1517694712202-14dd9538aa97?w=1200&auto=format&fit=crop&q=80';
+
+/**
+ * Strips oversized base64 strings (> 8KB) before sending to Supabase SQL
+ * so the 500MB Free Plan database and 5GB monthly Egress Bandwidth never fill up.
+ */
+function compactAvatarForCloud(avatar?: string): string {
+  if (!avatar) return DEFAULT_FALLBACK_AVATAR;
+  if (avatar.length > 8000) return DEFAULT_FALLBACK_AVATAR;
+  return avatar;
+}
+
+function compactBannerForCloud(banner?: string): string {
+  if (!banner) return DEFAULT_FALLBACK_BANNER;
+  if (banner.length > 12000) return DEFAULT_FALLBACK_BANNER;
+  return banner;
+}
+
 export class SupabaseService {
+  // Caches detected profile schema columns so we never repeat fallback roundtrips
+  private static profileSchemaMode: 'full' | 'no_password' | 'core' = 'full';
+
   /**
    * Check connection status to Supabase
    */
@@ -304,7 +339,7 @@ export class SupabaseService {
       }
       return {
         connected: true,
-        message: 'Supabase Database နှင့် အောင်မြင်စွာ ချိတ်ဆက်ပြီး အသင့်အနေအထား ရှိပါသည်!',
+        message: 'Supabase Database (Free Plan Optimized) နှင့် အောင်မြင်စွာ ချိတ်ဆက်ပြီး အသင့်အနေအထား ရှိပါသည်!',
         tableCount: data ? 1 : 0,
       };
     } catch (err: unknown) {
@@ -314,13 +349,14 @@ export class SupabaseService {
   }
 
   /**
-   * Fetch all profiles from Supabase if table exists
+   * Fetch all profiles from Supabase if table exists (bounded for Free Plan efficiency)
    */
   static async getRemoteProfiles(): Promise<User[] | null> {
     try {
       const { data, error } = await supabase
         .from('profiles')
-        .select('*');
+        .select('*')
+        .limit(600);
 
       if (error || !data) {
         return null;
@@ -351,7 +387,8 @@ export class SupabaseService {
     try {
       const { data, error } = await supabase
         .from('courses')
-        .select('*');
+        .select('*')
+        .limit(200);
 
       if (error || !data) {
         return null;
@@ -366,7 +403,7 @@ export class SupabaseService {
         description: row.description || '',
         instructorName: row.instructor_name,
         instructorEmail: row.instructor_email,
-        bannerImage: row.banner_image || 'https://images.unsplash.com/photo-1517694712202-14dd9538aa97?w=1200&auto=format&fit=crop&q=80',
+        bannerImage: row.banner_image || DEFAULT_FALLBACK_BANNER,
         themeColor: (row.theme_color as Course['themeColor']) || 'indigo',
         enrolledStudentIds: Array.isArray(row.enrolled_student_ids) ? row.enrolled_student_ids : [],
         totalLessons: row.total_lessons ?? 0,
@@ -383,7 +420,10 @@ export class SupabaseService {
    */
   static async getRemotePosts(): Promise<CoursePost[] | null> {
     try {
-      const { data, error } = await supabase.from('posts').select('*');
+      const { data, error } = await supabase
+        .from('posts')
+        .select('*')
+        .limit(400);
       if (error || !data) return null;
 
       return data.map((row) => ({
@@ -423,7 +463,10 @@ export class SupabaseService {
    */
   static async getRemoteAssignments(): Promise<Assignment[] | null> {
     try {
-      const { data, error } = await supabase.from('assignments').select('*');
+      const { data, error } = await supabase
+        .from('assignments')
+        .select('*')
+        .limit(300);
       if (error || !data) return null;
 
       return data.map((row) => ({
@@ -445,7 +488,10 @@ export class SupabaseService {
    */
   static async getRemoteSubmissions(): Promise<AssignmentSubmission[] | null> {
     try {
-      const { data, error } = await supabase.from('assignment_submissions').select('*');
+      const { data, error } = await supabase
+        .from('assignment_submissions')
+        .select('*')
+        .limit(500);
       if (error || !data) return null;
 
       return data.map((row) => {
@@ -482,7 +528,10 @@ export class SupabaseService {
    */
   static async getRemoteQuizzes(): Promise<Quiz[] | null> {
     try {
-      const { data, error } = await supabase.from('quizzes').select('*');
+      const { data, error } = await supabase
+        .from('quizzes')
+        .select('*')
+        .limit(200);
       if (error || !data) return null;
 
       return data.map((row) => ({
@@ -505,7 +554,10 @@ export class SupabaseService {
    */
   static async getRemoteAttendanceSessions(): Promise<AttendanceSession[] | null> {
     try {
-      const { data, error } = await supabase.from('attendance_sessions').select('*');
+      const { data, error } = await supabase
+        .from('attendance_sessions')
+        .select('*')
+        .limit(400);
       if (error || !data) return null;
 
       return data.map((row) => ({
@@ -524,69 +576,94 @@ export class SupabaseService {
     }
   }
 
-  /**
-   * Create or update a profile in Supabase with automatic fallback
-   * if gender/address/password columns haven't been added to the user's Supabase table yet.
-   */
-  static async upsertProfile(user: User): Promise<{ success: boolean; error?: string }> {
-    try {
-      // Avoid sending huge base64 strings if avatar exceeds 50KB; use default URL for remote DB if needed
-      const safeAvatar =
-        user.avatar && user.avatar.length > 60000
-          ? 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'
-          : user.avatar;
+  private static buildProfilePayload(
+    user: User,
+    mode: 'full' | 'no_password' | 'core'
+  ): Record<string, unknown> {
+    const safeAvatar = compactAvatarForCloud(user.avatar);
+    const nowIso = new Date().toISOString();
 
-      const fullPayload = {
+    if (mode === 'core') {
+      return {
         id: user.id,
         name: user.name,
         username: user.username,
         email: user.email,
-        password: user.password || (user.role === 'admin' ? 'admin123' : user.role === 'co_admin' ? 'coadmin123' : 'student123'),
+        role: user.role,
+        phone: user.phone || '+95 9 000 000000',
+        avatar: safeAvatar,
+        title: user.title || null,
+        updated_at: nowIso,
+      };
+    }
+
+    if (mode === 'no_password') {
+      return {
+        id: user.id,
+        name: user.name,
+        username: user.username,
+        email: user.email,
         role: user.role,
         phone: user.phone || '+95 9 000 000000',
         avatar: safeAvatar,
         title: user.title || null,
         gender: user.gender || 'male',
         address: user.address || null,
-        updated_at: new Date().toISOString(),
+        updated_at: nowIso,
       };
+    }
 
-      const { error } = await supabase
-        .from('profiles')
-        .upsert(fullPayload, { onConflict: 'id' });
+    return {
+      id: user.id,
+      name: user.name,
+      username: user.username,
+      email: user.email,
+      password:
+        user.password ||
+        (user.role === 'admin' ? 'admin123' : user.role === 'co_admin' ? 'coadmin123' : 'student123'),
+      role: user.role,
+      phone: user.phone || '+95 9 000 000000',
+      avatar: safeAvatar,
+      title: user.title || null,
+      gender: user.gender || 'male',
+      address: user.address || null,
+      updated_at: nowIso,
+    };
+  }
+
+  /**
+   * Create or update a profile in Supabase with cached schema mode
+   * so Free Plan never wastes extra fallback HTTP calls.
+   */
+  static async upsertProfile(user: User): Promise<{ success: boolean; error?: string }> {
+    try {
+      const payload = this.buildProfilePayload(user, this.profileSchemaMode);
+      const { error } = await supabase.from('profiles').upsert(payload, { onConflict: 'id' });
 
       if (!error) {
         return { success: true };
       }
 
       // Fallback 1: without password column
-      const { password: _pwd, ...withoutPassword } = fullPayload;
-      const { error: errNoPwd } = await supabase
-        .from('profiles')
-        .upsert(withoutPassword, { onConflict: 'id' });
-
-      if (!errNoPwd) {
-        return { success: true };
+      if (this.profileSchemaMode === 'full') {
+        const noPwdPayload = this.buildProfilePayload(user, 'no_password');
+        const { error: errNoPwd } = await supabase
+          .from('profiles')
+          .upsert(noPwdPayload, { onConflict: 'id' });
+        if (!errNoPwd) {
+          this.profileSchemaMode = 'no_password';
+          return { success: true };
+        }
       }
 
       // Fallback 2: core columns only
-      const fallbackPayload = {
-        id: user.id,
-        name: user.name,
-        username: user.username,
-        email: user.email,
-        role: user.role,
-        phone: user.phone || '+95 9 000 000000',
-        avatar: safeAvatar,
-        title: user.title || null,
-        updated_at: new Date().toISOString(),
-      };
-
+      const corePayload = this.buildProfilePayload(user, 'core');
       const { error: fallbackError } = await supabase
         .from('profiles')
-        .upsert(fallbackPayload, { onConflict: 'id' });
+        .upsert(corePayload, { onConflict: 'id' });
 
       if (!fallbackError) {
+        this.profileSchemaMode = 'core';
         return { success: true };
       }
 
@@ -628,7 +705,7 @@ export class SupabaseService {
           description: course.description,
           instructor_name: course.instructorName,
           instructor_email: course.instructorEmail,
-          banner_image: course.bannerImage,
+          banner_image: compactBannerForCloud(course.bannerImage),
           theme_color: course.themeColor || 'indigo',
           enrolled_student_ids: course.enrolledStudentIds || [],
           total_lessons: course.totalLessons || 0,
@@ -652,7 +729,6 @@ export class SupabaseService {
    */
   static async deleteCourse(courseId: string): Promise<boolean> {
     try {
-      // Explicitly delete child records first in case ON DELETE CASCADE wasn't applied on older tables
       await Promise.allSettled([
         supabase.from('posts').delete().eq('course_id', courseId),
         supabase.from('assignments').delete().eq('course_id', courseId),
@@ -666,40 +742,48 @@ export class SupabaseService {
     }
   }
 
+  private static formatPostRow(post: CoursePost) {
+    const safeAttachments = (post.attachments || []).map((att) => ({
+      ...att,
+      // Keep Supabase Free Plan DB & egress ultra-lean (< 8KB per attachment URL)
+      url: att.url && att.url.length > 8000 ? '#attachment' : att.url,
+    }));
+
+    const safeComments = (post.comments || []).map((c) => ({
+      ...c,
+      authorAvatar: compactAvatarForCloud(c.authorAvatar),
+    }));
+
+    return {
+      id: post.id,
+      course_id: post.courseId,
+      author_id: post.authorId,
+      author_name: post.authorName,
+      author_role: post.authorRole,
+      author_avatar: compactAvatarForCloud(post.authorAvatar),
+      title: post.title,
+      content: post.content,
+      post_type: post.postType,
+      status: post.status || 'published',
+      scheduled_for: post.scheduledFor || null,
+      scheduled_for_display: post.scheduledForDisplay || null,
+      is_pinned: Boolean(post.isPinned),
+      pinned_at: post.pinnedAt || null,
+      pin_order: post.pinOrder ?? null,
+      attachments: safeAttachments,
+      likes: post.likes || [],
+      comments: safeComments,
+    };
+  }
+
   /**
    * Upsert a stream post (including comments & likes) to Supabase SQL database
    */
   static async upsertPost(post: CoursePost): Promise<boolean> {
     try {
-      const safeAttachments = (post.attachments || []).map((att) => ({
-        ...att,
-        // Avoid sending oversized data URLs > 100KB to JSONB column
-        url: att.url && att.url.length > 100000 ? '#attachment' : att.url,
-      }));
-
-      const { error } = await supabase.from('posts').upsert(
-        {
-          id: post.id,
-          course_id: post.courseId,
-          author_id: post.authorId,
-          author_name: post.authorName,
-          author_role: post.authorRole,
-          author_avatar: post.authorAvatar || '',
-          title: post.title,
-          content: post.content,
-          post_type: post.postType,
-          status: post.status || 'published',
-          scheduled_for: post.scheduledFor || null,
-          scheduled_for_display: post.scheduledForDisplay || null,
-          is_pinned: Boolean(post.isPinned),
-          pinned_at: post.pinnedAt || null,
-          pin_order: post.pinOrder ?? null,
-          attachments: safeAttachments,
-          likes: post.likes || [],
-          comments: post.comments || [],
-        },
-        { onConflict: 'id' }
-      );
+      const { error } = await supabase
+        .from('posts')
+        .upsert(this.formatPostRow(post), { onConflict: 'id' });
       return !error;
     } catch {
       return false;
@@ -753,25 +837,38 @@ export class SupabaseService {
     }
   }
 
+  private static formatSubmissionRow(sub: AssignmentSubmission) {
+    const safeFile = sub.fileAttachment
+      ? {
+          ...sub.fileAttachment,
+          mockUrl:
+            sub.fileAttachment.mockUrl && sub.fileAttachment.mockUrl.length > 8000
+              ? '#attachment'
+              : sub.fileAttachment.mockUrl,
+        }
+      : null;
+
+    return {
+      id: sub.id,
+      assignment_id: sub.assignmentId,
+      student_id: sub.studentId,
+      student_name: sub.studentName,
+      student_avatar: compactAvatarForCloud(sub.studentAvatar),
+      files: safeFile ? [safeFile] : [],
+      notes: sub.submissionText || '',
+      grade: sub.grade ?? null,
+      feedback: sub.feedback ?? null,
+    };
+  }
+
   /**
    * Upsert an assignment submission to Supabase SQL database
    */
   static async upsertAssignmentSubmission(sub: AssignmentSubmission): Promise<boolean> {
     try {
-      const { error } = await supabase.from('assignment_submissions').upsert(
-        {
-          id: sub.id,
-          assignment_id: sub.assignmentId,
-          student_id: sub.studentId,
-          student_name: sub.studentName,
-          student_avatar: sub.studentAvatar || '',
-          files: sub.fileAttachment ? [sub.fileAttachment] : [],
-          notes: sub.submissionText || '',
-          grade: sub.grade ?? null,
-          feedback: sub.feedback ?? null,
-        },
-        { onConflict: 'id' }
-      );
+      const { error } = await supabase
+        .from('assignment_submissions')
+        .upsert(this.formatSubmissionRow(sub), { onConflict: 'id' });
       return !error;
     } catch {
       return false;
@@ -843,7 +940,6 @@ export class SupabaseService {
           id: sub.id,
           quiz_id: sub.quizId,
           student_id: sub.studentId,
-          student_name: sub.studentName,
           score: sub.score,
           passed: sub.passed,
           answers: sub.answers || {},
@@ -893,7 +989,8 @@ export class SupabaseService {
   }
 
   /**
-   * Sync all local users, courses, posts, assignments, submissions, quizzes, attendance, and purge deleted IDs in Supabase
+   * High-Speed Batch Sync: Syncs all local users, courses, posts, assignments, submissions, quizzes, and attendance
+   * using single-table batch upserts (reduces 200+ requests down to 7 parallel batch requests for Supabase Free Plan).
    */
   static async syncAllData(
     users: User[],
@@ -905,8 +1002,6 @@ export class SupabaseService {
     deletedIds: string[] = [],
     submissions: AssignmentSubmission[] = []
   ): Promise<{ success: boolean; syncedUsers: number; syncedCourses: number; error?: string }> {
-    let syncedUsers = 0;
-    let syncedCourses = 0;
     let lastError: string | undefined;
 
     // 1. Purge any deleted IDs from Supabase SQL tables first
@@ -923,42 +1018,128 @@ export class SupabaseService {
       ]);
     }
 
-    for (const u of users) {
-      const res = await this.upsertProfile(u);
-      if (res.success) {
-        syncedUsers++;
+    // 2. Batch upsert profiles (with automatic schema fallback if needed)
+    let syncedUsers = 0;
+    if (users.length > 0) {
+      const profilePayloads = users.map((u) => this.buildProfilePayload(u, this.profileSchemaMode));
+      const { error: profErr } = await supabase
+        .from('profiles')
+        .upsert(profilePayloads, { onConflict: 'id' });
+
+      if (!profErr) {
+        syncedUsers = users.length;
       } else {
-        lastError = res.error;
+        // Fallback to individual upserts to detect schema mode
+        for (const u of users) {
+          const res = await this.upsertProfile(u);
+          if (res.success) syncedUsers++;
+          else lastError = res.error;
+        }
       }
     }
 
-    for (const c of courses) {
-      const res = await this.upsertCourse(c);
-      if (res.success) {
-        syncedCourses++;
+    // 3. Batch upsert courses
+    let syncedCourses = 0;
+    if (courses.length > 0) {
+      const coursePayloads = courses.map((course) => ({
+        id: course.id,
+        code: course.code,
+        title: course.title,
+        section: course.section,
+        batch: course.batch,
+        description: course.description,
+        instructor_name: course.instructorName,
+        instructor_email: course.instructorEmail,
+        banner_image: compactBannerForCloud(course.bannerImage),
+        theme_color: course.themeColor || 'indigo',
+        enrolled_student_ids: course.enrolledStudentIds || [],
+        total_lessons: course.totalLessons || 0,
+        total_assignments: course.totalAssignments || 0,
+        total_quizzes: course.totalQuizzes || 0,
+      }));
+      const { error: courseErr } = await supabase
+        .from('courses')
+        .upsert(coursePayloads, { onConflict: 'id' });
+      if (!courseErr) {
+        syncedCourses = courses.length;
       } else if (!lastError) {
-        lastError = res.error;
+        lastError = courseErr.message;
       }
     }
 
-    for (const p of posts) {
-      await this.upsertPost(p);
+    // 4. Parallel batch upserts for child tables (1 request per table)
+    const batchTasks: PromiseLike<unknown>[] = [];
+
+    if (posts.length > 0) {
+      batchTasks.push(
+        supabase.from('posts').upsert(
+          posts.map((p) => this.formatPostRow(p)),
+          { onConflict: 'id' }
+        )
+      );
     }
 
-    for (const a of assignments) {
-      await this.upsertAssignment(a);
+    if (assignments.length > 0) {
+      batchTasks.push(
+        supabase.from('assignments').upsert(
+          assignments.map((a) => ({
+            id: a.id,
+            course_id: a.courseId,
+            title: a.title,
+            description: a.description,
+            due_date: a.dueDate,
+            total_points: a.maxPoints || 100,
+          })),
+          { onConflict: 'id' }
+        )
+      );
     }
 
-    for (const sub of submissions) {
-      await this.upsertAssignmentSubmission(sub);
+    if (submissions.length > 0) {
+      batchTasks.push(
+        supabase.from('assignment_submissions').upsert(
+          submissions.map((sub) => this.formatSubmissionRow(sub)),
+          { onConflict: 'id' }
+        )
+      );
     }
 
-    for (const q of quizzes) {
-      await this.upsertQuiz(q);
+    if (quizzes.length > 0) {
+      batchTasks.push(
+        supabase.from('quizzes').upsert(
+          quizzes.map((q) => ({
+            id: q.id,
+            course_id: q.courseId,
+            title: q.title,
+            time_limit_minutes: q.durationMinutes || 30,
+            passing_score: q.passingScore || 70,
+            questions: q.questions || [],
+          })),
+          { onConflict: 'id' }
+        )
+      );
     }
 
-    for (const att of attendanceSessions) {
-      await this.upsertAttendanceSession(att);
+    if (attendanceSessions.length > 0) {
+      batchTasks.push(
+        supabase.from('attendance_sessions').upsert(
+          attendanceSessions.map((session) => ({
+            id: session.id,
+            course_id: session.courseId,
+            date: session.date,
+            display_date: session.displayDate,
+            title: session.title,
+            is_open: session.isOpen,
+            opened_by: session.openedBy,
+            records: session.records || {},
+          })),
+          { onConflict: 'id' }
+        )
+      );
+    }
+
+    if (batchTasks.length > 0) {
+      await Promise.allSettled(batchTasks);
     }
 
     return {

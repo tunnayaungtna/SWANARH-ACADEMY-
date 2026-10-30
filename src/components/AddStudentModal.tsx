@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Course } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
+import { SupabaseService } from '../services/supabase';
 import { PRESET_AVATARS } from '../data/presetAvatars';
 import {
   UserPlus,
@@ -113,6 +114,19 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
     if (result.error) {
       setFormError(result.error);
       return;
+    }
+
+    if (result.student) {
+      SupabaseService.signUpWithSupabase(newEmail.trim(), newPassword.trim(), {
+        id: result.student.id,
+        name: result.student.name,
+        username: result.student.username,
+        role: 'student',
+        phone: result.student.phone,
+        avatar: result.student.avatar,
+        gender: newGender,
+        address: result.student.address,
+      }).catch(() => {});
     }
 
     const enrolledCourseCodes = availableCourses
@@ -288,7 +302,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
                       type="button"
                       onClick={() => {
                         navigator.clipboard.writeText(
-                          `Classroom OS Login:\nUsername: ${createdDetails.username}\nPassword: ${createdDetails.password}\nClass: ${course.code}`
+                          `SwanArh Classroom Login:\nURL: ${window.location.origin}${window.location.pathname}\nUsername: ${createdDetails.username}\nPassword: ${createdDetails.password}\nClass: ${createdDetails.coursesLabel || course.code}`
                         );
                         setCopied(true);
                         setTimeout(() => setCopied(false), 2500);

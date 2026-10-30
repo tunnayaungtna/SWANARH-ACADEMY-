@@ -1326,6 +1326,12 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                         const isImg = att.type === 'image';
                         const isAudio = att.type === 'audio';
                         const isVideo = att.type === 'video';
+                        const isPlaceholderUrl = !att.url || att.url === '#' || att.url === '#attachment';
+                        const isSafeMediaUrl =
+                          !isPlaceholderUrl &&
+                          /^(https?:|data:image\/|data:audio\/|data:video\/|data:application\/pdf|data:text\/plain|blob:|\/|\.\/)/i.test(
+                            att.url.trim()
+                          );
 
                         return (
                           <div
@@ -1333,7 +1339,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                             className="flex flex-col justify-between p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-xs shadow-2xs hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                           >
                             {/* Preview for images if available */}
-                            {isImg && att.url && att.url !== '#' && (
+                            {isImg && isSafeMediaUrl && (
                               <div
                                 onClick={() => setPreviewImage({ url: att.url, name: att.name })}
                                 className="relative h-24 rounded-lg overflow-hidden bg-slate-200 dark:bg-slate-700 mb-2 cursor-pointer group/img"
@@ -1352,7 +1358,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                             )}
 
                             {/* Audio player if audio */}
-                            {isAudio && att.url && att.url !== '#' && (
+                            {isAudio && isSafeMediaUrl && (
                               <div className="mb-2">
                                 <audio controls className="w-full h-7 rounded">
                                   <source src={att.url} />
@@ -1361,7 +1367,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                             )}
 
                             {/* Video tag if video */}
-                            {isVideo && att.url && att.url !== '#' && (
+                            {isVideo && isSafeMediaUrl && (
                               <div className="mb-2 rounded overflow-hidden bg-black">
                                 <video controls className="w-full max-h-36">
                                   <source src={att.url} />
@@ -1383,10 +1389,10 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                               </div>
 
                               <a
-                                href={att.url}
+                                href={isSafeMediaUrl ? att.url : '#'}
                                 download={att.name}
                                 onClick={(e) => {
-                                  if (att.url === '#') {
+                                  if (!isSafeMediaUrl) {
                                     e.preventDefault();
                                     setSuccessToast(`ဖိုင် ဒေါင်းလုဒ်ဆွဲနေပါသည်: ${att.name} (${att.size})`);
                                     setTimeout(() => setSuccessToast(null), 3500);

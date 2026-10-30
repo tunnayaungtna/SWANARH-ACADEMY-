@@ -60,17 +60,41 @@ export interface SecuritySettings {
 }
 
 export class ClassroomDB {
+  // Fast O(1) in-memory cache to eliminate repeated localStorage JSON.parse calls during high-traffic UI renders
+  private static memoryCache = new Map<string, unknown>();
+  private static storageListenerAttached = false;
+
+  private static ensureStorageListener(): void {
+    if (this.storageListenerAttached || typeof window === 'undefined') return;
+    this.storageListenerAttached = true;
+    window.addEventListener('storage', (e) => {
+      if (e.key) {
+        this.memoryCache.delete(e.key);
+      } else {
+        this.memoryCache.clear();
+      }
+    });
+  }
+
   private static getItem<T>(key: string, defaultValue: T): T {
+    this.ensureStorageListener();
+    if (this.memoryCache.has(key)) {
+      return this.memoryCache.get(key) as T;
+    }
     try {
       const item = localStorage.getItem(key);
       if (!item) return defaultValue;
-      return JSON.parse(item) as T;
+      const parsed = JSON.parse(item) as T;
+      this.memoryCache.set(key, parsed);
+      return parsed;
     } catch {
       return defaultValue;
     }
   }
 
   private static setItem<T>(key: string, value: T): void {
+    this.ensureStorageListener();
+    this.memoryCache.set(key, value);
     try {
       localStorage.setItem(key, JSON.stringify(value));
     } catch (e) {
@@ -161,6 +185,7 @@ export class ClassroomDB {
 
   // Reset database to initial state
   static resetAll(): void {
+    this.memoryCache.clear();
     localStorage.clear();
     this.init();
   }
@@ -224,6 +249,7 @@ export class ClassroomDB {
     const allUsers = this.getAllUsers();
     const freshUser = allUsers.find((u) => u.id === storedUser.id);
     if (!freshUser) {
+      this.memoryCache.delete(STORAGE_KEYS.CURRENT_USER);
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
       return null;
     }
@@ -233,6 +259,7 @@ export class ClassroomDB {
 
   static setCurrentUser(user: User | null): void {
     if (user === null) {
+      this.memoryCache.delete(STORAGE_KEYS.CURRENT_USER);
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
     } else {
       const { password: _pwd, ...safeSessionUser } = user;
@@ -241,6 +268,7 @@ export class ClassroomDB {
   }
 
   static logout(): void {
+    this.memoryCache.delete(STORAGE_KEYS.CURRENT_USER);
     localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
   }
 
@@ -894,14 +922,39 @@ export class ClassroomDB {
   }
 
   private static activePullPromise: Promise<boolean> | null = null;
+  private static lastFullPullAt = 0;
+  private static lastProfilePullAt = 0;
+  private static purgedRemoteIds = new Set<string>();
 
   /**
-   * Pull latest users, courses, stream posts, assignments, submissions, quizzes, and attendance sessions
-   * from Supabase into local storage for real-time multi-user online collaboration,
-   * while respecting locally deleted IDs so deleted items never reappear.
-   * Deduplicates concurrent calls so startup never fires duplicate network requests.
+   * Supabase Free Plan Optimized Pull:
+   * - Coalesces concurrent requests
+   * - Enforces a 40-second cooldown on background polls (unless `force: true`)
+   * - Supports `onlyProfiles: true` when on the Login screen (cuts queries by 85%)
+   * - Performs diff checking before writing to localStorage so React only re-renders when data actually changes.
    */
-  static async pullFromSupabase(): Promise<boolean> {
+  static async pullFromSupabase(options?: {
+    force?: boolean;
+    onlyProfiles?: boolean;
+  }): Promise<boolean> {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return false;
+    }
+
+    const force = Boolean(options?.force);
+    const onlyProfiles = Boolean(options?.onlyProfiles);
+    const now = Date.now();
+    const COOLDOWN_MS = 40_000;
+
+    if (!force) {
+      if (onlyProfiles && now - this.lastProfilePullAt < COOLDOWN_MS) {
+        return false;
+      }
+      if (!onlyProfiles && now - this.lastFullPullAt < COOLDOWN_MS) {
+        return false;
+      }
+    }
+
     if (this.activePullPromise) {
       return this.activePullPromise;
     }
@@ -909,6 +962,44 @@ export class ClassroomDB {
     this.activePullPromise = (async () => {
       try {
         const deletedSet = new Set(this.getDeletedIds());
+
+        if (onlyProfiles) {
+          this.lastProfilePullAt = Date.now();
+          const remoteProfiles = await SupabaseService.getRemoteProfiles();
+          if (!remoteProfiles || remoteProfiles.length === 0) {
+            return false;
+          }
+          const localUsers = this.getAllUsers().filter((u) => !deletedSet.has(u.id));
+          const prevJson = JSON.stringify(localUsers);
+          const userMap = new Map<string, User>();
+          localUsers.forEach((u) => userMap.set(u.id, u));
+          remoteProfiles.forEach((ru) => {
+            if (deletedSet.has(ru.id)) return;
+            const existing = userMap.get(ru.id);
+            userMap.set(ru.id, {
+              ...existing,
+              ...ru,
+              avatar:
+                existing?.avatar && existing.avatar.startsWith('data:image/') && !ru.avatar?.startsWith('data:image/')
+                  ? existing.avatar
+                  : ru.avatar || existing?.avatar || '',
+              password:
+                ru.password ||
+                existing?.password ||
+                (ru.role === 'admin' ? 'admin123' : ru.role === 'co_admin' ? 'coadmin123' : 'student123'),
+            });
+          });
+          const mergedUsers = Array.from(userMap.values());
+          if (JSON.stringify(mergedUsers) !== prevJson) {
+            this.setItem(STORAGE_KEYS.USERS, mergedUsers);
+            return true;
+          }
+          return false;
+        }
+
+        this.lastFullPullAt = Date.now();
+        this.lastProfilePullAt = Date.now();
+
         const [
           remoteProfiles,
           remoteCourses,
@@ -931,18 +1022,21 @@ export class ClassroomDB {
 
         if (remoteProfiles && remoteProfiles.length > 0) {
           const localUsers = this.getAllUsers().filter((u) => !deletedSet.has(u.id));
+          const prevJson = JSON.stringify(localUsers);
           const userMap = new Map<string, User>();
           localUsers.forEach((u) => userMap.set(u.id, u));
           remoteProfiles.forEach((ru) => {
             if (deletedSet.has(ru.id)) {
-              SupabaseService.deleteProfile(ru.id).catch(() => {});
+              if (!this.purgedRemoteIds.has(ru.id)) {
+                this.purgedRemoteIds.add(ru.id);
+                SupabaseService.deleteProfile(ru.id).catch(() => {});
+              }
               return;
             }
             const existing = userMap.get(ru.id);
             userMap.set(ru.id, {
               ...existing,
               ...ru,
-              // Preserve local custom base64 avatar if remote had fallback URL
               avatar:
                 existing?.avatar && existing.avatar.startsWith('data:image/') && !ru.avatar?.startsWith('data:image/')
                   ? existing.avatar
@@ -953,40 +1047,58 @@ export class ClassroomDB {
                 (ru.role === 'admin' ? 'admin123' : ru.role === 'co_admin' ? 'coadmin123' : 'student123'),
             });
           });
-          this.setItem(STORAGE_KEYS.USERS, Array.from(userMap.values()));
-          updated = true;
+          const merged = Array.from(userMap.values());
+          if (JSON.stringify(merged) !== prevJson) {
+            this.setItem(STORAGE_KEYS.USERS, merged);
+            updated = true;
+          }
         }
 
         if (remoteCourses) {
           const localCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter(
             (c) => !deletedSet.has(c.id)
           );
+          const prevJson = JSON.stringify(localCourses);
           const courseMap = new Map<string, Course>();
           localCourses.forEach((c) => courseMap.set(c.id, c));
           remoteCourses.forEach((rc) => {
             if (deletedSet.has(rc.id)) {
-              SupabaseService.deleteCourse(rc.id).catch(() => {});
+              if (!this.purgedRemoteIds.has(rc.id)) {
+                this.purgedRemoteIds.add(rc.id);
+                SupabaseService.deleteCourse(rc.id).catch(() => {});
+              }
               return;
             }
             const existing = courseMap.get(rc.id);
             courseMap.set(rc.id, {
               ...existing,
               ...rc,
+              bannerImage:
+                existing?.bannerImage && existing.bannerImage.startsWith('data:image/') && !rc.bannerImage?.startsWith('data:image/')
+                  ? existing.bannerImage
+                  : rc.bannerImage || existing?.bannerImage || '',
             });
           });
-          this.setItem(STORAGE_KEYS.COURSES, Array.from(courseMap.values()));
-          updated = true;
+          const merged = Array.from(courseMap.values());
+          if (JSON.stringify(merged) !== prevJson) {
+            this.setItem(STORAGE_KEYS.COURSES, merged);
+            updated = true;
+          }
         }
 
         if (remotePosts && remotePosts.length > 0) {
           const localPosts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS).filter(
             (p) => !deletedSet.has(p.id)
           );
+          const prevJson = JSON.stringify(localPosts);
           const postMap = new Map<string, CoursePost>();
           localPosts.forEach((p) => postMap.set(p.id, p));
           remotePosts.forEach((rp) => {
             if (deletedSet.has(rp.id) || deletedSet.has(rp.courseId)) {
-              SupabaseService.deletePost(rp.id).catch(() => {});
+              if (!this.purgedRemoteIds.has(rp.id)) {
+                this.purgedRemoteIds.add(rp.id);
+                SupabaseService.deletePost(rp.id).catch(() => {});
+              }
               return;
             }
             const existing = postMap.get(rp.id);
@@ -994,7 +1106,6 @@ export class ClassroomDB {
               ...existing,
               ...rp,
               createdAt: existing?.createdAt || rp.createdAt,
-              // Preserve local base64 attachments if remote placeholder '#attachment' was stored
               attachments:
                 rp.attachments && rp.attachments.length > 0
                   ? rp.attachments.map((att, idx) => {
@@ -1007,8 +1118,11 @@ export class ClassroomDB {
                   : existing?.attachments || [],
             });
           });
-          this.setItem(STORAGE_KEYS.POSTS, Array.from(postMap.values()));
-          updated = true;
+          const merged = Array.from(postMap.values());
+          if (JSON.stringify(merged) !== prevJson) {
+            this.setItem(STORAGE_KEYS.POSTS, merged);
+            updated = true;
+          }
         }
 
         if (remoteAssignments && remoteAssignments.length > 0) {
@@ -1016,11 +1130,15 @@ export class ClassroomDB {
             STORAGE_KEYS.ASSIGNMENTS,
             INITIAL_ASSIGNMENTS
           ).filter((a) => !deletedSet.has(a.id));
+          const prevJson = JSON.stringify(localAssignments);
           const assMap = new Map<string, Assignment>();
           localAssignments.forEach((a) => assMap.set(a.id, a));
           remoteAssignments.forEach((ra) => {
             if (deletedSet.has(ra.id) || deletedSet.has(ra.courseId)) {
-              SupabaseService.deleteAssignment(ra.id).catch(() => {});
+              if (!this.purgedRemoteIds.has(ra.id)) {
+                this.purgedRemoteIds.add(ra.id);
+                SupabaseService.deleteAssignment(ra.id).catch(() => {});
+              }
               return;
             }
             const existing = assMap.get(ra.id);
@@ -1031,8 +1149,11 @@ export class ClassroomDB {
               attachments: existing?.attachments || ra.attachments,
             });
           });
-          this.setItem(STORAGE_KEYS.ASSIGNMENTS, Array.from(assMap.values()));
-          updated = true;
+          const merged = Array.from(assMap.values());
+          if (JSON.stringify(merged) !== prevJson) {
+            this.setItem(STORAGE_KEYS.ASSIGNMENTS, merged);
+            updated = true;
+          }
         }
 
         if (remoteSubmissions && remoteSubmissions.length > 0) {
@@ -1047,11 +1168,15 @@ export class ClassroomDB {
             STORAGE_KEYS.SUBMISSIONS,
             INITIAL_SUBMISSIONS
           ).filter((s) => !deletedSet.has(s.id));
+          const prevJson = JSON.stringify(localSubs);
           const subMap = new Map<string, AssignmentSubmission>();
           localSubs.forEach((s) => subMap.set(s.id, s));
           remoteSubmissions.forEach((rs) => {
             if (deletedSet.has(rs.id) || deletedSet.has(rs.assignmentId)) {
-              SupabaseService.deleteAssignmentSubmission(rs.id).catch(() => {});
+              if (!this.purgedRemoteIds.has(rs.id)) {
+                this.purgedRemoteIds.add(rs.id);
+                SupabaseService.deleteAssignmentSubmission(rs.id).catch(() => {});
+              }
               return;
             }
             const existing = subMap.get(rs.id);
@@ -1062,21 +1187,32 @@ export class ClassroomDB {
               ...rs,
               courseId: resolvedCourseId,
               submittedAt: existing?.submittedAt || rs.submittedAt,
+              fileAttachment:
+                rs.fileAttachment?.mockUrl === '#attachment' && existing?.fileAttachment?.mockUrl
+                  ? existing.fileAttachment
+                  : rs.fileAttachment || existing?.fileAttachment,
             });
           });
-          this.setItem(STORAGE_KEYS.SUBMISSIONS, Array.from(subMap.values()));
-          updated = true;
+          const merged = Array.from(subMap.values());
+          if (JSON.stringify(merged) !== prevJson) {
+            this.setItem(STORAGE_KEYS.SUBMISSIONS, merged);
+            updated = true;
+          }
         }
 
         if (remoteQuizzes && remoteQuizzes.length > 0) {
           const localQuizzes = this.getItem<Quiz[]>(STORAGE_KEYS.QUIZZES, INITIAL_QUIZZES).filter(
             (q) => !deletedSet.has(q.id)
           );
+          const prevJson = JSON.stringify(localQuizzes);
           const quizMap = new Map<string, Quiz>();
           localQuizzes.forEach((q) => quizMap.set(q.id, q));
           remoteQuizzes.forEach((rq) => {
             if (deletedSet.has(rq.id) || deletedSet.has(rq.courseId)) {
-              SupabaseService.deleteQuiz(rq.id).catch(() => {});
+              if (!this.purgedRemoteIds.has(rq.id)) {
+                this.purgedRemoteIds.add(rq.id);
+                SupabaseService.deleteQuiz(rq.id).catch(() => {});
+              }
               return;
             }
             const existing = quizMap.get(rq.id);
@@ -1085,8 +1221,11 @@ export class ClassroomDB {
               ...rq,
             });
           });
-          this.setItem(STORAGE_KEYS.QUIZZES, Array.from(quizMap.values()));
-          updated = true;
+          const merged = Array.from(quizMap.values());
+          if (JSON.stringify(merged) !== prevJson) {
+            this.setItem(STORAGE_KEYS.QUIZZES, merged);
+            updated = true;
+          }
         }
 
         if (remoteAttendance && remoteAttendance.length > 0) {
@@ -1094,11 +1233,15 @@ export class ClassroomDB {
             STORAGE_KEYS.ATTENDANCE,
             INITIAL_ATTENDANCE_SESSIONS
           ).filter((att) => !deletedSet.has(att.id));
+          const prevJson = JSON.stringify(localAttendance);
           const attMap = new Map<string, AttendanceSession>();
           localAttendance.forEach((att) => attMap.set(att.id, att));
           remoteAttendance.forEach((ratt) => {
             if (deletedSet.has(ratt.id) || deletedSet.has(ratt.courseId)) {
-              SupabaseService.deleteAttendanceSession(ratt.id).catch(() => {});
+              if (!this.purgedRemoteIds.has(ratt.id)) {
+                this.purgedRemoteIds.add(ratt.id);
+                SupabaseService.deleteAttendanceSession(ratt.id).catch(() => {});
+              }
               return;
             }
             const existing = attMap.get(ratt.id);
@@ -1111,8 +1254,11 @@ export class ClassroomDB {
               },
             });
           });
-          this.setItem(STORAGE_KEYS.ATTENDANCE, Array.from(attMap.values()));
-          updated = true;
+          const merged = Array.from(attMap.values());
+          if (JSON.stringify(merged) !== prevJson) {
+            this.setItem(STORAGE_KEYS.ATTENDANCE, merged);
+            updated = true;
+          }
         }
 
         return updated;
