@@ -21,13 +21,11 @@ export const CourseCard: React.FC<CourseCardProps> = ({
   const isInstructor = currentUser.role === 'admin' || currentUser.role === 'co_admin';
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
-  // Compute progress if student
-  const totalItems = (course.totalLessons || 1) + course.totalAssignments + course.totalQuizzes;
-  const completedCount =
-    (progress?.completedLessonIds.length || 0) +
-    (progress?.completedAssignmentIds.length || 0) +
-    (progress?.passedQuizIds.length || 0);
-  const progressPct = Math.min(100, Math.round((completedCount / totalItems) * 100));
+  // Compute attendance percentage if student
+  const attendancePct =
+    currentUser.role === 'student'
+      ? ClassroomDB.calculateTotalAttendancePercentage(course.id, currentUser.id)
+      : 100;
 
   const handleConfirmDeleteCourse = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -110,21 +108,19 @@ export const CourseCard: React.FC<CourseCardProps> = ({
               <span>{course.instructorName}</span>
               <span aria-hidden="true">·</span>
               <span>{course.totalLessons} Lessons</span>
-              <span aria-hidden="true">·</span>
-              <span>{course.totalAssignments} Tasks</span>
             </div>
 
-            {/* Progress Bar for enrolled students */}
+            {/* Attendance Rate Bar for enrolled students */}
             {currentUser.role === 'student' && (
               <div className="pt-2">
                 <div className="flex items-center justify-between text-[11px] font-mono text-slate-500 dark:text-slate-400 mb-1">
-                  <span>Course Progress</span>
-                  <span className="font-semibold text-slate-700 dark:text-slate-200">{progressPct}%</span>
+                  <span>Attendance Rate</span>
+                  <span className="font-semibold text-slate-700 dark:text-slate-200">{attendancePct}%</span>
                 </div>
                 <div className="w-full h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
                   <div
                     className="h-full bg-indigo-600 dark:bg-indigo-500 rounded-full transition-all duration-300"
-                    style={{ width: `${progressPct}%` }}
+                    style={{ width: `${attendancePct}%` }}
                   />
                 </div>
               </div>

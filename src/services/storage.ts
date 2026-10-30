@@ -1004,17 +1004,11 @@ export class ClassroomDB {
           remoteProfiles,
           remoteCourses,
           remotePosts,
-          remoteAssignments,
-          remoteSubmissions,
-          remoteQuizzes,
           remoteAttendance,
         ] = await Promise.all([
           SupabaseService.getRemoteProfiles(),
           SupabaseService.getRemoteCourses(),
           SupabaseService.getRemotePosts(),
-          SupabaseService.getRemoteAssignments(),
-          SupabaseService.getRemoteSubmissions(),
-          SupabaseService.getRemoteQuizzes(),
           SupabaseService.getRemoteAttendanceSessions(),
         ]);
 
@@ -1121,109 +1115,6 @@ export class ClassroomDB {
           const merged = Array.from(postMap.values());
           if (JSON.stringify(merged) !== prevJson) {
             this.setItem(STORAGE_KEYS.POSTS, merged);
-            updated = true;
-          }
-        }
-
-        if (remoteAssignments && remoteAssignments.length > 0) {
-          const localAssignments = this.getItem<Assignment[]>(
-            STORAGE_KEYS.ASSIGNMENTS,
-            INITIAL_ASSIGNMENTS
-          ).filter((a) => !deletedSet.has(a.id));
-          const prevJson = JSON.stringify(localAssignments);
-          const assMap = new Map<string, Assignment>();
-          localAssignments.forEach((a) => assMap.set(a.id, a));
-          remoteAssignments.forEach((ra) => {
-            if (deletedSet.has(ra.id) || deletedSet.has(ra.courseId)) {
-              if (!this.purgedRemoteIds.has(ra.id)) {
-                this.purgedRemoteIds.add(ra.id);
-                SupabaseService.deleteAssignment(ra.id).catch(() => {});
-              }
-              return;
-            }
-            const existing = assMap.get(ra.id);
-            assMap.set(ra.id, {
-              ...existing,
-              ...ra,
-              rubricItems: existing?.rubricItems || ra.rubricItems,
-              attachments: existing?.attachments || ra.attachments,
-            });
-          });
-          const merged = Array.from(assMap.values());
-          if (JSON.stringify(merged) !== prevJson) {
-            this.setItem(STORAGE_KEYS.ASSIGNMENTS, merged);
-            updated = true;
-          }
-        }
-
-        if (remoteSubmissions && remoteSubmissions.length > 0) {
-          const allAssignments = this.getItem<Assignment[]>(
-            STORAGE_KEYS.ASSIGNMENTS,
-            INITIAL_ASSIGNMENTS
-          );
-          const assignmentCourseMap = new Map<string, string>();
-          allAssignments.forEach((a) => assignmentCourseMap.set(a.id, a.courseId));
-
-          const localSubs = this.getItem<AssignmentSubmission[]>(
-            STORAGE_KEYS.SUBMISSIONS,
-            INITIAL_SUBMISSIONS
-          ).filter((s) => !deletedSet.has(s.id));
-          const prevJson = JSON.stringify(localSubs);
-          const subMap = new Map<string, AssignmentSubmission>();
-          localSubs.forEach((s) => subMap.set(s.id, s));
-          remoteSubmissions.forEach((rs) => {
-            if (deletedSet.has(rs.id) || deletedSet.has(rs.assignmentId)) {
-              if (!this.purgedRemoteIds.has(rs.id)) {
-                this.purgedRemoteIds.add(rs.id);
-                SupabaseService.deleteAssignmentSubmission(rs.id).catch(() => {});
-              }
-              return;
-            }
-            const existing = subMap.get(rs.id);
-            const resolvedCourseId =
-              existing?.courseId || assignmentCourseMap.get(rs.assignmentId) || rs.courseId || '';
-            subMap.set(rs.id, {
-              ...existing,
-              ...rs,
-              courseId: resolvedCourseId,
-              submittedAt: existing?.submittedAt || rs.submittedAt,
-              fileAttachment:
-                rs.fileAttachment?.mockUrl === '#attachment' && existing?.fileAttachment?.mockUrl
-                  ? existing.fileAttachment
-                  : rs.fileAttachment || existing?.fileAttachment,
-            });
-          });
-          const merged = Array.from(subMap.values());
-          if (JSON.stringify(merged) !== prevJson) {
-            this.setItem(STORAGE_KEYS.SUBMISSIONS, merged);
-            updated = true;
-          }
-        }
-
-        if (remoteQuizzes && remoteQuizzes.length > 0) {
-          const localQuizzes = this.getItem<Quiz[]>(STORAGE_KEYS.QUIZZES, INITIAL_QUIZZES).filter(
-            (q) => !deletedSet.has(q.id)
-          );
-          const prevJson = JSON.stringify(localQuizzes);
-          const quizMap = new Map<string, Quiz>();
-          localQuizzes.forEach((q) => quizMap.set(q.id, q));
-          remoteQuizzes.forEach((rq) => {
-            if (deletedSet.has(rq.id) || deletedSet.has(rq.courseId)) {
-              if (!this.purgedRemoteIds.has(rq.id)) {
-                this.purgedRemoteIds.add(rq.id);
-                SupabaseService.deleteQuiz(rq.id).catch(() => {});
-              }
-              return;
-            }
-            const existing = quizMap.get(rq.id);
-            quizMap.set(rq.id, {
-              ...existing,
-              ...rq,
-            });
-          });
-          const merged = Array.from(quizMap.values());
-          if (JSON.stringify(merged) !== prevJson) {
-            this.setItem(STORAGE_KEYS.QUIZZES, merged);
             updated = true;
           }
         }

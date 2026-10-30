@@ -319,7 +319,7 @@ export default function App() {
           </div>
         )}
         {selectedCourse ? (
-          /* Active Course Workspace (Stream, Classwork, People, Quizzes, Video) */
+          /* Active Course Workspace (Stream, Attendance, People) */
           <Suspense
             fallback={
               <div className="py-16 text-center text-xs font-semibold text-emerald-700 dark:text-emerald-400">
@@ -331,9 +331,6 @@ export default function App() {
               course={selectedCourse}
               currentUser={currentUser}
               posts={posts}
-              assignments={assignments}
-              quizzes={quizzes}
-              progress={progress}
               onBack={() => setSelectedCourse(null)}
               onRefresh={refreshData}
               onOpenCertificate={(cert) => setActiveCertificate(cert)}

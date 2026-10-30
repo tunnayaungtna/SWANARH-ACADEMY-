@@ -1,35 +1,28 @@
 import React, { useState } from 'react';
-import { Course, CoursePost, Assignment, Quiz, User, StudentProgress, CertificateData } from '../types/classroom';
+import { Course, CoursePost, User, CertificateData } from '../types/classroom';
 import { CourseStream } from './CourseStream';
-import { ClassworkView } from './ClassworkView';
 import { PeopleView } from './PeopleView';
 import { AttendanceView } from './AttendanceView';
 import { ClassroomDB } from '../services/storage';
 import { useBackHandler } from '../utils/backNavigation';
-import { ArrowLeft, MessageSquare, BookOpen, Users, CalendarCheck } from 'lucide-react';
+import { ArrowLeft, MessageSquare, Users, CalendarCheck } from 'lucide-react';
 
 interface CourseDetailProps {
   course: Course;
   currentUser: User;
   posts: CoursePost[];
-  assignments: Assignment[];
-  quizzes: Quiz[];
-  progress: StudentProgress;
   onBack: () => void;
   onRefresh: () => void;
   onOpenCertificate: (cert: CertificateData) => void;
   textProtectionEnabled: boolean;
 }
 
-type ClassroomTab = 'stream' | 'classwork' | 'attendance' | 'people';
+type ClassroomTab = 'stream' | 'attendance' | 'people';
 
 export const CourseDetail: React.FC<CourseDetailProps> = ({
   course,
   currentUser,
   posts,
-  assignments,
-  quizzes,
-  progress,
   onBack,
   onRefresh,
   onOpenCertificate,
@@ -91,18 +84,6 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
           </button>
 
           <button
-            onClick={() => handleSwitchTab('classwork')}
-            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
-              activeTab === 'classwork'
-                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs font-semibold'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-            }`}
-          >
-            <BookOpen className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-            <span>Classwork</span>
-          </button>
-
-          <button
             onClick={() => handleSwitchTab('attendance')}
             className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
               activeTab === 'attendance'
@@ -140,19 +121,6 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
             posts={posts}
             onRefresh={onRefresh}
             textProtectionEnabled={textProtectionEnabled}
-            onOpenAttendance={() => handleSwitchTab('attendance')}
-          />
-        )}
-
-        {activeTab === 'classwork' && (
-          <ClassworkView
-            course={course}
-            currentUser={currentUser}
-            assignments={assignments}
-            quizzes={quizzes}
-            progress={progress}
-            onRefresh={onRefresh}
-            onOpenCertificate={onOpenCertificate}
             onOpenAttendance={() => handleSwitchTab('attendance')}
           />
         )}
