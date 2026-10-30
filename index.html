@@ -17,6 +17,15 @@
       window.__pwaDeferredPrompt = null;
       window.__swanarhMounted = false;
 
+      // Immediately clean up any ?wake= query parameter from the address bar
+      try {
+        if (window.location.search && window.location.search.indexOf('wake=') !== -1) {
+          var cleanUrl = new URL(window.location.href);
+          cleanUrl.searchParams.delete('wake');
+          window.history.replaceState({}, '', cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
+        }
+      } catch (e) {}
+
       window.addEventListener('beforeinstallprompt', function (e) {
         e.preventDefault();
         window.__pwaDeferredPrompt = e;
@@ -28,7 +37,6 @@
       });
 
       // Immediately purge any stale Workbox or old version caches on startup
-      // (Do NOT wait for window.onload, because if a cached module hangs after 2-3 hours, onload never fires)
       (function () {
         try {
           if ('caches' in window) {
@@ -55,20 +63,9 @@
         } catch (e) {}
       })();
 
-      // Self-healing recovery function: clears stale SW/caches and performs a fresh navigation
-      window.__swanarhForceRecover = function (manual) {
+      // Manual recovery function: clears stale SW/caches and reloads cleanly
+      window.__swanarhForceRecover = function () {
         try {
-          if (!manual) {
-            var lastWake = parseInt(sessionStorage.getItem('__swanarh_wake_ts') || '0', 10);
-            var now = Date.now();
-            if (now - lastWake < 12000) {
-              return; // Prevent reload loop if already recovered in the last 12 seconds
-            }
-            sessionStorage.setItem('__swanarh_wake_ts', String(now));
-          } else {
-            sessionStorage.removeItem('__swanarh_wake_ts');
-          }
-
           var promises = [];
           if ('serviceWorker' in navigator) {
             promises.push(
@@ -87,16 +84,14 @@
 
           Promise.all(promises).finally(function () {
             var baseUrl = window.location.origin + window.location.pathname;
-            window.location.replace(baseUrl + '?wake=' + Date.now());
+            window.location.replace(baseUrl);
           });
         } catch (err) {
           window.location.reload();
         }
       };
 
-      // Pre-compiled static bundle loader for GitHub Pages (main branch / root or /docs)
-      // When GitHub Pages serves raw repository files without a Vite dev server, browsers cannot execute .tsx directly.
-      // This loader immediately boots the pre-compiled production bundle (./gh-pages/app.js & ./gh-pages/app.css).
+      // Pre-compiled static bundle loader for GitHub Pages (when serving main branch directly)
       window.__staticBundleLoaded = false;
       window.__loadStaticBundle = function () {
         if (window.__swanarhMounted || window.__staticBundleLoaded) return;
@@ -114,48 +109,7 @@
         } catch (e) {}
       };
 
-      // Catch module / chunk load failures that happen when reopening 2-3 hours later or on raw static hosts
-      window.addEventListener('error', function (e) {
-        var msg = (e && e.message) ? String(e.message) : '';
-        var isChunkOrScriptError =
-          msg.indexOf('Failed to fetch dynamically imported module') !== -1 ||
-          msg.indexOf('Importing a module script failed') !== -1 ||
-          msg.indexOf('ChunkLoadError') !== -1 ||
-          (e && e.target && e.target.tagName === 'SCRIPT');
-        if (isChunkOrScriptError && !window.__swanarhMounted) {
-          if (!window.__staticBundleLoaded) {
-            window.__loadStaticBundle();
-          } else {
-            window.__swanarhForceRecover(false);
-          }
-        }
-      }, true);
-
-      window.addEventListener('unhandledrejection', function (e) {
-        var reason = (e && e.reason) ? String(e.reason.message || e.reason) : '';
-        if (
-          reason.indexOf('Failed to fetch dynamically imported module') !== -1 ||
-          reason.indexOf('Importing a module script failed') !== -1 ||
-          reason.indexOf('ChunkLoadError') !== -1
-        ) {
-          if (!window.__staticBundleLoaded && !window.__swanarhMounted) {
-            window.__loadStaticBundle();
-          } else {
-            window.__swanarhForceRecover(false);
-          }
-        }
-      });
-
-      // Startup Watchdog:
-      // 1) At 600ms, if React hasn't mounted yet (e.g. static host serving raw index.html), load pre-built ./gh-pages/app.js in-place.
-      // 2) At 2.2s, if React still hasn't mounted, reveal the manual "Tap to Open Now" button so user is never stuck.
-      // 3) At 4.5s, if React still hasn't mounted, automatically clear stale SW/caches and wake up the session.
-      setTimeout(function () {
-        if (!window.__swanarhMounted && !window.__staticBundleLoaded) {
-          window.__loadStaticBundle();
-        }
-      }, 600);
-
+      // Show manual reload button only if app still hasn't mounted after 4 seconds
       setTimeout(function () {
         if (!window.__swanarhMounted) {
           var rescueBox = document.getElementById('swanarh-rescue-box');
@@ -163,13 +117,7 @@
             rescueBox.style.display = 'flex';
           }
         }
-      }, 2200);
-
-      setTimeout(function () {
-        if (!window.__swanarhMounted) {
-          window.__swanarhForceRecover(false);
-        }
-      }, 4500);
+      }, 4000);
 
       // Register lightweight icon-only Service Worker after load
       window.addEventListener('load', function () {
@@ -222,7 +170,7 @@
           </div>
           <button
             type="button"
-            onclick="window.__swanarhForceRecover && window.__swanarhForceRecover(true)"
+            onclick="window.__swanarhForceRecover && window.__swanarhForceRecover()"
             style="background: #059669; color: #ffffff; border: none; border-radius: 12px; padding: 10px 18px; font-size: 12px; font-weight: 700; cursor: pointer; box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);"
           >
             ချက်ချင်း ပြန်ဖွင့်ရန် (Tap to Open Now)
@@ -232,8 +180,6 @@
     </div>
     <script id="vite-entry" type="module" src="./src/main.tsx" onerror="window.__loadStaticBundle && window.__loadStaticBundle()"></script>
     <script>
-      // If hosted on GitHub Pages (github.io) or another static host serving raw index.html where #vite-entry still points to .tsx,
-      // immediately load the pre-compiled production bundle at 0ms without waiting for .tsx to fail!
       (function () {
         try {
           var entry = document.getElementById('vite-entry');
@@ -245,9 +191,6 @@
             host.indexOf('netlify.app') !== -1 ||
             host.indexOf('vercel.app') !== -1;
           if (rawTsx && isStaticPagesHost) {
-            if (entry && entry.parentNode) {
-              entry.parentNode.removeChild(entry);
-            }
             window.__loadStaticBundle();
           }
         } catch (e) {}

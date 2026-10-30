@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -18,21 +18,82 @@ concurrency:
 
 jobs:
   build:
+    if: "!contains(github.event.head_commit.message, '[gh-bundle]')"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Assemble production static site
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Normalize package.json for public npm & install dependencies
         run: |
-          mkdir -p dist/gh-pages dist/assets
-          cp -r public/* dist/ 2>/dev/null || true
-          cp -r gh-pages/* dist/gh-pages/ 2>/dev/null || true
-          cp gh-pages/app.js dist/assets/app.js 2>/dev/null || true
-          cp gh-pages/app.css dist/assets/app.css 2>/dev/null || true
-          cp index.html dist/index.html
-          cp index.html dist/404.html
+          node -e '
+            const fs = require("fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            pkg.dependencies = {
+              "@supabase/supabase-js": "^2.49.1",
+              "@tailwindcss/vite": "^4.0.6",
+              "@vitejs/plugin-react": "^4.3.4",
+              "lucide-react": "^0.475.0",
+              "react": "^19.0.0",
+              "react-dom": "^19.0.0",
+              "vite": "^6.1.0"
+            };
+            pkg.devDependencies = {
+              "@types/node": "^22.10.0",
+              "@types/react": "^19.0.0",
+              "@types/react-dom": "^19.0.0",
+              "tailwindcss": "^4.0.6",
+              "typescript": "^5.7.3"
+            };
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
+          '
+          npm install --legacy-peer-deps
+
+      - name: Build production bundle
+        run: |
+          rm -f manifest.webmanifest pwa-192x192.png pwa-512x512.png pwa-maskable-512x512.png apple-touch-icon.png icon.svg sw.js 404.html
+          npx vite build
+          mkdir -p dist/gh-pages
+          cp dist/assets/app.js dist/gh-pages/app.js
+          cp dist/assets/app.css dist/gh-pages/app.css
+          cp dist/index.html dist/404.html
           touch dist/.nojekyll
+
+      - name: Sync compiled bundle to repository branch for branch-based GitHub Pages
+        run: |
+          git checkout package.json
+          mkdir -p gh-pages
+          cp dist/assets/app.js gh-pages/app.js
+          cp dist/assets/app.css gh-pages/app.css
+          cp public/manifest.webmanifest public/sw.js public/pwa-192x192.png public/pwa-512x512.png public/pwa-maskable-512x512.png public/apple-touch-icon.png public/icon.svg ./ 2>/dev/null || true
+          cp dist/index.html 404.html
+          touch .nojekyll
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f gh-pages/app.js gh-pages/app.css .nojekyll 404.html manifest.webmanifest sw.js pwa-192x192.png pwa-512x512.png pwa-maskable-512x512.png apple-touch-icon.png icon.svg || true
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: sync compiled GitHub Pages bundle [gh-bundle]"
+            git push origin HEAD:${{ github.ref_name }} || true
+          fi
+
+      - name: Ensure any concurrent Jekyll branch build finishes before deploying artifact
+        run: |
+          for i in 1 2 3 4 5 6; do
+            in_prog=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}/actions/runs?status=in_progress" | grep -c '"pages build and deployment"' || true)
+            queued=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}/actions/runs?status=queued" | grep -c '"pages build and deployment"' || true)
+            if [ "$in_prog" = "0" ] && [ "$queued" = "0" ]; then
+              break
+            fi
+            sleep 5
+          done
+          sleep 5
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
@@ -52,4 +113,5 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
 
