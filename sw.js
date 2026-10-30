@@ -1,4 +1,4 @@
-const CACHE_NAME = 'swanarh-classroom-v7';
+const CACHE_NAME = 'swanarh-classroom-v8';
 const RELATIVE_ICON_ASSETS = [
   './pwa-192x192.png',
   './pwa-512x512.png',

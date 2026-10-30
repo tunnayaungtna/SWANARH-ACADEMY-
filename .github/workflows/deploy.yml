@@ -61,8 +61,12 @@ jobs:
           rm -f manifest.webmanifest pwa-192x192.png pwa-512x512.png pwa-maskable-512x512.png apple-touch-icon.png icon.svg sw.js 404.html
           npx vite build
           mkdir -p dist/gh-pages
-          cp dist/assets/app.js dist/gh-pages/app.js
-          cp dist/assets/app.css dist/gh-pages/app.css
+          JS_FILE=$(ls dist/assets/app-*.js 2>/dev/null | head -n 1 || echo "dist/assets/app.js")
+          CSS_FILE=$(ls dist/assets/app-*.css 2>/dev/null | head -n 1 || echo "dist/assets/app.css")
+          cp "$JS_FILE" dist/gh-pages/app.js
+          cp "$CSS_FILE" dist/gh-pages/app.css
+          cp "$JS_FILE" dist/assets/app.js 2>/dev/null || true
+          cp "$CSS_FILE" dist/assets/app.css 2>/dev/null || true
           cp dist/index.html dist/404.html
           touch dist/.nojekyll
 
@@ -70,10 +74,10 @@ jobs:
         run: |
           git checkout package.json
           mkdir -p gh-pages
-          cp dist/assets/app.js gh-pages/app.js
-          cp dist/assets/app.css gh-pages/app.css
+          cp dist/gh-pages/app.js gh-pages/app.js
+          cp dist/gh-pages/app.css gh-pages/app.css
           cp public/manifest.webmanifest public/sw.js public/pwa-192x192.png public/pwa-512x512.png public/pwa-maskable-512x512.png public/apple-touch-icon.png public/icon.svg ./ 2>/dev/null || true
-          cp dist/index.html 404.html
+          cp index.html 404.html
           touch .nojekyll
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
