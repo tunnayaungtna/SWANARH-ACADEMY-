@@ -379,6 +379,152 @@ export class SupabaseService {
   }
 
   /**
+   * Fetch all posts (stream lessons, announcements, videos, comments, likes) from Supabase
+   */
+  static async getRemotePosts(): Promise<CoursePost[] | null> {
+    try {
+      const { data, error } = await supabase.from('posts').select('*');
+      if (error || !data) return null;
+
+      return data.map((row) => ({
+        id: row.id,
+        courseId: row.course_id,
+        authorId: row.author_id || 'user-admin-1',
+        authorName: row.author_name || 'Instructor',
+        authorRole: (row.author_role as UserRole) || 'admin',
+        authorAvatar: row.author_avatar || '',
+        title: row.title || '',
+        content: row.content || '',
+        createdAt: row.created_at
+          ? new Date(row.created_at).toLocaleDateString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+            })
+          : 'Recently',
+        postType: (row.post_type as CoursePost['postType']) || 'announcement',
+        status: (row.status as CoursePost['status']) || 'published',
+        scheduledFor: row.scheduled_for || undefined,
+        scheduledForDisplay: row.scheduled_for_display || undefined,
+        isPinned: Boolean(row.is_pinned),
+        pinnedAt: row.pinned_at || undefined,
+        pinOrder: row.pin_order ?? undefined,
+        attachments: Array.isArray(row.attachments) ? row.attachments : [],
+        likes: Array.isArray(row.likes) ? row.likes : [],
+        comments: Array.isArray(row.comments) ? row.comments : [],
+      }));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Fetch all assignments from Supabase
+   */
+  static async getRemoteAssignments(): Promise<Assignment[] | null> {
+    try {
+      const { data, error } = await supabase.from('assignments').select('*');
+      if (error || !data) return null;
+
+      return data.map((row) => ({
+        id: row.id,
+        courseId: row.course_id,
+        title: row.title || '',
+        description: row.description || '',
+        dueDate: row.due_date || '',
+        maxPoints: row.total_points ?? 100,
+        rubricItems: ['Code Quality & Correctness', 'Documentation & Verification'],
+      }));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Fetch all assignment submissions from Supabase
+   */
+  static async getRemoteSubmissions(): Promise<AssignmentSubmission[] | null> {
+    try {
+      const { data, error } = await supabase.from('assignment_submissions').select('*');
+      if (error || !data) return null;
+
+      return data.map((row) => {
+        const filesArr = Array.isArray(row.files) ? row.files : [];
+        return {
+          id: row.id,
+          assignmentId: row.assignment_id,
+          courseId: '',
+          studentId: row.student_id,
+          studentName: row.student_name || 'Student',
+          studentAvatar: row.student_avatar || '',
+          submittedAt: row.submitted_at
+            ? new Date(row.submitted_at).toLocaleString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+              })
+            : 'Submitted',
+          fileAttachment: filesArr[0] || undefined,
+          submissionText: row.notes || '',
+          grade: typeof row.grade === 'number' ? row.grade : undefined,
+          feedback: row.feedback || undefined,
+          status: (typeof row.grade === 'number' ? 'graded' : 'submitted') as 'submitted' | 'graded',
+        };
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Fetch all quizzes from Supabase
+   */
+  static async getRemoteQuizzes(): Promise<Quiz[] | null> {
+    try {
+      const { data, error } = await supabase.from('quizzes').select('*');
+      if (error || !data) return null;
+
+      return data.map((row) => ({
+        id: row.id,
+        courseId: row.course_id,
+        title: row.title || '',
+        description: 'Timed Assessment',
+        timeLimitMinutes: row.time_limit_minutes ?? 30,
+        durationMinutes: row.time_limit_minutes ?? 30,
+        passingScore: row.passing_score ?? 70,
+        questions: Array.isArray(row.questions) ? row.questions : [],
+      }));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Fetch all attendance sessions from Supabase
+   */
+  static async getRemoteAttendanceSessions(): Promise<AttendanceSession[] | null> {
+    try {
+      const { data, error } = await supabase.from('attendance_sessions').select('*');
+      if (error || !data) return null;
+
+      return data.map((row) => ({
+        id: row.id,
+        courseId: row.course_id,
+        date: row.date,
+        displayDate: row.display_date || row.date,
+        title: row.title || 'Class Attendance',
+        isOpen: Boolean(row.is_open),
+        openedBy: row.opened_by || 'Instructor',
+        createdAt: row.created_at || new Date().toISOString(),
+        records: row.records && typeof row.records === 'object' ? row.records : {},
+      }));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Create or update a profile in Supabase with automatic fallback
    * if gender/address/password columns haven't been added to the user's Supabase table yet.
    */
@@ -680,6 +826,37 @@ export class SupabaseService {
   }
 
   /**
+   * Upsert a student quiz submission to Supabase SQL database
+   */
+  static async upsertQuizSubmission(sub: {
+    id: string;
+    quizId: string;
+    studentId: string;
+    studentName: string;
+    score: number;
+    passed: boolean;
+    answers: Record<string, number>;
+  }): Promise<boolean> {
+    try {
+      const { error } = await supabase.from('quiz_submissions').upsert(
+        {
+          id: sub.id,
+          quiz_id: sub.quizId,
+          student_id: sub.studentId,
+          student_name: sub.studentName,
+          score: sub.score,
+          passed: sub.passed,
+          answers: sub.answers || {},
+        },
+        { onConflict: 'id' }
+      );
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Upsert an attendance session to Supabase SQL database
    */
   static async upsertAttendanceSession(session: AttendanceSession): Promise<boolean> {
@@ -716,7 +893,7 @@ export class SupabaseService {
   }
 
   /**
-   * Sync all local users, courses, posts, assignments, quizzes, attendance, and purge deleted IDs in Supabase
+   * Sync all local users, courses, posts, assignments, submissions, quizzes, attendance, and purge deleted IDs in Supabase
    */
   static async syncAllData(
     users: User[],
@@ -725,7 +902,8 @@ export class SupabaseService {
     assignments: Assignment[] = [],
     quizzes: Quiz[] = [],
     attendanceSessions: AttendanceSession[] = [],
-    deletedIds: string[] = []
+    deletedIds: string[] = [],
+    submissions: AssignmentSubmission[] = []
   ): Promise<{ success: boolean; syncedUsers: number; syncedCourses: number; error?: string }> {
     let syncedUsers = 0;
     let syncedCourses = 0;
@@ -769,6 +947,10 @@ export class SupabaseService {
 
     for (const a of assignments) {
       await this.upsertAssignment(a);
+    }
+
+    for (const sub of submissions) {
+      await this.upsertAssignmentSubmission(sub);
     }
 
     for (const q of quizzes) {

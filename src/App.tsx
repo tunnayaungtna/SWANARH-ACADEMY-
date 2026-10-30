@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Suspense } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
 import { User, Course, CoursePost, Assignment, Quiz, StudentProgress, CertificateData, NotificationItem } from './types/classroom';
 import { ClassroomDB } from './services/storage';
 import { useBackHandler } from './utils/backNavigation';
@@ -34,6 +34,8 @@ export default function App() {
     return user ? ClassroomDB.getCourses(user) : [];
   });
   const [selectedCourse, setSelectedCourse] = useState<Course | null>(null);
+  const selectedCourseRef = useRef<Course | null>(null);
+  selectedCourseRef.current = selectedCourse;
   const [courseSearch, setCourseSearch] = useState('');
 
   // Active course data
@@ -106,9 +108,10 @@ export default function App() {
     // Security
     setSecuritySettings(ClassroomDB.getSecuritySettings());
 
-    // If a course is selected, refresh its child items
-    if (selectedCourse) {
-      const verify = ClassroomDB.getCourseById(selectedCourse.id, user);
+    // If a course is selected, refresh its child items using ref so background intervals never see stale null state
+    const activeCourse = selectedCourseRef.current;
+    if (activeCourse) {
+      const verify = ClassroomDB.getCourseById(activeCourse.id, user);
       if (!verify.course) {
         setSelectedCourse(null);
       } else {

@@ -297,11 +297,12 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     courseName?: string;
   }) => {
     const roleTitle = creds.role === 'admin' ? 'Administrator (ဆရာ)' : creds.role === 'co_admin' ? 'Co-Admin (တွဲဖက်ဆရာ)' : 'Student (ကျောင်းသား)';
+    const loginUrl = window.location.origin + window.location.pathname;
     const text = `🎓 Classroom OS Login Credentials\n👤 Name: ${creds.name}\n🛡️ Role: ${roleTitle}${
       creds.gender ? `\n⚧ Gender: ${creds.gender}` : ''
     }${creds.address ? `\n📍 Address: ${creds.address}` : ''}\n🔑 Username: ${creds.username}\n🔒 Password: ${creds.password}${
       creds.courseName ? `\n📚 Assigned Classes: ${creds.courseName}` : ''
-    }\n🌐 Login URL: ${window.location.origin}`;
+    }\n🌐 Login URL: ${loginUrl}`;
 
     navigator.clipboard.writeText(text);
     setCopiedSuccess(true);

@@ -220,21 +220,23 @@ export class ClassroomDB {
     const storedUser = this.getItem<User | null>(STORAGE_KEYS.CURRENT_USER, null);
     if (!storedUser) return null;
 
-    // Verify user still exists in database and keep session profile fresh
+    // Verify user still exists in database and keep session profile fresh (without exposing plaintext password in session state)
     const allUsers = this.getAllUsers();
     const freshUser = allUsers.find((u) => u.id === storedUser.id);
     if (!freshUser) {
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
       return null;
     }
-    return freshUser;
+    const { password: _pwd, ...safeUser } = freshUser;
+    return safeUser;
   }
 
   static setCurrentUser(user: User | null): void {
     if (user === null) {
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
     } else {
-      this.setItem(STORAGE_KEYS.CURRENT_USER, user);
+      const { password: _pwd, ...safeSessionUser } = user;
+      this.setItem(STORAGE_KEYS.CURRENT_USER, safeSessionUser);
     }
   }
 
@@ -332,6 +334,20 @@ export class ClassroomDB {
     initialCourseId?: string;
     initialCourseIds?: string[];
   }): { user: User | null; error?: string } {
+    const currentLogged = this.getCurrentUser();
+    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+      return {
+        user: null,
+        error: 'ခွင့်ပြုချက် မရှိပါ: အကောင့်အသစ် ဖန်တီးခွင့်သည် Admin နှင့် Co-Admin အကောင့်များအတွက်သာ ဖြစ်ပါသည်။',
+      };
+    }
+    if (currentLogged && currentLogged.role === 'co_admin' && data.role === 'admin') {
+      return {
+        user: null,
+        error: 'ခွင့်ပြုချက် မရှိပါ: Primary Admin အကောင့်အသစ်ကို Main Admin ကသာ ဖန်တီးနိုင်ပါသည်။',
+      };
+    }
+
     const users = this.getAllUsers();
     const cleanUsername = data.username.trim().toLowerCase();
     const cleanEmail = data.email.trim().toLowerCase();
@@ -504,7 +520,7 @@ export class ClassroomDB {
     newPassword: string
   ): { success: boolean; error?: string } {
     const currentLogged = this.getCurrentUser();
-    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
       return { success: false, error: 'ခွင့်ပြုချက် မရှိပါ (Admin သို့မဟုတ် Co-Admin သာ ပြောင်းလဲခွင့်ရှိပါသည်)။' };
     }
 
@@ -512,6 +528,11 @@ export class ClassroomDB {
     const userIndex = users.findIndex((u) => u.id === studentId);
     if (userIndex === -1) {
       return { success: false, error: 'အကောင့် မတွေ့ရှိပါ။' };
+    }
+
+    // Prevent Co-Admin from resetting Primary Admin password
+    if (currentLogged.role === 'co_admin' && users[userIndex].role === 'admin') {
+      return { success: false, error: 'ခွင့်ပြုချက် မရှိပါ: Main Admin ၏ စကားဝှက်ကို Co-Admin မှ ပြောင်းလဲခွင့်မရှိပါ။' };
     }
 
     if (!newPassword || newPassword.trim().length < 4) {
@@ -537,7 +558,7 @@ export class ClassroomDB {
 
   static deleteUser(userId: string): { success: boolean; error?: string } {
     const currentLogged = this.getCurrentUser();
-    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
       return { success: false, error: 'ခွင့်ပြုချက် မရှိပါ။' };
     }
 
@@ -545,6 +566,9 @@ export class ClassroomDB {
     const target = users.find((u) => u.id === userId);
     if (!target) {
       return { success: false, error: 'အသုံးပြုသူ မတွေ့ရှိပါ။' };
+    }
+    if (currentLogged.role === 'co_admin' && target.role === 'admin') {
+      return { success: false, error: 'ခွင့်ပြုချက် မရှိပါ: Main Admin အကောင့်အား Co-Admin မှ ဖျက်ခွင့်မရှိပါ။' };
     }
     const adminCount = users.filter((u) => u.role === 'admin').length;
     if (target.role === 'admin' && adminCount <= 1) {
@@ -643,6 +667,10 @@ export class ClassroomDB {
   }
 
   static enrollStudent(courseId: string, studentId: string): boolean {
+    const currentLogged = this.getCurrentUser();
+    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+      return false;
+    }
     const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
     const updated = courses.map((course) => {
       if (course.id === courseId) {
@@ -666,6 +694,10 @@ export class ClassroomDB {
   }
 
   static unenrollStudent(courseId: string, studentId: string): boolean {
+    const currentLogged = this.getCurrentUser();
+    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+      return false;
+    }
     const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
     const updated = courses.map((course) => {
       if (course.id === courseId) {
@@ -687,6 +719,10 @@ export class ClassroomDB {
   }
 
   static createCourse(newCourse: Omit<Course, 'id'>): Course {
+    const currentLogged = this.getCurrentUser();
+    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+      throw new Error('Unauthorized: Only Admin or Co-Admin can create courses.');
+    }
     const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
     const id = `course-${Date.now()}`;
     const course: Course = { ...newCourse, id };
@@ -700,13 +736,21 @@ export class ClassroomDB {
   }
 
   static updateCourseBanner(courseId: string, bannerImage: string): Course | null {
+    const currentLogged = this.getCurrentUser();
+    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+      return null;
+    }
+    const cleanBanner = bannerImage.trim();
+    if (/^(javascript|vbscript|data:text\/html)/i.test(cleanBanner)) {
+      return null;
+    }
     const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
     let updatedCourse: Course | null = null;
     const updated = courses.map((c) => {
       if (c.id === courseId) {
         updatedCourse = {
           ...c,
-          bannerImage: bannerImage.trim(),
+          bannerImage: cleanBanner,
         };
         return updatedCourse;
       }
@@ -830,6 +874,7 @@ export class ClassroomDB {
     const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
     const posts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS);
     const assignments = this.getItem<Assignment[]>(STORAGE_KEYS.ASSIGNMENTS, INITIAL_ASSIGNMENTS);
+    const submissions = this.getItem<AssignmentSubmission[]>(STORAGE_KEYS.SUBMISSIONS, INITIAL_SUBMISSIONS);
     const quizzes = this.getItem<Quiz[]>(STORAGE_KEYS.QUIZZES, INITIAL_QUIZZES);
     const attendance = this.getItem<AttendanceSession[]>(
       STORAGE_KEYS.ATTENDANCE,
@@ -843,14 +888,16 @@ export class ClassroomDB {
       assignments,
       quizzes,
       attendance,
-      deletedIds
+      deletedIds,
+      submissions
     );
   }
 
   private static activePullPromise: Promise<boolean> | null = null;
 
   /**
-   * Pull latest users and courses from Supabase into local storage
+   * Pull latest users, courses, stream posts, assignments, submissions, quizzes, and attendance sessions
+   * from Supabase into local storage for real-time multi-user online collaboration,
    * while respecting locally deleted IDs so deleted items never reappear.
    * Deduplicates concurrent calls so startup never fires duplicate network requests.
    */
@@ -862,9 +909,22 @@ export class ClassroomDB {
     this.activePullPromise = (async () => {
       try {
         const deletedSet = new Set(this.getDeletedIds());
-        const [remoteProfiles, remoteCourses] = await Promise.all([
+        const [
+          remoteProfiles,
+          remoteCourses,
+          remotePosts,
+          remoteAssignments,
+          remoteSubmissions,
+          remoteQuizzes,
+          remoteAttendance,
+        ] = await Promise.all([
           SupabaseService.getRemoteProfiles(),
           SupabaseService.getRemoteCourses(),
+          SupabaseService.getRemotePosts(),
+          SupabaseService.getRemoteAssignments(),
+          SupabaseService.getRemoteSubmissions(),
+          SupabaseService.getRemoteQuizzes(),
+          SupabaseService.getRemoteAttendanceSessions(),
         ]);
 
         let updated = false;
@@ -882,6 +942,11 @@ export class ClassroomDB {
             userMap.set(ru.id, {
               ...existing,
               ...ru,
+              // Preserve local custom base64 avatar if remote had fallback URL
+              avatar:
+                existing?.avatar && existing.avatar.startsWith('data:image/') && !ru.avatar?.startsWith('data:image/')
+                  ? existing.avatar
+                  : ru.avatar || existing?.avatar || '',
               password:
                 ru.password ||
                 existing?.password ||
@@ -910,6 +975,143 @@ export class ClassroomDB {
             });
           });
           this.setItem(STORAGE_KEYS.COURSES, Array.from(courseMap.values()));
+          updated = true;
+        }
+
+        if (remotePosts && remotePosts.length > 0) {
+          const localPosts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS).filter(
+            (p) => !deletedSet.has(p.id)
+          );
+          const postMap = new Map<string, CoursePost>();
+          localPosts.forEach((p) => postMap.set(p.id, p));
+          remotePosts.forEach((rp) => {
+            if (deletedSet.has(rp.id) || deletedSet.has(rp.courseId)) {
+              SupabaseService.deletePost(rp.id).catch(() => {});
+              return;
+            }
+            const existing = postMap.get(rp.id);
+            postMap.set(rp.id, {
+              ...existing,
+              ...rp,
+              createdAt: existing?.createdAt || rp.createdAt,
+              // Preserve local base64 attachments if remote placeholder '#attachment' was stored
+              attachments:
+                rp.attachments && rp.attachments.length > 0
+                  ? rp.attachments.map((att, idx) => {
+                      const localAtt = existing?.attachments?.[idx];
+                      if (att.url === '#attachment' && localAtt?.url) {
+                        return localAtt;
+                      }
+                      return att;
+                    })
+                  : existing?.attachments || [],
+            });
+          });
+          this.setItem(STORAGE_KEYS.POSTS, Array.from(postMap.values()));
+          updated = true;
+        }
+
+        if (remoteAssignments && remoteAssignments.length > 0) {
+          const localAssignments = this.getItem<Assignment[]>(
+            STORAGE_KEYS.ASSIGNMENTS,
+            INITIAL_ASSIGNMENTS
+          ).filter((a) => !deletedSet.has(a.id));
+          const assMap = new Map<string, Assignment>();
+          localAssignments.forEach((a) => assMap.set(a.id, a));
+          remoteAssignments.forEach((ra) => {
+            if (deletedSet.has(ra.id) || deletedSet.has(ra.courseId)) {
+              SupabaseService.deleteAssignment(ra.id).catch(() => {});
+              return;
+            }
+            const existing = assMap.get(ra.id);
+            assMap.set(ra.id, {
+              ...existing,
+              ...ra,
+              rubricItems: existing?.rubricItems || ra.rubricItems,
+              attachments: existing?.attachments || ra.attachments,
+            });
+          });
+          this.setItem(STORAGE_KEYS.ASSIGNMENTS, Array.from(assMap.values()));
+          updated = true;
+        }
+
+        if (remoteSubmissions && remoteSubmissions.length > 0) {
+          const allAssignments = this.getItem<Assignment[]>(
+            STORAGE_KEYS.ASSIGNMENTS,
+            INITIAL_ASSIGNMENTS
+          );
+          const assignmentCourseMap = new Map<string, string>();
+          allAssignments.forEach((a) => assignmentCourseMap.set(a.id, a.courseId));
+
+          const localSubs = this.getItem<AssignmentSubmission[]>(
+            STORAGE_KEYS.SUBMISSIONS,
+            INITIAL_SUBMISSIONS
+          ).filter((s) => !deletedSet.has(s.id));
+          const subMap = new Map<string, AssignmentSubmission>();
+          localSubs.forEach((s) => subMap.set(s.id, s));
+          remoteSubmissions.forEach((rs) => {
+            if (deletedSet.has(rs.id) || deletedSet.has(rs.assignmentId)) {
+              SupabaseService.deleteAssignmentSubmission(rs.id).catch(() => {});
+              return;
+            }
+            const existing = subMap.get(rs.id);
+            const resolvedCourseId =
+              existing?.courseId || assignmentCourseMap.get(rs.assignmentId) || rs.courseId || '';
+            subMap.set(rs.id, {
+              ...existing,
+              ...rs,
+              courseId: resolvedCourseId,
+              submittedAt: existing?.submittedAt || rs.submittedAt,
+            });
+          });
+          this.setItem(STORAGE_KEYS.SUBMISSIONS, Array.from(subMap.values()));
+          updated = true;
+        }
+
+        if (remoteQuizzes && remoteQuizzes.length > 0) {
+          const localQuizzes = this.getItem<Quiz[]>(STORAGE_KEYS.QUIZZES, INITIAL_QUIZZES).filter(
+            (q) => !deletedSet.has(q.id)
+          );
+          const quizMap = new Map<string, Quiz>();
+          localQuizzes.forEach((q) => quizMap.set(q.id, q));
+          remoteQuizzes.forEach((rq) => {
+            if (deletedSet.has(rq.id) || deletedSet.has(rq.courseId)) {
+              SupabaseService.deleteQuiz(rq.id).catch(() => {});
+              return;
+            }
+            const existing = quizMap.get(rq.id);
+            quizMap.set(rq.id, {
+              ...existing,
+              ...rq,
+            });
+          });
+          this.setItem(STORAGE_KEYS.QUIZZES, Array.from(quizMap.values()));
+          updated = true;
+        }
+
+        if (remoteAttendance && remoteAttendance.length > 0) {
+          const localAttendance = this.getItem<AttendanceSession[]>(
+            STORAGE_KEYS.ATTENDANCE,
+            INITIAL_ATTENDANCE_SESSIONS
+          ).filter((att) => !deletedSet.has(att.id));
+          const attMap = new Map<string, AttendanceSession>();
+          localAttendance.forEach((att) => attMap.set(att.id, att));
+          remoteAttendance.forEach((ratt) => {
+            if (deletedSet.has(ratt.id) || deletedSet.has(ratt.courseId)) {
+              SupabaseService.deleteAttendanceSession(ratt.id).catch(() => {});
+              return;
+            }
+            const existing = attMap.get(ratt.id);
+            attMap.set(ratt.id, {
+              ...existing,
+              ...ratt,
+              records: {
+                ...(existing?.records || {}),
+                ...(ratt.records || {}),
+              },
+            });
+          });
+          this.setItem(STORAGE_KEYS.ATTENDANCE, Array.from(attMap.values()));
           updated = true;
         }
 
@@ -1258,6 +1460,15 @@ export class ClassroomDB {
     if (!rateCheck.allowed) return false;
 
     const posts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS);
+    const targetPost = posts.find((p) => p.id === postId);
+    if (!targetPost) return false;
+
+    const currentLogged = this.getCurrentUser();
+    if (currentLogged) {
+      const access = this.getCourseById(targetPost.courseId, currentLogged);
+      if (!access.course) return false;
+    }
+
     let updatedPost: CoursePost | null = null;
     const updated = posts.map((post) => {
       if (post.id === postId) {
@@ -1286,6 +1497,11 @@ export class ClassroomDB {
     content: string,
     currentUser: User
   ): { comment: PostComment | null; error?: string } {
+    const cleanContent = content.trim().slice(0, 2000);
+    if (!cleanContent) {
+      return { comment: null, error: 'Comment စာသား ရိုက်ထည့်ပေးပါ။' };
+    }
+
     const rateCheck = this.checkRateLimit('comment_post', currentUser.id, 6, 60);
     if (!rateCheck.allowed) {
       return {
@@ -1295,6 +1511,17 @@ export class ClassroomDB {
     }
 
     const posts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS);
+    const targetPost = posts.find((p) => p.id === postId);
+    if (!targetPost) {
+      return { comment: null, error: 'Post not found.' };
+    }
+
+    // Strict course enrollment verification before allowing comment
+    const access = this.getCourseById(targetPost.courseId, currentUser);
+    if (!access.course) {
+      return { comment: null, error: access.error || 'Access denied.' };
+    }
+
     const newComment: PostComment = {
       id: `comm-${Date.now()}`,
       postId,
@@ -1302,7 +1529,7 @@ export class ClassroomDB {
       authorName: currentUser.name,
       authorRole: currentUser.role,
       authorAvatar: currentUser.avatar,
-      content,
+      content: cleanContent,
       createdAt: 'Just now',
     };
 
@@ -1430,6 +1657,13 @@ export class ClassroomDB {
   }
 
   static gradeAssignment(submissionId: string, grade: number, feedback: string): boolean {
+    const currentLogged = this.getCurrentUser();
+    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+      return false;
+    }
+    const safeGrade = Math.max(0, Math.min(100, Number.isFinite(grade) ? Math.round(grade) : 0));
+    const safeFeedback = (feedback || '').trim().slice(0, 2000);
+
     const submissions = this.getItem<AssignmentSubmission[]>(STORAGE_KEYS.SUBMISSIONS, INITIAL_SUBMISSIONS);
     const target = submissions.find((s) => s.id === submissionId);
     if (!target) return false;
@@ -1440,8 +1674,8 @@ export class ClassroomDB {
         gradedSub = {
           ...s,
           status: 'graded' as const,
-          grade,
-          feedback,
+          grade: safeGrade,
+          feedback: safeFeedback,
           gradedAt: 'Just now',
         };
         return gradedSub;
@@ -1464,7 +1698,7 @@ export class ClassroomDB {
       courseId: target.courseId,
       courseTitle: 'Course Assignment',
       title: 'Assignment Graded',
-      message: `Your score: ${grade}/100. "${feedback}"`,
+      message: `Your score: ${safeGrade}/100. "${safeFeedback}"`,
       type: 'grade',
     });
 
@@ -1556,13 +1790,16 @@ export class ClassroomDB {
     currentUser: User
   ): { submission: QuizSubmission; passed: boolean; score: number } {
     let correctCount = 0;
-    quiz.questions.forEach((q) => {
-      if (answers[q.id] === q.correctIndex) {
-        correctCount++;
-      }
-    });
+    const totalQuestions = quiz.questions?.length || 0;
+    if (totalQuestions > 0) {
+      quiz.questions.forEach((q) => {
+        if (answers[q.id] === q.correctIndex) {
+          correctCount++;
+        }
+      });
+    }
 
-    const score = Math.round((correctCount / quiz.questions.length) * 100);
+    const score = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 100;
     const passed = score >= quiz.passingScore;
 
     const submissions = this.getItem<QuizSubmission[]>(STORAGE_KEYS.QUIZ_SUBMISSIONS, INITIAL_QUIZ_SUBMISSIONS);
@@ -1583,6 +1820,19 @@ export class ClassroomDB {
     };
 
     this.setItem(STORAGE_KEYS.QUIZ_SUBMISSIONS, [newSub, ...submissions]);
+    try {
+      SupabaseService.upsertQuizSubmission({
+        id: newSub.id,
+        quizId: newSub.quizId,
+        studentId: newSub.studentId,
+        studentName: newSub.studentName,
+        score: newSub.score,
+        passed: newSub.passed,
+        answers: newSub.answers,
+      }).catch(() => {});
+    } catch {
+      // ignore
+    }
 
     if (passed) {
       this.recordPassedQuiz(currentUser.id, quiz.courseId, quiz.id);
@@ -1772,6 +2022,9 @@ export class ClassroomDB {
     isOpen: boolean,
     currentUser: User
   ): AttendanceSession {
+    if (currentUser.role !== 'admin' && currentUser.role !== 'co_admin') {
+      throw new Error('Unauthorized: Only Admin or Co-Admin can create attendance sessions.');
+    }
     const sessions = this.getItem<AttendanceSession[]>(
       STORAGE_KEYS.ATTENDANCE,
       INITIAL_ATTENDANCE_SESSIONS
@@ -1807,6 +2060,10 @@ export class ClassroomDB {
   }
 
   static toggleAttendanceSessionOpen(sessionId: string, isOpen: boolean): AttendanceSession | null {
+    const currentLogged = this.getCurrentUser();
+    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+      return null;
+    }
     const sessions = this.getItem<AttendanceSession[]>(
       STORAGE_KEYS.ATTENDANCE,
       INITIAL_ATTENDANCE_SESSIONS
@@ -1831,6 +2088,10 @@ export class ClassroomDB {
   }
 
   static deleteAttendanceSession(sessionId: string): boolean {
+    const currentLogged = this.getCurrentUser();
+    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+      return false;
+    }
     const sessions = this.getItem<AttendanceSession[]>(
       STORAGE_KEYS.ATTENDANCE,
       INITIAL_ATTENDANCE_SESSIONS
@@ -1852,6 +2113,14 @@ export class ClassroomDB {
     sessionId: string,
     student: User
   ): { success: boolean; error?: string } {
+    const rateCheck = this.checkRateLimit('attendance_checkin', student.id, 10, 60);
+    if (!rateCheck.allowed) {
+      return {
+        success: false,
+        error: `Check-in ကြိုးပမ်းမှု များပြားနေပါသည်။ ${rateCheck.retryAfterSeconds} စက္ကန့် စောင့်ဆိုင်းပါ။`,
+      };
+    }
+
     const sessions = this.getItem<AttendanceSession[]>(
       STORAGE_KEYS.ATTENDANCE,
       INITIAL_ATTENDANCE_SESSIONS
@@ -1862,6 +2131,12 @@ export class ClassroomDB {
     }
     if (!target.isOpen) {
       return { success: false, error: 'ဤအတန်းချိန်အတွက် Attendance ပိတ်ထားပါသည်။' };
+    }
+
+    // Verify student is enrolled in the course
+    const access = this.getCourseById(target.courseId, student);
+    if (!access.course) {
+      return { success: false, error: 'သင်သည် ဤအတန်းတွင် စာရင်းသွင်းထားခြင်း မရှိပါ။' };
     }
 
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -1903,6 +2178,10 @@ export class ClassroomDB {
     status: AttendanceStatus,
     note?: string
   ): boolean {
+    const currentLogged = this.getCurrentUser();
+    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+      return false;
+    }
     const sessions = this.getItem<AttendanceSession[]>(
       STORAGE_KEYS.ATTENDANCE,
       INITIAL_ATTENDANCE_SESSIONS
@@ -1947,6 +2226,10 @@ export class ClassroomDB {
     students: User[],
     status: AttendanceStatus
   ): boolean {
+    const currentLogged = this.getCurrentUser();
+    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+      return false;
+    }
     const sessions = this.getItem<AttendanceSession[]>(
       STORAGE_KEYS.ATTENDANCE,
       INITIAL_ATTENDANCE_SESSIONS
@@ -2064,7 +2347,11 @@ export class ClassroomDB {
     );
 
     const escapeCsv = (val: string | number | undefined) => {
-      const str = String(val ?? '');
+      let str = String(val ?? '');
+      // Prevent CSV Formula Injection in Excel / Google Sheets
+      if (/^[=+\-\t\r]/.test(str)) {
+        str = `'${str}`;
+      }
       if (str.includes(',') || str.includes('"') || str.includes('\n')) {
         return `"${str.replace(/"/g, '""')}"`;
       }
@@ -2158,7 +2445,11 @@ export class ClassroomDB {
     const students = allUsers.filter((u) => u.role === 'student');
 
     const escapeCsv = (val: string | number | undefined) => {
-      const str = String(val ?? '');
+      let str = String(val ?? '');
+      // Prevent CSV Formula Injection in Excel / Google Sheets
+      if (/^[=+\-\t\r]/.test(str)) {
+        str = `'${str}`;
+      }
       if (str.includes(',') || str.includes('"') || str.includes('\n')) {
         return `"${str.replace(/"/g, '""')}"`;
       }
