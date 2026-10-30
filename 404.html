@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#059669" />
+    <meta name="application-name" content="SwanArh Classroom" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="SwanArh Classroom" />
+    <link rel="manifest" href="./manifest.webmanifest" crossorigin="use-credentials" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="./pwa-192x192.png" />
+    <link rel="icon" type="image/svg+xml" href="./icon.svg" />
+    <script>
+      window.__pwaDeferredPrompt = null;
+      window.__swanarhMounted = false;
+
+      // Immediately clean up any ?wake= query parameter from the address bar
+      try {
+        if (window.location.search && window.location.search.indexOf('wake=') !== -1) {
+          var cleanUrl = new URL(window.location.href);
+          cleanUrl.searchParams.delete('wake');
+          window.history.replaceState({}, '', cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
+        }
+      } catch (e) {}
+
+      window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        window.__pwaDeferredPrompt = e;
+        window.dispatchEvent(new Event('pwa-prompt-ready'));
+      });
+      window.addEventListener('appinstalled', function () {
+        window.__pwaDeferredPrompt = null;
+        window.dispatchEvent(new Event('pwa-installed'));
+      });
+
+      // Immediately purge any stale Workbox or old version caches on startup
+      (function () {
+        try {
+          if ('caches' in window) {
+            caches.keys().then(function (keys) {
+              keys.forEach(function (key) {
+                if (key !== 'swanarh-classroom-v7') {
+                  caches.delete(key).catch(function () {});
+                }
+              });
+            }).catch(function () {});
+          }
+          if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function (registrations) {
+              registrations.forEach(function (reg) {
+                var scriptURL = (reg.active && reg.active.scriptURL) || (reg.installing && reg.installing.scriptURL) || (reg.waiting && reg.waiting.scriptURL) || '';
+                if (scriptURL.indexOf('dev-sw.js') !== -1 || scriptURL.indexOf('workbox') !== -1) {
+                  reg.unregister().catch(function () {});
+                } else {
+                  reg.update().catch(function () {});
+                }
+              });
+            }).catch(function () {});
+          }
+        } catch (e) {}
+      })();
+
+      // Manual recovery function: clears stale SW/caches and reloads cleanly
+      window.__swanarhForceRecover = function () {
+        try {
+          var promises = [];
+          if ('serviceWorker' in navigator) {
+            promises.push(
+              navigator.serviceWorker.getRegistrations().then(function (regs) {
+                return Promise.all(regs.map(function (r) { return r.unregister(); }));
+              }).catch(function () {})
+            );
+          }
+          if ('caches' in window) {
+            promises.push(
+              caches.keys().then(function (keys) {
+                return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+              }).catch(function () {})
+            );
+          }
+
+          Promise.all(promises).finally(function () {
+            var baseUrl = window.location.origin + window.location.pathname;
+            window.location.replace(baseUrl);
+          });
+        } catch (err) {
+          window.location.reload();
+        }
+      };
+
+      // Pre-compiled static bundle loader for GitHub Pages (when serving main branch directly)
+      window.__staticBundleLoaded = false;
+      window.__loadStaticBundle = function () {
+        if (window.__swanarhMounted || window.__staticBundleLoaded) return;
+        window.__staticBundleLoaded = true;
+        try {
+          var link = document.createElement('link');
+          link.rel = 'stylesheet';
+          link.href = './gh-pages/app.css';
+          document.head.appendChild(link);
+
+          var script = document.createElement('script');
+          script.type = 'module';
+          script.src = './gh-pages/app.js';
+          document.body.appendChild(script);
+        } catch (e) {}
+      };
+
+      // Show manual reload button only if app still hasn't mounted after 4 seconds
+      setTimeout(function () {
+        if (!window.__swanarhMounted) {
+          var rescueBox = document.getElementById('swanarh-rescue-box');
+          if (rescueBox) {
+            rescueBox.style.display = 'flex';
+          }
+        }
+      }, 4000);
+
+      // Register lightweight icon-only Service Worker after load
+      window.addEventListener('load', function () {
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker
+            .register('./sw.js', { scope: './', updateViaCache: 'none' })
+            .then(function (reg) {
+              reg.update().catch(function () {});
+            })
+            .catch(function () {});
+        }
+      });
+    </script>
+    <title>SwanArh Classroom - Dr. Si Thu Aung · Swanarh Academy</title>
+    <meta name="description" content="Secure online classroom platform with role-based access control, course isolation, anti-piracy watermarked video delivery, interactive classwork feeds, quizzes, and automated certificate generation." />
+    <meta property="og:title" content="SwanArh Classroom - Dr. Si Thu Aung · Swanarh Academy" />
+    <meta property="og:description" content="Secure online classroom platform with role-based access control, course isolation, anti-piracy watermarked video delivery, interactive classwork feeds, quizzes, and automated certificate generation." />
+    <meta property="og:image" content="./pwa-512x512.png" />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      media="print"
+      onload="this.media='all'"
+    />
+    <script type="module" crossorigin src="./assets/app.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/app.css">
+  </head>
+  <body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+    <div id="root">
+      <!-- Instant zero-dependency shell with inline vector Academy Crest and self-healing wake button -->
+      <div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #f8fafc; padding: 20px; text-align: center;">
+        <div style="width: 76px; height: 76px; border-radius: 999px; background: #ffffff; border: 2px solid #a7f3d0; box-shadow: 0 8px 20px -4px rgba(5, 150, 105, 0.18); display: flex; align-items: center; justify-content: center; margin-bottom: 12px; padding: 4px;">
+          <svg viewBox="0 0 400 400" style="width: 100%; height: 100%;" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="200" cy="200" r="190" fill="#FFFFFF" stroke="#0f172a" stroke-width="8" />
+            <circle cx="200" cy="200" r="130" fill="#FFFFFF" stroke="#059669" stroke-width="5" />
+            <path d="M 200,96 L 266,120 L 266,192 C 266,236 200,270 200,270 C 200,270 134,236 134,192 L 134,120 Z" fill="#FFFFFF" stroke="#148823" stroke-width="8" stroke-linejoin="round" />
+            <path d="M 196,104 L 142,124 L 142,186 L 196,186 Z" fill="#148823" />
+            <path d="M 204,104 L 258,124 L 258,186 L 204,186 Z" fill="#E31E24" />
+            <path d="M 142,194 L 196,194 L 196,258 C 176,246 142,222 142,194 Z" fill="#E31E24" />
+            <path d="M 204,194 L 258,194 C 258,222 224,246 204,258 Z" fill="#148823" />
+          </svg>
+        </div>
+        <div style="font-size: 18px; font-weight: 800; color: #0f172a; letter-spacing: -0.02em;">SwanArh Classroom</div>
+        <div style="font-size: 11px; font-weight: 700; color: #059669; letter-spacing: 0.06em; margin-top: 2px;">DR. SI THU AUNG · SWANARH ACADEMY</div>
+        <div id="swanarh-rescue-box" style="display: none; flex-direction: column; align-items: center; gap: 10px; margin-top: 20px; max-width: 280px;">
+          <div style="font-size: 12px; color: #475569; line-height: 1.5;">
+            ချိတ်ဆက်မှု အသစ်ပြန်လည်ရယူနေပါသည်...
+          </div>
+          <button
+            type="button"
+            onclick="window.__swanarhForceRecover && window.__swanarhForceRecover()"
+            style="background: #059669; color: #ffffff; border: none; border-radius: 12px; padding: 10px 18px; font-size: 12px; font-weight: 700; cursor: pointer; box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);"
+          >
+            ချက်ချင်း ပြန်ဖွင့်ရန် (Tap to Open Now)
+          </button>
+        </div>
+      </div>
+    </div>
+    <script>
+      (function () {
+        try {
+          var entry = document.getElementById('vite-entry');
+          var rawTsx = entry && entry.getAttribute('src') && entry.getAttribute('src').indexOf('.tsx') !== -1;
+          var host = window.location.hostname || '';
+          var isStaticPagesHost =
+            host.indexOf('github.io') !== -1 ||
+            host.indexOf('pages.dev') !== -1 ||
+            host.indexOf('netlify.app') !== -1 ||
+            host.indexOf('vercel.app') !== -1;
+          if (rawTsx && isStaticPagesHost) {
+            window.__loadStaticBundle();
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </body>
+</html>
+
