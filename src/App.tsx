@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Suspense, lazy } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { User, Course, CoursePost, Assignment, Quiz, StudentProgress, CertificateData, NotificationItem } from './types/classroom';
 import { ClassroomDB } from './services/storage';
 import { useBackHandler } from './utils/backNavigation';
@@ -6,6 +6,13 @@ import { LoginView } from './components/LoginView';
 import { Navbar } from './components/Navbar';
 import { CourseCard } from './components/CourseCard';
 import { LowBandwidthBar } from './components/LowBandwidthBar';
+import { CourseDetail } from './components/CourseDetail';
+import { CertificateModal } from './components/CertificateModal';
+import { SecurityArchitectureModal } from './components/SecurityArchitectureModal';
+import { SecurityControlsModal } from './components/SecurityControlsModal';
+import { CreateCourseModal } from './components/CreateCourseModal';
+import { AdminStudentDirectoryModal } from './components/AdminStudentDirectoryModal';
+import { SupabaseModal } from './components/SupabaseModal';
 import {
   BookOpen,
   Plus,
@@ -18,30 +25,6 @@ import {
   Search,
   Database,
 } from 'lucide-react';
-
-// Resilient lazy loader for secondary modals & course detail workspace:
-// If a chunk fails to fetch after the phone has been idle for 2-3 hours, automatically recover
-function lazyWithRetry<T extends React.ComponentType<any>>(
-  factory: () => Promise<{ default: T }>
-) {
-  return lazy(() =>
-    factory().catch((err) => {
-      console.warn('Dynamic chunk load failed after idle period, recovering:', err);
-      if (typeof window !== 'undefined' && (window as any).__swanarhForceRecover) {
-        (window as any).__swanarhForceRecover(false);
-      }
-      throw err;
-    })
-  );
-}
-
-const CourseDetail = lazyWithRetry(() => import('./components/CourseDetail').then((m) => ({ default: m.CourseDetail })));
-const CertificateModal = lazyWithRetry(() => import('./components/CertificateModal').then((m) => ({ default: m.CertificateModal })));
-const SecurityArchitectureModal = lazyWithRetry(() => import('./components/SecurityArchitectureModal').then((m) => ({ default: m.SecurityArchitectureModal })));
-const SecurityControlsModal = lazyWithRetry(() => import('./components/SecurityControlsModal').then((m) => ({ default: m.SecurityControlsModal })));
-const CreateCourseModal = lazyWithRetry(() => import('./components/CreateCourseModal').then((m) => ({ default: m.CreateCourseModal })));
-const AdminStudentDirectoryModal = lazyWithRetry(() => import('./components/AdminStudentDirectoryModal').then((m) => ({ default: m.AdminStudentDirectoryModal })));
-const SupabaseModal = lazyWithRetry(() => import('./components/SupabaseModal').then((m) => ({ default: m.SupabaseModal })));
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(() => ClassroomDB.getCurrentUser());

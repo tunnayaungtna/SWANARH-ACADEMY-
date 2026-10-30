@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
-    "build": "vite build",
+    "build": "vite build && mkdir -p gh-pages public/gh-pages docs/gh-pages && cp dist/assets/app.js gh-pages/app.js && cp dist/assets/app.css gh-pages/app.css && cp dist/assets/app.js public/gh-pages/app.js && cp dist/assets/app.css public/gh-pages/app.css && cp public/manifest.webmanifest public/sw.js public/pwa-192x192.png public/pwa-512x512.png public/pwa-maskable-512x512.png public/apple-touch-icon.png public/icon.svg ./ && cp index.html 404.html && touch .nojekyll && cp -r public/* docs/ && cp index.html docs/index.html && cp index.html docs/404.html && cp gh-pages/app.js docs/gh-pages/app.js && cp gh-pages/app.css docs/gh-pages/app.css && touch docs/.nojekyll",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"

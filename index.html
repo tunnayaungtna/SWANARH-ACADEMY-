@@ -94,7 +94,27 @@
         }
       };
 
-      // Catch module / chunk load failures that happen when reopening 2-3 hours later
+      // Pre-compiled static bundle loader for GitHub Pages (main branch / root or /docs)
+      // When GitHub Pages serves raw repository files without a Vite dev server, browsers cannot execute .tsx directly.
+      // This loader immediately boots the pre-compiled production bundle (./gh-pages/app.js & ./gh-pages/app.css).
+      window.__staticBundleLoaded = false;
+      window.__loadStaticBundle = function () {
+        if (window.__swanarhMounted || window.__staticBundleLoaded) return;
+        window.__staticBundleLoaded = true;
+        try {
+          var link = document.createElement('link');
+          link.rel = 'stylesheet';
+          link.href = './gh-pages/app.css';
+          document.head.appendChild(link);
+
+          var script = document.createElement('script');
+          script.type = 'module';
+          script.src = './gh-pages/app.js';
+          document.body.appendChild(script);
+        } catch (e) {}
+      };
+
+      // Catch module / chunk load failures that happen when reopening 2-3 hours later or on raw static hosts
       window.addEventListener('error', function (e) {
         var msg = (e && e.message) ? String(e.message) : '';
         var isChunkOrScriptError =
@@ -103,7 +123,11 @@
           msg.indexOf('ChunkLoadError') !== -1 ||
           (e && e.target && e.target.tagName === 'SCRIPT');
         if (isChunkOrScriptError && !window.__swanarhMounted) {
-          window.__swanarhForceRecover(false);
+          if (!window.__staticBundleLoaded) {
+            window.__loadStaticBundle();
+          } else {
+            window.__swanarhForceRecover(false);
+          }
         }
       }, true);
 
@@ -114,13 +138,24 @@
           reason.indexOf('Importing a module script failed') !== -1 ||
           reason.indexOf('ChunkLoadError') !== -1
         ) {
-          window.__swanarhForceRecover(false);
+          if (!window.__staticBundleLoaded && !window.__swanarhMounted) {
+            window.__loadStaticBundle();
+          } else {
+            window.__swanarhForceRecover(false);
+          }
         }
       });
 
       // Startup Watchdog:
-      // 1) At 1.8s, if React hasn't mounted yet, reveal the manual "Tap to Open Now" button so user is never stuck.
-      // 2) At 3.2s, if React still hasn't mounted, automatically clear stale SW/caches and wake up the session.
+      // 1) At 600ms, if React hasn't mounted yet (e.g. static host serving raw index.html), load pre-built ./gh-pages/app.js in-place.
+      // 2) At 2.2s, if React still hasn't mounted, reveal the manual "Tap to Open Now" button so user is never stuck.
+      // 3) At 4.5s, if React still hasn't mounted, automatically clear stale SW/caches and wake up the session.
+      setTimeout(function () {
+        if (!window.__swanarhMounted && !window.__staticBundleLoaded) {
+          window.__loadStaticBundle();
+        }
+      }, 600);
+
       setTimeout(function () {
         if (!window.__swanarhMounted) {
           var rescueBox = document.getElementById('swanarh-rescue-box');
@@ -128,13 +163,13 @@
             rescueBox.style.display = 'flex';
           }
         }
-      }, 1800);
+      }, 2200);
 
       setTimeout(function () {
         if (!window.__swanarhMounted) {
           window.__swanarhForceRecover(false);
         }
-      }, 3200);
+      }, 4500);
 
       // Register lightweight icon-only Service Worker after load
       window.addEventListener('load', function () {
@@ -195,7 +230,29 @@
         </div>
       </div>
     </div>
-    <script type="module" src="./src/main.tsx"></script>
+    <script id="vite-entry" type="module" src="./src/main.tsx" onerror="window.__loadStaticBundle && window.__loadStaticBundle()"></script>
+    <script>
+      // If hosted on GitHub Pages (github.io) or another static host serving raw index.html where #vite-entry still points to .tsx,
+      // immediately load the pre-compiled production bundle at 0ms without waiting for .tsx to fail!
+      (function () {
+        try {
+          var entry = document.getElementById('vite-entry');
+          var rawTsx = entry && entry.getAttribute('src') && entry.getAttribute('src').indexOf('.tsx') !== -1;
+          var host = window.location.hostname || '';
+          var isStaticPagesHost =
+            host.indexOf('github.io') !== -1 ||
+            host.indexOf('pages.dev') !== -1 ||
+            host.indexOf('netlify.app') !== -1 ||
+            host.indexOf('vercel.app') !== -1;
+          if (rawTsx && isStaticPagesHost) {
+            if (entry && entry.parentNode) {
+              entry.parentNode.removeChild(entry);
+            }
+            window.__loadStaticBundle();
+          }
+        } catch (e) {}
+      })();
+    </script>
   </body>
 </html>
 

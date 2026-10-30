@@ -23,19 +23,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm install --legacy-peer-deps
-
-      - name: Build production bundle
+      - name: Assemble production static site
         run: |
-          npm run build
-          cp dist/index.html dist/404.html
+          mkdir -p dist/gh-pages dist/assets
+          cp -r public/* dist/ 2>/dev/null || true
+          cp -r gh-pages/* dist/gh-pages/ 2>/dev/null || true
+          cp gh-pages/app.js dist/assets/app.js 2>/dev/null || true
+          cp gh-pages/app.css dist/assets/app.css 2>/dev/null || true
+          cp index.html dist/index.html
+          cp index.html dist/404.html
           touch dist/.nojekyll
 
       - name: Setup Pages
@@ -56,3 +52,4 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
