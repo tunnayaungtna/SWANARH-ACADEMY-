@@ -13,6 +13,7 @@ import { SecurityControlsModal } from './components/SecurityControlsModal';
 import { CreateCourseModal } from './components/CreateCourseModal';
 import { AdminStudentDirectoryModal } from './components/AdminStudentDirectoryModal';
 import { SupabaseModal } from './components/SupabaseModal';
+import { AcademyRulesModal } from './components/AcademyRulesModal';
 import {
   BookOpen,
   Plus,
@@ -24,6 +25,8 @@ import {
   LogOut,
   Search,
   Database,
+  ScrollText,
+  CheckCircle2,
 } from 'lucide-react';
 
 export default function App() {
@@ -62,6 +65,7 @@ export default function App() {
   const [showStudentDirectoryModal, setShowStudentDirectoryModal] = useState(false);
   const [showSupabaseModal, setShowSupabaseModal] = useState(false);
   const [showResetConfirmModal, setShowResetConfirmModal] = useState(false);
+  const [showRulesModal, setShowRulesModal] = useState(false);
   const [appBannerError, setAppBannerError] = useState<string | null>(null);
 
   // Mobile Back Key step-by-step navigation handlers (outer to inner)
@@ -73,6 +77,7 @@ export default function App() {
   useBackHandler(showStudentDirectoryModal, () => setShowStudentDirectoryModal(false));
   useBackHandler(showSupabaseModal, () => setShowSupabaseModal(false));
   useBackHandler(showResetConfirmModal, () => setShowResetConfirmModal(false));
+  useBackHandler(showRulesModal, () => setShowRulesModal(false));
 
   // Performance & Security Settings
   const [isLowBandwidth, setIsLowBandwidth] = useState(false);
@@ -289,6 +294,7 @@ export default function App() {
           onOpenArchitecture={() => setShowArchitectureModal(true)}
           onOpenSecurity={() => setShowSecurityModal(true)}
           onOpenStudentDirectory={() => setShowStudentDirectoryModal(true)}
+          onOpenRules={() => setShowRulesModal(true)}
           onResetData={handleResetData}
           onNavigateHome={() => setSelectedCourse(null)}
           notifications={notifications}
@@ -343,8 +349,18 @@ export default function App() {
             {/* Context & Role Banner - Mobile & Desktop Responsive */}
             <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs p-4 sm:p-6 md:p-8 flex flex-col md:flex-row md:items-center justify-between gap-5 sm:gap-6">
               <div className="space-y-1.5 sm:space-y-2">
-                <div className="flex items-center gap-2 text-xs font-mono text-slate-500 dark:text-slate-400">
-                  <span>Logged in as: {currentUser.name}</span>
+                <div className="flex flex-wrap items-center gap-2 text-xs font-mono text-slate-500 dark:text-slate-400">
+                  <span>Logged in as: <strong className="text-slate-800 dark:text-slate-200">{currentUser.name}</strong></span>
+                  {currentUser.role === 'student' && currentUser.rulesAccepted && (
+                    <span
+                      onClick={() => setShowRulesModal(true)}
+                      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 font-sans font-bold text-[11px] cursor-pointer hover:bg-emerald-200/70 transition-colors"
+                      title="သင်တန်းစည်းကမ်းချက်များကို သိရှိလိုက်နာပါမည်ဟု အတည်ပြုပြီး"
+                    >
+                      <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                      <span>သိရှိ လိုက်နာပါမည်</span>
+                    </span>
+                  )}
                   <span>·</span>
                   <span className="capitalize font-semibold text-indigo-600 dark:text-indigo-400">
                     Role: {currentUser.role === 'admin' ? 'Faculty / Admin (ဆရာ)' : currentUser.role === 'co_admin' ? 'Co-Admin (တွဲဖက် အက်ဒမင်)' : 'Student (ကျောင်းသား)'}
@@ -368,6 +384,14 @@ export default function App() {
 
               {/* Action Buttons - Fully responsive wrapping */}
               <div className="flex flex-wrap items-center gap-2 sm:gap-3 shrink-0">
+                <button
+                  onClick={() => setShowRulesModal(true)}
+                  className="flex items-center justify-center gap-1.5 px-3 sm:px-3.5 py-2 sm:py-2.5 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 text-xs font-semibold rounded-xl shadow-2xs transition-colors cursor-pointer"
+                >
+                  <ScrollText className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  <span>စည်းကမ်းချက်များ</span>
+                </button>
+
                 {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
                   <>
                     <button
@@ -540,6 +564,26 @@ export default function App() {
           <SupabaseModal
             isOpen={showSupabaseModal}
             onClose={() => setShowSupabaseModal(false)}
+          />
+        )}
+
+        {/* Academy Rules & Regulations Modal (Mandatory on Student First Login, or Viewable Anytime) */}
+        {(showRulesModal || (currentUser.role === 'student' && !currentUser.rulesAccepted)) && (
+          <AcademyRulesModal
+            isOpen={true}
+            currentUser={currentUser}
+            allUsers={allUsers}
+            isMandatory={currentUser.role === 'student' && !currentUser.rulesAccepted}
+            onAcceptRules={() => {
+              const updated = ClassroomDB.acceptAcademyRules(currentUser.id);
+              if (updated) {
+                setCurrentUser(updated);
+              }
+              setShowRulesModal(false);
+              refreshData();
+            }}
+            onClose={() => setShowRulesModal(false)}
+            onLogout={handleLogout}
           />
         )}
       </Suspense>

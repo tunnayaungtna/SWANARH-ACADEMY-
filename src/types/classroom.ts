@@ -12,6 +12,8 @@ export interface User {
   title?: string; // e.g. "Lead Instructor"
   gender?: 'male' | 'female' | 'other' | 'Male' | 'Female' | 'Other';
   address?: string;
+  rulesAccepted?: boolean;
+  rulesAcceptedAt?: string;
   createdAt?: string;
 }
 

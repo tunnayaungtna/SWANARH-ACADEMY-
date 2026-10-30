@@ -266,7 +266,15 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
                           className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-slate-700"
                         />
                         <div>
-                          <div className="font-semibold text-slate-900 dark:text-slate-100">{student.name}</div>
+                          <div className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5 flex-wrap">
+                            <span>{student.name}</span>
+                            {student.rulesAccepted && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700">
+                                <Check className="w-2.5 h-2.5 text-emerald-600 dark:text-emerald-400 stroke-[3]" />
+                                <span>သိရှိ လိုက်နာပါမည်</span>
+                              </span>
+                            )}
+                          </div>
                           <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
                             @{student.username} · {student.email}
                           </div>

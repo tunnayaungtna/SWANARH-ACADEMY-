@@ -1452,6 +1452,9 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                         {post.comments.map((comm) => {
                           const canDeleteComment =
                             isInstructor || comm.authorId === currentUser.id;
+                          const commentUser = ClassroomDB.getAllUsers().find(
+                            (u) => u.id === comm.authorId
+                          );
                           return (
                             <div key={comm.id} className="flex items-start gap-2.5 text-xs">
                               <img
@@ -1462,14 +1465,21 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                               />
                               <div className="flex-1 bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800 shadow-2xs">
                                 <div className="flex items-center justify-between gap-2">
-                                  <div className="flex items-center gap-1.5">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
                                     <span className="font-semibold text-slate-900 dark:text-slate-100">
                                       {comm.authorName}
                                     </span>
-                                    {(comm.authorRole === 'admin' || comm.authorRole === 'co_admin') && (
+                                    {(comm.authorRole === 'admin' || comm.authorRole === 'co_admin') ? (
                                       <span className="text-[9px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1 rounded">
                                         Instructor
                                       </span>
+                                    ) : (
+                                      commentUser?.rulesAccepted && (
+                                        <span className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700">
+                                          <CheckCircle className="w-2.5 h-2.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                                          <span>သိရှိ လိုက်နာပါမည်</span>
+                                        </span>
+                                      )
                                     )}
                                   </div>
                                   <div className="flex items-center gap-2">

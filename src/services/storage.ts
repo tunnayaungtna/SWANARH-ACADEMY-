@@ -498,6 +498,38 @@ export class ClassroomDB {
     return { success: true, user: users[userIndex] };
   }
 
+  static acceptAcademyRules(userId: string): User | null {
+    const users = this.getAllUsers();
+    const userIndex = users.findIndex((u) => u.id === userId);
+    if (userIndex === -1) return null;
+
+    const acceptedStamp = new Date().toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+
+    users[userIndex] = {
+      ...users[userIndex],
+      rulesAccepted: true,
+      rulesAcceptedAt: acceptedStamp,
+    };
+    this.setItem(STORAGE_KEYS.USERS, users);
+
+    const currentLogged = this.getCurrentUser();
+    if (currentLogged && currentLogged.id === userId) {
+      this.setCurrentUser(users[userIndex]);
+    }
+
+    try {
+      SupabaseService.upsertProfile(users[userIndex]).catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    return users[userIndex];
+  }
+
   static changePassword(
     userId: string,
     oldPassword: string,
@@ -979,6 +1011,8 @@ export class ClassroomDB {
             userMap.set(ru.id, {
               ...existing,
               ...ru,
+              rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
+              rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
               avatar:
                 existing?.avatar && existing.avatar.startsWith('data:image/') && !ru.avatar?.startsWith('data:image/')
                   ? existing.avatar
@@ -1031,6 +1065,8 @@ export class ClassroomDB {
             userMap.set(ru.id, {
               ...existing,
               ...ru,
+              rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
+              rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
               avatar:
                 existing?.avatar && existing.avatar.startsWith('data:image/') && !ru.avatar?.startsWith('data:image/')
                   ? existing.avatar

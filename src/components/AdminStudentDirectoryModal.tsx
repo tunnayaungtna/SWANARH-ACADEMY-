@@ -1089,6 +1089,27 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                               {user.role === 'admin' ? '🛡️ Admin' : user.role === 'co_admin' ? '👥 Co-Admin' : '🎓 Student'}
                             </span>
 
+                            {/* Academy Rules Accepted Badge for Students */}
+                            {user.role === 'student' && (
+                              user.rulesAccepted ? (
+                                <span
+                                  className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700"
+                                  title={
+                                    user.rulesAcceptedAt
+                                      ? `သင်တန်းစည်းကမ်းချက် သိရှိလိုက်နာပါမည် အတည်ပြုပြီး (${user.rulesAcceptedAt})`
+                                      : 'သင်တန်းစည်းကမ်းချက် သိရှိလိုက်နာပါမည် အတည်ပြုပြီး'
+                                  }
+                                >
+                                  <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400 stroke-[3]" />
+                                  <span>သိရှိ လိုက်နာပါမည်</span>
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/70 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                                  <span>⏳ စည်းကမ်းချက် လက်ခံရန်ကျန်</span>
+                                </span>
+                              )
+                            )}
+
                             {/* Gender Badge */}
                             {normalizedGender && (
                               <span

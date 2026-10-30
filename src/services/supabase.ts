@@ -51,14 +51,18 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   gender TEXT DEFAULT 'male',
   address TEXT,
   password TEXT DEFAULT 'student123',
+  rules_accepted BOOLEAN DEFAULT FALSE,
+  rules_accepted_at TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Ensure gender, address & password columns exist if table was created earlier
+-- Ensure gender, address, password & rules_accepted columns exist if table was created earlier
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS gender TEXT DEFAULT 'male';
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS address TEXT;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS password TEXT DEFAULT 'student123';
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS rules_accepted BOOLEAN DEFAULT FALSE;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS rules_accepted_at TEXT;
 
 -- Enable Row Level Security (RLS)
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
@@ -315,6 +319,38 @@ function compactBannerForCloud(banner?: string): string {
   return banner;
 }
 
+const RULES_MARKER_PREFIX = '||RULES_OK:';
+
+function encodeTitleWithRules(user: User): string | null {
+  const baseTitle = (user.title || '').split(RULES_MARKER_PREFIX)[0].trim();
+  if (user.rulesAccepted) {
+    const stamp = user.rulesAcceptedAt || new Date().toISOString();
+    return `${baseTitle}${RULES_MARKER_PREFIX}${stamp}`;
+  }
+  return baseTitle || null;
+}
+
+function decodeTitleAndRules(
+  rawTitle?: string | null,
+  rowRulesAccepted?: boolean | null,
+  rowRulesAcceptedAt?: string | null
+): { title?: string; rulesAccepted?: boolean; rulesAcceptedAt?: string } {
+  const str = rawTitle || '';
+  if (str.includes(RULES_MARKER_PREFIX)) {
+    const [cleanTitle, acceptedStamp] = str.split(RULES_MARKER_PREFIX);
+    return {
+      title: cleanTitle.trim() || undefined,
+      rulesAccepted: true,
+      rulesAcceptedAt: rowRulesAcceptedAt || acceptedStamp?.trim() || undefined,
+    };
+  }
+  return {
+    title: str.trim() || undefined,
+    rulesAccepted: rowRulesAccepted ? true : undefined,
+    rulesAcceptedAt: rowRulesAcceptedAt || undefined,
+  };
+}
+
 export class SupabaseService {
   // Caches detected profile schema columns so we never repeat fallback roundtrips
   private static profileSchemaMode: 'full' | 'no_password' | 'core' = 'full';
@@ -362,19 +398,28 @@ export class SupabaseService {
         return null;
       }
 
-      return data.map((row) => ({
-        id: row.id,
-        name: row.name,
-        username: row.username,
-        email: row.email,
-        password: row.password || undefined,
-        role: row.role as UserRole,
-        phone: row.phone || '',
-        avatar: row.avatar || '',
-        title: row.title || undefined,
-        gender: row.gender || undefined,
-        address: row.address || undefined,
-      }));
+      return data.map((row) => {
+        const decoded = decodeTitleAndRules(
+          row.title,
+          row.rules_accepted,
+          row.rules_accepted_at
+        );
+        return {
+          id: row.id,
+          name: row.name,
+          username: row.username,
+          email: row.email,
+          password: row.password || undefined,
+          role: row.role as UserRole,
+          phone: row.phone || '',
+          avatar: row.avatar || '',
+          title: decoded.title,
+          gender: row.gender || undefined,
+          address: row.address || undefined,
+          rulesAccepted: decoded.rulesAccepted,
+          rulesAcceptedAt: decoded.rulesAcceptedAt,
+        };
+      });
     } catch {
       return null;
     }
@@ -582,6 +627,7 @@ export class SupabaseService {
   ): Record<string, unknown> {
     const safeAvatar = compactAvatarForCloud(user.avatar);
     const nowIso = new Date().toISOString();
+    const encodedTitle = encodeTitleWithRules(user);
 
     if (mode === 'core') {
       return {
@@ -592,7 +638,7 @@ export class SupabaseService {
         role: user.role,
         phone: user.phone || '+95 9 000 000000',
         avatar: safeAvatar,
-        title: user.title || null,
+        title: encodedTitle,
         updated_at: nowIso,
       };
     }
@@ -606,7 +652,7 @@ export class SupabaseService {
         role: user.role,
         phone: user.phone || '+95 9 000 000000',
         avatar: safeAvatar,
-        title: user.title || null,
+        title: encodedTitle,
         gender: user.gender || 'male',
         address: user.address || null,
         updated_at: nowIso,
@@ -624,7 +670,7 @@ export class SupabaseService {
       role: user.role,
       phone: user.phone || '+95 9 000 000000',
       avatar: safeAvatar,
-      title: user.title || null,
+      title: encodedTitle,
       gender: user.gender || 'male',
       address: user.address || null,
       updated_at: nowIso,
@@ -1176,6 +1222,11 @@ export class SupabaseService {
           .maybeSingle();
 
         if (profile) {
+          const decoded = decodeTitleAndRules(
+            profile.title,
+            profile.rules_accepted,
+            profile.rules_accepted_at
+          );
           return {
             user: {
               id: profile.id,
@@ -1185,9 +1236,11 @@ export class SupabaseService {
               role: profile.role as UserRole,
               phone: profile.phone || '',
               avatar: profile.avatar || '',
-              title: profile.title || undefined,
+              title: decoded.title,
               gender: profile.gender || undefined,
               address: profile.address || undefined,
+              rulesAccepted: decoded.rulesAccepted,
+              rulesAcceptedAt: decoded.rulesAcceptedAt,
             },
           };
         }

@@ -25,6 +25,8 @@ import {
   Sun,
   Moon,
   Camera,
+  ScrollText,
+  CheckCircle2,
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -35,6 +37,7 @@ interface NavbarProps {
   onOpenArchitecture: () => void;
   onOpenSecurity: () => void;
   onOpenStudentDirectory?: () => void;
+  onOpenRules?: () => void;
   onResetData: () => void;
   onNavigateHome: () => void;
   notifications: NotificationItem[];
@@ -52,6 +55,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenArchitecture,
   onOpenSecurity,
   onOpenStudentDirectory,
+  onOpenRules,
   onResetData: _onResetData,
   onNavigateHome,
   notifications,
@@ -150,6 +154,15 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             My Classes
           </button>
+          {onOpenRules && (
+            <button
+              onClick={onOpenRules}
+              className="text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1"
+            >
+              <ScrollText className="w-3.5 h-3.5" />
+              <span>စည်းကမ်းချက်များ</span>
+            </button>
+          )}
           {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
             <>
               {onOpenStudentDirectory && (
@@ -271,13 +284,20 @@ export const Navbar: React.FC<NavbarProps> = ({
                 referrerPolicy="no-referrer"
                 className="w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover shrink-0 ring-1 ring-slate-200 dark:ring-slate-700"
               />
-              <div className="hidden sm:block text-left pr-1 max-w-[100px] md:max-w-[120px]">
-                <div className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
-                  {currentUser.name}
+              <div className="hidden sm:block text-left pr-1 max-w-[150px] md:max-w-[190px]">
+                <div className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate flex items-center gap-1">
+                  <span className="truncate">{currentUser.name}</span>
                 </div>
-                <div className="text-[10px] text-slate-500 dark:text-slate-400 capitalize">
-                  {currentUser.role}
-                </div>
+                {currentUser.role === 'student' && currentUser.rulesAccepted ? (
+                  <div className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-0.5 truncate">
+                    <CheckCircle2 className="w-2.5 h-2.5 shrink-0" />
+                    <span>သိရှိ လိုက်နာပါမည်</span>
+                  </div>
+                ) : (
+                  <div className="text-[10px] text-slate-500 dark:text-slate-400 capitalize">
+                    {currentUser.role}
+                  </div>
+                )}
               </div>
               <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
             </button>
@@ -292,21 +312,39 @@ export const Navbar: React.FC<NavbarProps> = ({
                     referrerPolicy="no-referrer"
                     className="w-9 h-9 rounded-full object-cover shrink-0 ring-1 ring-slate-200 dark:ring-slate-700"
                   />
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <div className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
                       {currentUser.name}
                     </div>
                     <div className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400 truncate">
                       @{currentUser.username}
                     </div>
-                    <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                    {currentUser.role === 'student' && currentUser.rulesAccepted && (
+                      <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-[10px] font-bold">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                        <span>သိရှိ လိုက်နာပါမည်</span>
+                      </div>
+                    )}
+                    <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
                       {currentUser.email}
                     </div>
                   </div>
                 </div>
 
-                {/* Account Actions: Profile Picture (Admin & Co-Admin only) & Password */}
+                {/* Account Actions: Rules, Profile Picture (Admin & Co-Admin only) & Password */}
                 <div className="pt-1.5 border-t border-slate-100 dark:border-slate-800 space-y-0.5">
+                  {onOpenRules && (
+                    <button
+                      onClick={() => {
+                        setShowUserDropdown(false);
+                        onOpenRules();
+                      }}
+                      className="w-full flex items-center gap-2 p-2 rounded-lg text-xs text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors cursor-pointer font-semibold"
+                    >
+                      <ScrollText className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>သင်တန်းစည်းကမ်းချက်များ (Academy Rules)</span>
+                    </button>
+                  )}
                   {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
                     <button
                       onClick={() => {
@@ -371,7 +409,15 @@ export const Navbar: React.FC<NavbarProps> = ({
                 className="w-8 h-8 rounded-full object-cover"
               />
               <div>
-                <div className="text-xs font-bold text-slate-900 dark:text-slate-100">{currentUser.name}</div>
+                <div className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5 flex-wrap">
+                  <span>{currentUser.name}</span>
+                  {currentUser.role === 'student' && currentUser.rulesAccepted && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-[10px] font-bold">
+                      <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                      <span>သိရှိ လိုက်နာပါမည်</span>
+                    </span>
+                  )}
+                </div>
                 <div className="text-[10px] text-slate-500 dark:text-slate-400 capitalize">
                   {currentUser.role === 'admin'
                     ? 'Faculty / Admin (ဆရာ)'
@@ -424,6 +470,19 @@ export const Navbar: React.FC<NavbarProps> = ({
               <BookOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
               <span>My Classes (သင်ခန်းစာ အတန်းများ)</span>
             </button>
+
+            {onOpenRules && (
+              <button
+                onClick={() => {
+                  onOpenRules();
+                  setIsMobileMenuOpen(false);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-emerald-700 dark:text-emerald-300 bg-emerald-50/70 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-left font-semibold cursor-pointer"
+              >
+                <ScrollText className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span>သင်တန်းစည်းကမ်းချက်များ (Academy Rules)</span>
+              </button>
+            )}
 
             {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && onOpenStudentDirectory && (
               <button

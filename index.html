@@ -42,7 +42,7 @@
           if ('caches' in window) {
             caches.keys().then(function (keys) {
               keys.forEach(function (key) {
-                if (key !== 'swanarh-classroom-v8') {
+                if (key !== 'swanarh-classroom-v9') {
                   caches.delete(key).catch(function () {});
                 }
               });
@@ -97,7 +97,7 @@
         if (window.__swanarhMounted || window.__staticBundleLoaded) return;
         window.__staticBundleLoaded = true;
         try {
-          var bust = 'v8_' + Math.floor(Date.now() / 60000);
+          var bust = 'v9_' + Math.floor(Date.now() / 60000);
           var link = document.createElement('link');
           link.rel = 'stylesheet';
           link.href = './gh-pages/app.css?v=' + bust;

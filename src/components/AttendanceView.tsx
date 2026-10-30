@@ -200,11 +200,17 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
           <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-xs">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div className="space-y-1">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <CalendarCheck className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
                   <h2 className="text-base font-bold text-slate-900 dark:text-white">
                     My Class Attendance (ကျွန်ုပ်၏ အတန်းတက်ရောက်မှု မှတ်တမ်း)
                   </h2>
+                  {currentUser.rulesAccepted && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-[11px] font-bold">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                      <span>သိရှိ လိုက်နာပါမည်</span>
+                    </span>
+                  )}
                 </div>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
                   သင်တန်းဆင်းလက်မှတ် (Official Certificate) ရရှိရန် အတန်းတက်ရောက်မှု အနည်းဆုံး{' '}
@@ -594,13 +600,19 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                           className="w-9 h-9 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
                         />
                         <div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
                               {stu.name}
                             </span>
                             <span className="text-[11px] font-mono text-slate-400">
                               @{stu.username}
                             </span>
+                            {stu.rulesAccepted && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-[10px] font-bold">
+                                <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                                <span>သိရှိ လိုက်နာပါမည်</span>
+                              </span>
+                            )}
                           </div>
                           <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
                             {rec?.checkedInAt ? (
@@ -754,8 +766,14 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                               className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-slate-700"
                             />
                             <div>
-                              <div className="font-bold text-slate-900 dark:text-white">
-                                {stu.name}
+                              <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5 flex-wrap">
+                                <span>{stu.name}</span>
+                                {stu.rulesAccepted && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-[10px] font-bold">
+                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                                    <span>သိရှိ လိုက်နာပါမည်</span>
+                                  </span>
+                                )}
                               </div>
                               <div className="text-[11px] text-slate-400 font-mono">
                                 @{stu.username}
