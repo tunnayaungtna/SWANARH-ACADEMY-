@@ -23,3 +23,221 @@
     color: #f1f5f9;
   }
 }
+
+/* ==========================================================================
+   PREMIUM NEUMORPHISM UI SYSTEM (Light & Dark Tactile Surfaces)
+   ========================================================================== */
+
+.neu-canvas {
+  background-color: #e6ecf5;
+  background-image: radial-gradient(circle at 18% 15%, rgba(255, 255, 255, 0.7) 0%, transparent 55%),
+    radial-gradient(circle at 85% 85%, rgba(197, 206, 219, 0.45) 0%, transparent 55%);
+}
+
+html.dark .neu-canvas {
+  background-color: #151b26;
+  background-image: radial-gradient(circle at 18% 15%, rgba(36, 47, 66, 0.45) 0%, transparent 55%),
+    radial-gradient(circle at 85% 85%, rgba(9, 12, 18, 0.65) 0%, transparent 55%);
+}
+
+.neu-card {
+  background: #e6ecf5;
+  box-shadow: 14px 14px 28px #c3cddb, -14px -14px 28px #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.75);
+}
+
+html.dark .neu-card {
+  background: #151b26;
+  box-shadow: 12px 12px 26px #0b0e14, -10px -10px 24px #1f2838;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.neu-raised {
+  background: #e6ecf5;
+  box-shadow: 7px 7px 14px #c3cddb, -7px -7px 14px #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+}
+
+html.dark .neu-raised {
+  background: #151b26;
+  box-shadow: 6px 6px 13px #0b0e14, -5px -5px 12px #1f2838;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.neu-raised-sm {
+  background: #e6ecf5;
+  box-shadow: 4px 4px 9px #c3cddb, -4px -4px 9px #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.65);
+}
+
+html.dark .neu-raised-sm {
+  background: #151b26;
+  box-shadow: 4px 4px 9px #0a0d13, -4px -4px 9px #1f2838;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.neu-inset {
+  background: #e6ecf5;
+  box-shadow: inset 5px 5px 10px #c3cddb, inset -5px -5px 10px #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+}
+
+html.dark .neu-inset {
+  background: #121721;
+  box-shadow: inset 5px 5px 10px #090c12, inset -4px -4px 9px #1d2534;
+  border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.neu-inset-sm {
+  background: #e6ecf5;
+  box-shadow: inset 3px 3px 6px #c3cddb, inset -3px -3px 6px #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+html.dark .neu-inset-sm {
+  background: #121721;
+  box-shadow: inset 3px 3px 6px #090c12, inset -3px -3px 6px #1d2534;
+  border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.neu-input {
+  background: #e6ecf5;
+  box-shadow: inset 5px 5px 10px #c3cddb, inset -5px -5px 10px #ffffff;
+  border: 1.5px solid rgba(255, 255, 255, 0.55);
+  transition: all 0.2s ease;
+}
+
+.neu-input:focus {
+  outline: none;
+  border-color: rgba(16, 185, 129, 0.55);
+  box-shadow: inset 6px 6px 12px #bec9d8, inset -6px -6px 12px #ffffff, 0 0 0 3px rgba(16, 185, 129, 0.12);
+}
+
+html.dark .neu-input {
+  background: #111620;
+  box-shadow: inset 5px 5px 10px #090c12, inset -4px -4px 9px #1c2433;
+  border: 1.5px solid rgba(255, 255, 255, 0.04);
+}
+
+html.dark .neu-input:focus {
+  outline: none;
+  border-color: rgba(16, 185, 129, 0.55);
+  box-shadow: inset 6px 6px 12px #080b10, inset -4px -4px 9px #1c2433, 0 0 0 3px rgba(16, 185, 129, 0.16);
+}
+
+.neu-btn {
+  background: #e6ecf5;
+  box-shadow: 5px 5px 11px #c3cddb, -5px -5px 11px #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  transition: all 0.18s ease;
+}
+
+.neu-btn:hover {
+  box-shadow: 7px 7px 14px #bcc7d6, -7px -7px 14px #ffffff;
+  transform: translateY(-1px);
+}
+
+.neu-btn:active {
+  box-shadow: inset 4px 4px 8px #c3cddb, inset -4px -4px 8px #ffffff;
+  transform: translateY(0);
+}
+
+html.dark .neu-btn {
+  background: #151b26;
+  box-shadow: 5px 5px 11px #0a0d13, -4px -4px 10px #1f2838;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+html.dark .neu-btn:hover {
+  box-shadow: 6px 6px 14px #080b10, -5px -5px 12px #232d40;
+  transform: translateY(-1px);
+}
+
+html.dark .neu-btn:active {
+  box-shadow: inset 4px 4px 8px #090c12, inset -3px -3px 7px #1d2534;
+  transform: translateY(0);
+}
+
+.neu-btn-emerald {
+  background: linear-gradient(145deg, #10b981, #059669);
+  box-shadow: 6px 6px 14px #bac5d4, -6px -6px 14px #ffffff, inset 1px 1px 1px rgba(255, 255, 255, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  transition: all 0.2s ease;
+}
+
+.neu-btn-emerald:hover:not(:disabled) {
+  background: linear-gradient(145deg, #0ea5e9, #059669);
+  background: linear-gradient(145deg, #12c48b, #047857);
+  box-shadow: 8px 8px 18px #b2bece, -8px -8px 18px #ffffff, inset 1px 1px 2px rgba(255, 255, 255, 0.45);
+  transform: translateY(-1px);
+}
+
+.neu-btn-emerald:active:not(:disabled) {
+  box-shadow: inset 4px 4px 8px rgba(4, 90, 64, 0.65), inset -3px -3px 6px rgba(52, 211, 153, 0.25);
+  transform: translateY(0);
+}
+
+html.dark .neu-btn-emerald {
+  background: linear-gradient(145deg, #10b981, #059669);
+  box-shadow: 6px 6px 14px #090c12, -5px -5px 12px #1f2838, inset 1px 1px 1px rgba(255, 255, 255, 0.25);
+  border: 1px solid rgba(52, 211, 153, 0.25);
+}
+
+html.dark .neu-btn-emerald:hover:not(:disabled) {
+  box-shadow: 8px 8px 18px #070a0f, -6px -6px 14px #242f42, inset 1px 1px 2px rgba(255, 255, 255, 0.35);
+  transform: translateY(-1px);
+}
+
+.neu-card-interactive {
+  background: #e6ecf5;
+  box-shadow: 10px 10px 22px #c3cddb, -10px -10px 22px #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.78);
+  transition: all 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.neu-card-interactive:hover {
+  box-shadow: 14px 14px 28px #b9c5d5, -14px -14px 28px #ffffff;
+  transform: translateY(-3px);
+}
+
+html.dark .neu-card-interactive {
+  background: #151b26;
+  box-shadow: 9px 9px 20px #0a0d13, -8px -8px 18px #1f2838;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+html.dark .neu-card-interactive:hover {
+  box-shadow: 13px 13px 26px #080a0f, -10px -10px 22px #232d40;
+  transform: translateY(-3px);
+}
+
+.neu-btn-indigo {
+  background: linear-gradient(145deg, #6366f1, #4f46e5);
+  box-shadow: 5px 5px 12px #bac5d4, -5px -5px 12px #ffffff, inset 1px 1px 1px rgba(255, 255, 255, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  transition: all 0.2s ease;
+}
+
+.neu-btn-indigo:hover:not(:disabled) {
+  background: linear-gradient(145deg, #6d70f7, #4338ca);
+  box-shadow: 7px 7px 16px #b2bece, -7px -7px 16px #ffffff, inset 1px 1px 2px rgba(255, 255, 255, 0.45);
+  transform: translateY(-1px);
+}
+
+.neu-btn-indigo:active:not(:disabled) {
+  box-shadow: inset 4px 4px 8px rgba(49, 46, 129, 0.65), inset -3px -3px 6px rgba(129, 140, 248, 0.25);
+  transform: translateY(0);
+}
+
+html.dark .neu-btn-indigo {
+  background: linear-gradient(145deg, #6366f1, #4f46e5);
+  box-shadow: 5px 5px 12px #090c12, -4px -4px 10px #1f2838, inset 1px 1px 1px rgba(255, 255, 255, 0.25);
+  border: 1px solid rgba(129, 140, 248, 0.25);
+}
+
+html.dark .neu-btn-indigo:hover:not(:disabled) {
+  box-shadow: 7px 7px 16px #070a0f, -5px -5px 12px #242f42, inset 1px 1px 2px rgba(255, 255, 255, 0.35);
+  transform: translateY(-1px);
+}
+
+

@@ -45,38 +45,39 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
   const hasOpenAttendance = attendanceSessions.some((s) => s.isOpen);
 
   return (
-    <div className="space-y-4 sm:space-y-6">
-      {/* Top Header / Breadcrumb Bar - Responsive Mobile & Desktop */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
-        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+    <div className="space-y-5 sm:space-y-6">
+      {/* Top Sculpted Neumorphic Course Header & Tab Switcher */}
+      <div className="neu-raised rounded-3xl p-3.5 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5">
+        <div className="flex items-center gap-3 min-w-0">
           <button
             onClick={onBack}
-            className="p-1.5 sm:p-2 -ml-1 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
+            className="neu-btn p-2.5 rounded-xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white cursor-pointer shrink-0"
             aria-label="Back to classes"
+            title="Back to My Classes"
           >
-            <ArrowLeft className="w-5 h-5" />
+            <ArrowLeft className="w-4.5 h-4.5" />
           </button>
 
           <div className="min-w-0">
-            <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100 truncate">
+            <h2 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-slate-100 truncate">
               {course.title}
             </h2>
             <div className="flex items-center gap-2 text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 font-mono mt-0.5">
-              <span>{course.code}</span>
-              <span>·</span>
+              <span className="font-bold text-indigo-600 dark:text-indigo-400">{course.code}</span>
+              <span aria-hidden="true">·</span>
               <span>{course.batch}</span>
             </div>
           </div>
         </div>
 
-        {/* Tab Controls */}
-        <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-xs font-medium self-stretch sm:self-auto justify-center overflow-x-auto">
+        {/* Recessed Neumorphic 3-Tab Switcher (Stream · Attendance · People) */}
+        <div className="neu-inset p-1.5 rounded-2xl flex items-center gap-1.5 text-xs font-bold self-stretch sm:self-auto justify-center overflow-x-auto">
           <button
             onClick={() => handleSwitchTab('stream')}
-            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'stream'
-                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs font-semibold'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                ? 'neu-raised-sm text-indigo-700 dark:text-indigo-300'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
             <MessageSquare className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
@@ -85,10 +86,10 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
 
           <button
             onClick={() => handleSwitchTab('attendance')}
-            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'attendance'
-                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs font-semibold'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                ? 'neu-raised-sm text-emerald-700 dark:text-emerald-300'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
             <CalendarCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
@@ -100,10 +101,10 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
 
           <button
             onClick={() => handleSwitchTab('people')}
-            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'people'
-                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs font-semibold'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                ? 'neu-raised-sm text-indigo-700 dark:text-indigo-300'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
             <Users className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />

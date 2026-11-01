@@ -412,15 +412,15 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
       )}
 
       {/* Course Banner Hero — Full Unobstructed 4:1 Google Classroom Header Photo for Mobile, Computer & Web */}
-      <div className="rounded-2xl overflow-hidden shadow-xs border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900">
+      <div className="neu-card rounded-3xl p-3 sm:p-4 overflow-hidden">
         {/* Pure 4:1 Header Image Container (1000 × 250 proportion on all devices, 100% bright & clear) */}
-        <div className="relative w-full aspect-[4/1] bg-slate-900 overflow-hidden group">
+        <div className="relative w-full aspect-[4/1] bg-slate-900 rounded-2xl overflow-hidden group neu-inset-sm p-1">
           <img
             src={course.bannerImage}
             alt={course.title}
             referrerPolicy="no-referrer"
             onClick={() => setPreviewImage({ url: course.bannerImage, name: `${course.title} - Header Photo` })}
-            className="w-full h-full object-cover object-center cursor-zoom-in transition-transform duration-300"
+            className="w-full h-full object-cover object-center rounded-xl cursor-zoom-in transition-transform duration-300"
             title="ပုံအကြီးချဲ့ကြည့်ရန် နှိပ်ပါ (Click to view full header photo)"
           />
 
@@ -444,10 +444,10 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
         </div>
 
         {/* Dedicated Course Title & Metadata Bar below Header Photo (Never covers the photo on mobile or desktop) */}
-        <div className="p-4 sm:p-5 md:p-6 bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="space-y-1 min-w-0">
+        <div className="pt-4 pb-1 px-2 sm:px-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-1.5 min-w-0">
             <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs font-mono text-indigo-600 dark:text-indigo-400">
-              <span className="font-semibold bg-indigo-50 dark:bg-indigo-950/70 px-2 py-0.5 rounded border border-indigo-200/80 dark:border-indigo-800/60">
+              <span className="font-bold neu-inset-sm px-2.5 py-0.5 rounded-lg">
                 {course.code}
               </span>
               <span>·</span>
@@ -456,7 +456,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
               <span className="text-slate-500 dark:text-slate-400">{course.section}</span>
             </div>
 
-            <h1 className="text-base sm:text-xl md:text-2xl font-bold tracking-tight text-slate-900 dark:text-white leading-snug">
+            <h1 className="text-base sm:text-xl md:text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-snug">
               {course.title}
             </h1>
 
@@ -465,11 +465,11 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
               <span>·</span>
               <span>Enrolled Students: <strong className="text-slate-800 dark:text-slate-200">{course.enrolledStudentIds.length}</strong></span>
               <span>·</span>
-              <span className="text-amber-600 dark:text-amber-400 font-medium">📌 Pinned: {pinnedPosts.length}/3</span>
+              <span className="text-amber-600 dark:text-amber-400 font-semibold">📌 Pinned: {pinnedPosts.length}/3</span>
               {isInstructor && scheduledPosts.length > 0 && (
                 <>
                   <span>·</span>
-                  <span className="text-indigo-600 dark:text-indigo-400 font-medium">⏰ Scheduled: {scheduledPosts.length}</span>
+                  <span className="text-indigo-600 dark:text-indigo-400 font-semibold">⏰ Scheduled: {scheduledPosts.length}</span>
                 </>
               )}
             </div>
@@ -479,13 +479,13 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
 
       {/* Scheduled Posts Management Drawer (Admin/Instructor Only) */}
       {isInstructor && scheduledPosts.length > 0 && (
-        <div className="bg-gradient-to-r from-indigo-500/10 via-purple-500/5 to-transparent dark:from-indigo-950/40 dark:via-purple-950/20 rounded-2xl border border-indigo-200 dark:border-indigo-800/80 p-4 sm:p-5 space-y-3 transition-all">
+        <div className="neu-card rounded-3xl p-4 sm:p-5 space-y-3 transition-all">
           <div
             onClick={() => setScheduledDrawerOpen(!scheduledDrawerOpen)}
             className="flex items-center justify-between cursor-pointer select-none"
           >
             <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-xl bg-indigo-600 text-white shadow-xs">
+              <div className="p-2.5 rounded-xl bg-indigo-600 text-white shadow-xs">
                 <CalendarClock className="w-4 h-4" />
               </div>
               <div>
@@ -502,17 +502,17 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                 </span>
               </div>
             </div>
-            <button className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg">
+            <button className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl neu-btn">
               {scheduledDrawerOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             </button>
           </div>
 
           {scheduledDrawerOpen && (
-            <div className="space-y-2.5 pt-2 border-t border-indigo-100 dark:border-indigo-900/40">
+            <div className="space-y-2.5 pt-2">
               {scheduledPosts.map((sp) => (
                 <div
                   key={sp.id}
-                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 rounded-xl bg-white dark:bg-slate-900 border border-indigo-100 dark:border-indigo-900/50 text-xs shadow-2xs hover:border-indigo-300 dark:hover:border-indigo-700 transition-colors"
+                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3.5 rounded-2xl neu-inset-sm text-xs transition-colors"
                 >
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -540,7 +540,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                   <div className="flex items-center gap-2 self-end sm:self-auto shrink-0 pt-1 sm:pt-0">
                     <button
                       onClick={() => handlePublishNow(sp.id)}
-                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white rounded-lg text-xs font-semibold shadow-2xs flex items-center gap-1 transition-all cursor-pointer"
+                      className="px-3 py-1.5 neu-btn-indigo rounded-xl text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
                       title="Publish immediately to all students"
                     >
                       <Send className="w-3 h-3" />
@@ -548,7 +548,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                     </button>
                     <button
                       onClick={() => setEditingPost(sp)}
-                      className="px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg text-xs font-medium transition-colors cursor-pointer flex items-center gap-1"
+                      className="px-2.5 py-1.5 neu-btn text-slate-700 dark:text-slate-300 rounded-xl text-xs font-medium transition-colors cursor-pointer flex items-center gap-1"
                     >
                       <Edit3 className="w-3 h-3" />
                       <span>Edit</span>
@@ -570,10 +570,10 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
 
       {/* Pinned Posts Showcase Banner (Up to 3 Pins - for Students & Instructors) */}
       {pinnedPosts.length > 0 && (
-        <div className="bg-gradient-to-r from-amber-500/10 via-amber-400/5 to-transparent dark:from-amber-950/40 dark:via-amber-950/20 rounded-2xl border border-amber-300/80 dark:border-amber-700/50 p-4 sm:p-5 space-y-3.5">
+        <div className="neu-card rounded-3xl p-4 sm:p-5 space-y-3.5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-xl bg-amber-500 text-white shadow-xs">
+              <div className="p-2.5 rounded-xl bg-amber-500 text-white shadow-xs">
                 <Pin className="w-4 h-4 fill-white" />
               </div>
               <div>
@@ -603,7 +603,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
             {pinnedPosts.map((p, idx) => (
               <div
                 key={`pinned-${p.id}`}
-                className="bg-white dark:bg-slate-900 rounded-xl p-3.5 border border-amber-200 dark:border-amber-800/60 shadow-2xs flex flex-col justify-between space-y-2 hover:border-amber-400 dark:hover:border-amber-500 transition-colors"
+                className="neu-inset-sm rounded-2xl p-3.5 flex flex-col justify-between space-y-2 transition-colors"
               >
                 <div>
                   <div className="flex items-center justify-between gap-1 mb-1.5">
@@ -623,7 +623,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                   </p>
                 </div>
 
-                <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px]">
+                <div className="flex items-center justify-between pt-2 border-t border-slate-200/40 dark:border-slate-700/40 text-[11px]">
                   <span className="text-slate-400 dark:text-slate-500 text-[10px] truncate max-w-[120px]">
                     {p.createdAt}
                   </span>
@@ -657,7 +657,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
 
       {/* Google Classroom Style Post Composer (Accessible to Instructors only - Admin & Co-Admin) */}
       {isInstructor && (
-        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs hover:shadow-md transition-all overflow-hidden">
+        <div className="neu-card rounded-3xl transition-all overflow-hidden">
           {!isComposing ? (
             /* Collapsed Google Classroom Announcement Bar */
             <div className="p-3.5 sm:p-4.5 flex items-center justify-between gap-3">
@@ -799,7 +799,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                   placeholder="Post Title (သင်ခန်းစာ သို့မဟုတ် ကြေညာချက် ခေါင်းစဉ်)..."
                   value={postTitle}
                   onChange={(e) => setPostTitle(e.target.value)}
-                  className="w-full px-3.5 py-2.5 text-xs sm:text-sm font-semibold bg-white dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all"
+                  className="w-full px-4 py-3 text-xs sm:text-sm font-semibold neu-input rounded-2xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 transition-all"
                   required
                 />
               </div>
@@ -811,7 +811,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                   placeholder="Announce something to your class (အတန်းတွင်း ကြေညာချက်၊ သင်ခန်းစာ အကြောင်းအရာ သို့မဟုတ် ညွှန်ကြားချက်များ ရေးသားပါ)..."
                   value={postContent}
                   onChange={(e) => setPostContent(e.target.value)}
-                  className="w-full px-3.5 py-3 text-xs sm:text-sm bg-white dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 resize-none transition-all leading-relaxed"
+                  className="w-full px-4 py-3.5 text-xs sm:text-sm neu-input rounded-2xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 resize-none transition-all leading-relaxed"
                   required
                 />
               </div>
@@ -1151,11 +1151,11 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
       )}
 
       {/* Stream Posts Feed */}
-      <div className="space-y-4 sm:space-y-5">
+      <div className="space-y-5 sm:space-y-6">
         {posts.length === 0 ? (
-          <div className="p-8 text-center bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
+          <div className="p-8 text-center neu-card rounded-3xl text-slate-500 dark:text-slate-400">
             <MessageSquare className="w-8 h-8 mx-auto text-slate-300 dark:text-slate-600 mb-2" />
-            <p className="text-sm font-medium text-slate-700 dark:text-slate-300">No stream posts yet</p>
+            <p className="text-sm font-bold text-slate-700 dark:text-slate-300">No stream posts yet</p>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
               Your instructor will post announcements, lecture modules, and resources here.
             </p>
@@ -1169,13 +1169,13 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
             return (
               <article
                 key={post.id}
-                className={`bg-white dark:bg-slate-900 rounded-2xl border ${
+                className={`neu-card rounded-3xl ${
                   post.isPinned
-                    ? 'border-amber-300 dark:border-amber-700/60 ring-1 ring-amber-400/20'
+                    ? 'ring-2 ring-amber-400/40'
                     : isPostScheduled
-                    ? 'border-indigo-300 dark:border-indigo-700/60 ring-1 ring-indigo-400/20'
-                    : 'border-slate-200/90 dark:border-slate-800'
-                } shadow-xs overflow-hidden transition-all hover:shadow-md`}
+                    ? 'ring-2 ring-indigo-400/40'
+                    : ''
+                } overflow-hidden transition-all`}
               >
                 {/* Scheduled Notice Banner on Card (Visible to Admin) */}
                 {isPostScheduled && (
@@ -1336,7 +1336,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                         return (
                           <div
                             key={att.id}
-                            className="flex flex-col justify-between p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-xs shadow-2xs hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                            className="flex flex-col justify-between p-3 rounded-2xl neu-inset-sm text-xs transition-colors"
                           >
                             {/* Preview for images if available */}
                             {isImg && isSafeMediaUrl && (
@@ -1445,7 +1445,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
 
                 {/* Threaded Discussion Section */}
                 {isCommentsOpen && (
-                  <div className="bg-slate-50/70 dark:bg-slate-850/70 border-t border-slate-100 dark:border-slate-800 px-3.5 sm:px-5 py-4 space-y-3">
+                  <div className="neu-inset-sm mx-3.5 sm:mx-5 mb-4 rounded-2xl px-3.5 sm:px-5 py-4 space-y-3">
                     {/* Existing Comments */}
                     {post.comments.length > 0 && (
                       <div className="space-y-2.5">
@@ -1463,14 +1463,14 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                                 referrerPolicy="no-referrer"
                                 className="w-7 h-7 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0 mt-0.5"
                               />
-                              <div className="flex-1 bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800 shadow-2xs">
+                              <div className="flex-1 neu-raised-sm p-3 rounded-2xl">
                                 <div className="flex items-center justify-between gap-2">
                                   <div className="flex items-center gap-1.5 flex-wrap">
-                                    <span className="font-semibold text-slate-900 dark:text-slate-100">
+                                    <span className="font-bold text-slate-900 dark:text-slate-100">
                                       {comm.authorName}
                                     </span>
                                     {(comm.authorRole === 'admin' || comm.authorRole === 'co_admin') ? (
-                                      <span className="text-[9px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1 rounded">
+                                      <span className="text-[9px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded">
                                         Instructor
                                       </span>
                                     ) : (
@@ -1509,14 +1509,14 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                     )}
 
                     {/* Add Comment Input Form */}
-                    <div className="flex items-center gap-2 pt-1">
+                    <div className="flex items-center gap-2.5 pt-1">
                       <img
                         src={currentUser.avatar}
                         alt={currentUser.name}
                         referrerPolicy="no-referrer"
-                        className="w-7 h-7 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+                        className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
                       />
-                      <div className="flex-1 flex items-center gap-1.5">
+                      <div className="flex-1 flex items-center gap-2">
                         <input
                           type="text"
                           placeholder="Add a class comment or question..."
@@ -1532,12 +1532,12 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                               handleAddComment(post.id);
                             }
                           }}
-                          className="flex-1 px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden focus:border-indigo-500"
+                          className="flex-1 px-3.5 py-2.5 text-xs rounded-xl neu-input text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500"
                         />
                         <button
                           type="button"
                           onClick={() => handleAddComment(post.id)}
-                          className="p-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-xs transition-colors cursor-pointer shrink-0"
+                          className="p-2.5 neu-btn-indigo rounded-xl transition-all cursor-pointer shrink-0"
                           title="Send comment"
                         >
                           <Send className="w-3.5 h-3.5" />

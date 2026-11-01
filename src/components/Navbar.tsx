@@ -126,28 +126,30 @@ export const Navbar: React.FC<NavbarProps> = ({
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 transition-colors duration-200">
-      <div className="max-w-7xl mx-auto px-3 sm:px-6 h-15 sm:h-16 flex items-center justify-between gap-3 sm:gap-6">
+    <header className="sticky top-0 z-40 w-full px-3 sm:px-6 pt-3">
+      <div className="max-w-7xl mx-auto neu-raised rounded-2xl px-3.5 sm:px-6 h-16 flex items-center justify-between gap-3 sm:gap-6">
         {/* Zone 1: Brand Wordmark & Role Indicator */}
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+        <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
           <button
             onClick={() => {
               onNavigateHome();
               setIsMobileMenuOpen(false);
             }}
-            className="text-base sm:text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer text-left flex items-center gap-2"
+            className="text-base sm:text-lg font-extrabold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer text-left flex items-center gap-2.5"
           >
-            <AcademyLogo size="sm" />
+            <div className="neu-inset-sm p-1.5 rounded-xl shrink-0">
+              <AcademyLogo size="sm" />
+            </div>
             <span>SwanArh Classroom</span>
           </button>
 
-          <span className="text-[10px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 hidden xs:inline-block">
+          <span className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 hidden xs:inline-block">
             · {currentUser.role === 'admin' ? 'Admin (ဆရာ)' : currentUser.role === 'co_admin' ? 'Co-Admin (တွဲဖက်)' : 'Student (ကျောင်းသား)'}
           </span>
         </div>
 
         {/* Zone 2: Desktop Navigation Links (hidden on mobile, visible on lg+) */}
-        <nav className="hidden lg:flex items-center gap-5 xl:gap-6 text-sm font-medium text-slate-600 dark:text-slate-300">
+        <nav className="hidden lg:flex items-center gap-5 xl:gap-6 text-xs sm:text-sm font-semibold text-slate-600 dark:text-slate-300">
           <button
             onClick={onNavigateHome}
             className="hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
@@ -157,7 +159,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           {onOpenRules && (
             <button
               onClick={onOpenRules}
-              className="text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1"
+              className="text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5"
             >
               <ScrollText className="w-3.5 h-3.5" />
               <span>စည်းကမ်းချက်များ</span>
@@ -168,7 +170,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               {onOpenStudentDirectory && (
                 <button
                   onClick={onOpenStudentDirectory}
-                  className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1"
+                  className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5"
                 >
                   <Users className="w-3.5 h-3.5" />
                   <span>Manage Users</span>
@@ -191,7 +193,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         </nav>
 
         {/* Zone 3: Actions (PWA Install, Theme Toggle, Notifications, Profile Switcher & Mobile Menu Toggle) */}
-        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+        <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
           {/* In-App PWA Install Button */}
           <PWAInstallButton variant="navbar" />
 
@@ -199,14 +201,14 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             type="button"
             onClick={onToggleTheme}
-            className="p-2 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+            className="neu-btn p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl cursor-pointer"
             title={theme === 'dark' ? 'Switch to Light Mode (အလင်းရောင်)' : 'Switch to Dark Mode (အမှောင်ရောင်)'}
             aria-label="Toggle color mode"
           >
             {theme === 'dark' ? (
-              <Sun className="w-4.5 h-4.5 sm:w-5 sm:h-5 text-amber-400 animate-in spin-in-90 duration-200" />
+              <Sun className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-amber-400 animate-in spin-in-90 duration-200" />
             ) : (
-              <Moon className="w-4.5 h-4.5 sm:w-5 sm:h-5 text-slate-600 animate-in spin-in-90 duration-200" />
+              <Moon className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-slate-600 animate-in spin-in-90 duration-200" />
             )}
           </button>
 
@@ -217,10 +219,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                 setShowNotifications(!showNotifications);
                 setShowUserDropdown(false);
               }}
-              className="p-2 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors relative cursor-pointer"
+              className="neu-btn p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl relative cursor-pointer"
               aria-label="View notifications"
             >
-              <Bell className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
+              <Bell className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
               {unreadCount > 0 && (
                 <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
               )}
@@ -228,35 +230,35 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             {/* Notifications Popover */}
             {showNotifications && (
-              <div className="absolute right-0 mt-2 w-76 sm:w-80 bg-white dark:bg-slate-900 rounded-xl shadow-xl border border-slate-200 dark:border-slate-800 p-3 z-50">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
-                  <span className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+              <div className="neu-card absolute right-0 mt-3 w-76 sm:w-80 rounded-2xl p-4 z-50">
+                <div className="flex items-center justify-between pb-2.5 border-b border-slate-200/60 dark:border-slate-800">
+                  <span className="text-xs font-extrabold text-slate-900 dark:text-slate-100">
                     Notifications ({unreadCount} new)
                   </span>
                   {unreadCount > 0 && (
                     <button
                       onClick={handleMarkNotificationsRead}
-                      className="text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                      className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
                     >
                       Mark all read
                     </button>
                   )}
                 </div>
 
-                <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-72 overflow-y-auto mt-2">
+                <div className="space-y-2 max-h-72 overflow-y-auto mt-2.5">
                   {notifications.length === 0 ? (
-                    <div className="p-4 text-center text-xs text-slate-400">
+                    <div className="neu-inset-sm p-4 rounded-xl text-center text-xs text-slate-500 dark:text-slate-400">
                       No notifications at this time
                     </div>
                   ) : (
                     notifications.map((notif) => (
                       <div
                         key={notif.id}
-                        className={`py-2 px-1 text-xs ${
-                          !notif.isRead ? 'bg-indigo-50/50 dark:bg-indigo-950/30 rounded' : ''
+                        className={`p-2.5 rounded-xl text-xs ${
+                          !notif.isRead ? 'neu-inset-sm' : ''
                         }`}
                       >
-                        <div className="font-semibold text-slate-900 dark:text-slate-100">{notif.title}</div>
+                        <div className="font-bold text-slate-900 dark:text-slate-100">{notif.title}</div>
                         <p className="text-slate-600 dark:text-slate-300 text-[11px] mt-0.5">{notif.message}</p>
                         <span className="text-[10px] text-slate-400 font-mono mt-1 block">
                           {notif.createdAt}
@@ -276,16 +278,16 @@ export const Navbar: React.FC<NavbarProps> = ({
                 setShowUserDropdown(!showUserDropdown);
                 setShowNotifications(false);
               }}
-              className="flex items-center gap-1.5 sm:gap-2 p-1 sm:p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              className="neu-btn flex items-center gap-2 p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl cursor-pointer"
             >
               <img
                 src={currentUser.avatar}
                 alt={currentUser.name}
                 referrerPolicy="no-referrer"
-                className="w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover shrink-0 ring-1 ring-slate-200 dark:ring-slate-700"
+                className="w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover shrink-0 ring-2 ring-white/80 dark:ring-slate-700"
               />
               <div className="hidden sm:block text-left pr-1 max-w-[150px] md:max-w-[190px]">
-                <div className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate flex items-center gap-1">
+                <div className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate flex items-center gap-1">
                   <span className="truncate">{currentUser.name}</span>
                 </div>
                 {currentUser.role === 'student' && currentUser.rulesAccepted ? (
@@ -304,23 +306,23 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             {/* Account Profile Dropdown */}
             {showUserDropdown && (
-              <div className="absolute right-0 mt-2 w-72 sm:w-80 bg-white dark:bg-slate-900 rounded-xl shadow-xl border border-slate-200 dark:border-slate-800 p-2 z-50">
-                <div className="px-3 py-2.5 border-b border-slate-100 dark:border-slate-800 flex items-center gap-2.5">
+              <div className="neu-card absolute right-0 mt-3 w-72 sm:w-80 rounded-2xl p-3 z-50 space-y-2">
+                <div className="neu-inset-sm p-3 rounded-xl flex items-center gap-3">
                   <img
                     src={currentUser.avatar}
                     alt={currentUser.name}
                     referrerPolicy="no-referrer"
-                    className="w-9 h-9 rounded-full object-cover shrink-0 ring-1 ring-slate-200 dark:ring-slate-700"
+                    className="w-10 h-10 rounded-full object-cover shrink-0 ring-2 ring-white/80 dark:ring-slate-700"
                   />
                   <div className="min-w-0 flex-1">
-                    <div className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
+                    <div className="text-xs font-extrabold text-slate-900 dark:text-slate-100 truncate">
                       {currentUser.name}
                     </div>
                     <div className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400 truncate">
                       @{currentUser.username}
                     </div>
                     {currentUser.role === 'student' && currentUser.rulesAccepted && (
-                      <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-[10px] font-bold">
+                      <div className="mt-1 inline-flex items-center gap-1 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold">
                         <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
                         <span>သိရှိ လိုက်နာပါမည်</span>
                       </div>
@@ -332,14 +334,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </div>
 
                 {/* Account Actions: Rules, Profile Picture (Admin & Co-Admin only) & Password */}
-                <div className="pt-1.5 border-t border-slate-100 dark:border-slate-800 space-y-0.5">
+                <div className="space-y-1">
                   {onOpenRules && (
                     <button
                       onClick={() => {
                         setShowUserDropdown(false);
                         onOpenRules();
                       }}
-                      className="w-full flex items-center gap-2 p-2 rounded-lg text-xs text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors cursor-pointer font-semibold"
+                      className="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-emerald-700 dark:text-emerald-300 hover:bg-white/60 dark:hover:bg-slate-800/70 transition-colors cursor-pointer font-bold"
                     >
                       <ScrollText className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                       <span>သင်တန်းစည်းကမ်းချက်များ (Academy Rules)</span>
@@ -351,7 +353,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                         setShowUserDropdown(false);
                         setShowProfilePictureModal(true);
                       }}
-                      className="w-full flex items-center gap-2 p-2 rounded-lg text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer font-medium"
+                      className="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-slate-700 dark:text-slate-200 hover:bg-white/60 dark:hover:bg-slate-800/70 transition-colors cursor-pointer font-semibold"
                     >
                       <Camera className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
                       <span>Change Profile Picture (ဓာတ်ပုံ ပြောင်းမည်)</span>
@@ -365,7 +367,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       setPwdError(null);
                       setPwdSuccess(null);
                     }}
-                    className="w-full flex items-center gap-2 p-2 rounded-lg text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer font-medium"
+                    className="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-slate-700 dark:text-slate-200 hover:bg-white/60 dark:hover:bg-slate-800/70 transition-colors cursor-pointer font-semibold"
                   >
                     <Key className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
                     <span>Change Password (စကားဝှက် ပြောင်းမည်)</span>
@@ -376,7 +378,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       setShowUserDropdown(false);
                       onLogout();
                     }}
-                    className="w-full flex items-center gap-2 p-2 rounded-lg text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer font-medium"
+                    className="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50/70 dark:hover:bg-rose-950/40 transition-colors cursor-pointer font-bold"
                   >
                     <LogOut className="w-3.5 h-3.5" />
                     <span>Sign Out (အကောင့်မှ ထွက်ရန်)</span>
@@ -389,7 +391,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* Mobile Menu Hamburger Button (visible on mobile/tablet < lg) */}
           <button
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-            className="lg:hidden p-2 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+            className="lg:hidden neu-btn p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl cursor-pointer"
             aria-label="Toggle navigation menu"
           >
             {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
@@ -399,9 +401,9 @@ export const Navbar: React.FC<NavbarProps> = ({
 
       {/* Mobile Navigation Drawer */}
       {isMobileMenuOpen && (
-        <div className="lg:hidden bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 py-3 space-y-2 shadow-lg animate-in slide-in-from-top-2 duration-150">
-          <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 mb-2 flex items-center justify-between">
-            <div className="flex items-center gap-2">
+        <div className="lg:hidden max-w-7xl mx-auto mt-2 neu-card rounded-2xl px-4 py-3.5 space-y-2.5 animate-in slide-in-from-top-2 duration-150">
+          <div className="p-3 rounded-xl neu-inset-sm mb-2 flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
               <img
                 src={currentUser.avatar}
                 alt={currentUser.name}
@@ -412,7 +414,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <div className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5 flex-wrap">
                   <span>{currentUser.name}</span>
                   {currentUser.role === 'student' && currentUser.rulesAccepted && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-[10px] font-bold">
+                    <span className="inline-flex items-center gap-1 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold">
                       <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                       <span>သိရှိ လိုက်နာပါမည်</span>
                     </span>

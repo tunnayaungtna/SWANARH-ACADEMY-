@@ -274,7 +274,7 @@ export default function App() {
 
   return (
     <div
-      className={`min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-200 ${
+      className={`min-h-screen neu-canvas text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-300 ${
         securitySettings.textProtectionEnabled ? 'select-none' : ''
       }`}
     >
@@ -309,10 +309,10 @@ export default function App() {
       </Suspense>
 
       {/* Main Container - Responsive padding for mobile & desktop screens */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-4 sm:py-8">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-5 sm:py-8">
         {appBannerError && (
-          <div className="mb-4 p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800/70 text-rose-800 dark:text-rose-200 text-xs flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
+          <div className="mb-5 p-4 rounded-2xl neu-inset text-rose-800 dark:text-rose-200 text-xs flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
               <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
               <span>{appBannerError}</span>
             </div>
@@ -345,29 +345,41 @@ export default function App() {
           </Suspense>
         ) : (
           /* Dashboard: Course Catalog & Strict Enrollment View */
-          <div className="space-y-6 sm:space-y-8">
-            {/* Context & Role Banner - Mobile & Desktop Responsive */}
-            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs p-4 sm:p-6 md:p-8 flex flex-col md:flex-row md:items-center justify-between gap-5 sm:gap-6">
-              <div className="space-y-1.5 sm:space-y-2">
-                <div className="flex flex-wrap items-center gap-2 text-xs font-mono text-slate-500 dark:text-slate-400">
-                  <span>Logged in as: <strong className="text-slate-800 dark:text-slate-200">{currentUser.name}</strong></span>
+          <div className="space-y-7 sm:space-y-9">
+            {/* Sculpted Neumorphic Welcome & Role Command Console */}
+            <div className="neu-card rounded-3xl p-5 sm:p-7 md:p-8 flex flex-col md:flex-row md:items-center justify-between gap-5 sm:gap-6">
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2 text-xs font-mono text-slate-600 dark:text-slate-400">
+                  <span>
+                    Logged in as:{' '}
+                    <strong className="text-slate-900 dark:text-white">{currentUser.name}</strong>
+                  </span>
                   {currentUser.role === 'student' && currentUser.rulesAccepted && (
-                    <span
-                      onClick={() => setShowRulesModal(true)}
-                      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 font-sans font-bold text-[11px] cursor-pointer hover:bg-emerald-200/70 transition-colors"
-                      title="သင်တန်းစည်းကမ်းချက်များကို သိရှိလိုက်နာပါမည်ဟု အတည်ပြုပြီး"
-                    >
-                      <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                      <span>သိရှိ လိုက်နာပါမည်</span>
-                    </span>
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <button
+                        type="button"
+                        onClick={() => setShowRulesModal(true)}
+                        className="neu-inset-sm inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-emerald-800 dark:text-emerald-300 font-sans font-bold text-[11px] cursor-pointer hover:text-emerald-600 transition-colors"
+                        title="သင်တန်းစည်းကမ်းချက်များကို သိရှိလိုက်နာပါမည်ဟု အတည်ပြုပြီး"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                        <span>သိရှိ လိုက်နာပါမည်</span>
+                      </button>
+                    </>
                   )}
-                  <span>·</span>
+                  <span aria-hidden="true">·</span>
                   <span className="capitalize font-semibold text-indigo-600 dark:text-indigo-400">
-                    Role: {currentUser.role === 'admin' ? 'Faculty / Admin (ဆရာ)' : currentUser.role === 'co_admin' ? 'Co-Admin (တွဲဖက် အက်ဒမင်)' : 'Student (ကျောင်းသား)'}
+                    Role:{' '}
+                    {currentUser.role === 'admin'
+                      ? 'Faculty / Admin (ဆရာ)'
+                      : currentUser.role === 'co_admin'
+                      ? 'Co-Admin (တွဲဖက် အက်ဒမင်)'
+                      : 'Student (ကျောင်းသား)'}
                   </span>
                 </div>
 
-                <h1 className="text-xl sm:text-2xl md:text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+                <h1 className="text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100">
                   {currentUser.role === 'admin' || currentUser.role === 'co_admin'
                     ? 'Faculty & Classroom Management'
                     : 'My Enrolled Classes'}
@@ -382,11 +394,11 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Action Buttons - Fully responsive wrapping */}
-              <div className="flex flex-wrap items-center gap-2 sm:gap-3 shrink-0">
+              {/* Tactile Neumorphic Action Buttons */}
+              <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 shrink-0">
                 <button
                   onClick={() => setShowRulesModal(true)}
-                  className="flex items-center justify-center gap-1.5 px-3 sm:px-3.5 py-2 sm:py-2.5 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 text-xs font-semibold rounded-xl shadow-2xs transition-colors cursor-pointer"
+                  className="neu-btn flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2.5 text-emerald-800 dark:text-emerald-300 text-xs font-bold rounded-2xl cursor-pointer"
                 >
                   <ScrollText className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                   <span>စည်းကမ်းချက်များ</span>
@@ -396,15 +408,15 @@ export default function App() {
                   <>
                     <button
                       onClick={() => setShowStudentDirectoryModal(true)}
-                      className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 sm:py-2.5 bg-slate-900 hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 text-white text-xs font-medium rounded-xl shadow-xs transition-colors cursor-pointer"
+                      className="neu-btn flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2.5 text-slate-800 dark:text-slate-100 text-xs font-bold rounded-2xl cursor-pointer"
                     >
-                      <Users className="w-4 h-4" />
+                      <Users className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                       <span>Manage Users (အကောင့်များ စီမံရန်)</span>
                     </button>
 
                     <button
                       onClick={() => setShowCreateCourseModal(true)}
-                      className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 sm:py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-xl shadow-xs transition-colors cursor-pointer"
+                      className="neu-btn-indigo flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2.5 text-white text-xs font-bold rounded-2xl cursor-pointer"
                     >
                       <Plus className="w-4 h-4" />
                       <span>Create Class / Batch</span>
@@ -412,7 +424,7 @@ export default function App() {
 
                     <button
                       onClick={() => setShowSupabaseModal(true)}
-                      className="flex items-center justify-center gap-1.5 px-3 sm:px-3.5 py-2 sm:py-2.5 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 text-xs font-semibold rounded-xl shadow-2xs transition-colors cursor-pointer"
+                      className="neu-btn flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-emerald-800 dark:text-emerald-300 text-xs font-bold rounded-2xl cursor-pointer"
                       title="View Supabase configuration, connection test and SQL schema"
                     >
                       <Database className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
@@ -421,7 +433,7 @@ export default function App() {
 
                     <button
                       onClick={() => setShowArchitectureModal(true)}
-                      className="flex items-center justify-center gap-1.5 px-3 sm:px-3.5 py-2 sm:py-2.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium rounded-xl shadow-2xs transition-colors cursor-pointer"
+                      className="neu-btn flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-slate-700 dark:text-slate-200 text-xs font-semibold rounded-2xl cursor-pointer"
                     >
                       <Layers className="w-4 h-4 text-slate-500 dark:text-slate-400" />
                       <span>DB Spec</span>
@@ -431,7 +443,7 @@ export default function App() {
 
                 <button
                   onClick={handleLogout}
-                  className="flex items-center justify-center gap-1.5 px-3 py-2 sm:py-2.5 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/50 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900/60 text-xs font-medium rounded-xl shadow-2xs transition-colors cursor-pointer"
+                  className="neu-btn flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-rose-700 dark:text-rose-300 text-xs font-bold rounded-2xl cursor-pointer"
                 >
                   <LogOut className="w-4 h-4 text-rose-600 dark:text-rose-400" />
                   <span>Sign Out</span>
@@ -439,46 +451,58 @@ export default function App() {
               </div>
             </div>
 
-            {/* Course Grid Header & Search Bar */}
-            <div className="space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <BookOpen className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-                  <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100">
-                    {currentUser.role === 'admin' || currentUser.role === 'co_admin' ? 'All Managed Classes' : 'Authorized Courses'}
-                  </h2>
-                  <span className="text-xs font-mono text-slate-500 dark:text-slate-400 ml-1">
-                    ({courses.length})
-                  </span>
+            {/* Course Grid Header & Carved Search Bar */}
+            <div className="space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5">
+                <div className="flex items-center gap-3">
+                  <div className="neu-inset-sm p-2.5 rounded-2xl text-indigo-600 dark:text-indigo-400">
+                    <BookOpen className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-slate-100">
+                        {currentUser.role === 'admin' || currentUser.role === 'co_admin'
+                          ? 'All Managed Classes'
+                          : 'Authorized Courses'}
+                      </h2>
+                      <span className="text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                        ({courses.length})
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      သင်တက်ရောက်ခွင့်ရရှိထားသော အတန်းများသို့ ဝင်ရောက်၍ သင်ခန်းစာများ လေ့လာနိုင်ပါသည်
+                    </p>
+                  </div>
                 </div>
 
-                {/* Course Search Filter */}
-                <div className="relative w-full sm:w-64">
-                  <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                {/* Carved Neumorphic Course Search Filter */}
+                <div className="relative w-full sm:w-72">
+                  <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                   <input
                     type="text"
                     placeholder="Search courses or batches..."
                     value={courseSearch}
                     onChange={(e) => setCourseSearch(e.target.value)}
-                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 rounded-xl focus:outline-hidden focus:border-indigo-500 shadow-2xs"
+                    className="neu-input w-full pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 rounded-2xl"
                   />
                 </div>
               </div>
 
               {courses.length === 0 ? (
-                <div className="p-8 sm:p-12 text-center bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
-                  <Lock className="w-8 h-8 mx-auto text-slate-300 dark:text-slate-600 mb-2" />
-                  <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                <div className="neu-card p-8 sm:p-12 text-center rounded-3xl text-slate-500 dark:text-slate-400">
+                  <div className="neu-inset-sm w-14 h-14 rounded-2xl mx-auto flex items-center justify-center mb-3 text-slate-400 dark:text-slate-500">
+                    <Lock className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200">
                     No Authorized Courses Found
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
-                    You are not currently enrolled in any active class cohorts. Please contact Dr.
-                    Kyaw Swar to obtain batch authorization.
+                    You are not currently enrolled in any active class cohorts. Please contact the Academy Faculty to obtain batch authorization.
                   </p>
                 </div>
               ) : (
                 <Suspense fallback={null}>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-7">
                     {courses
                       .filter((c) => {
                         if (!courseSearch.trim()) return true;
@@ -589,13 +613,13 @@ export default function App() {
       </Suspense>
 
       {/* Quiet Footer */}
-      <footer className="mt-auto border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 py-6 text-center text-xs text-slate-500 dark:text-slate-400">
+      <footer className="mt-auto py-6 text-center text-xs text-slate-500 dark:text-slate-400">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <span>Classroom OS · Enterprise Academic Learning Platform</span>
-          <div className="flex items-center gap-4 text-slate-400 dark:text-slate-500">
-            <span>Domain-Locked Video DRM</span>
+          <span>Dr. Si Thu Aung · Swanarh Academy · Classroom OS Learning Platform</span>
+          <div className="flex items-center gap-3 text-slate-400 dark:text-slate-500">
+            <span>Protected Video Playback</span>
             <span>·</span>
-            <span>PostgreSQL RLS</span>
+            <span>Row-Level Security</span>
             <span>·</span>
             <span>Mobile-First Engine</span>
           </div>

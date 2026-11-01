@@ -503,10 +503,12 @@ export class ClassroomDB {
     const userIndex = users.findIndex((u) => u.id === userId);
     if (userIndex === -1) return null;
 
-    const acceptedStamp = new Date().toLocaleDateString('en-US', {
+    const acceptedStamp = new Date().toLocaleString('en-US', {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
     });
 
     users[userIndex] = {
@@ -2595,6 +2597,91 @@ export class ClassroomDB {
       success: true,
       filename,
       rowCount: rows.length,
+    };
+  }
+
+  static downloadRulesAcceptanceAuditCSV(
+    filterMode: 'all' | 'accepted_only' = 'all'
+  ): {
+    success: boolean;
+    filename?: string;
+    acceptedCount: number;
+    totalStudents: number;
+  } {
+    const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const allUsers = this.getAllUsers();
+    const allStudents = allUsers.filter((u) => u.role === 'student');
+    const targetStudents =
+      filterMode === 'accepted_only'
+        ? allStudents.filter((s) => Boolean(s.rulesAccepted))
+        : allStudents;
+
+    const escapeCsv = (val: string | number | undefined) => {
+      let str = String(val ?? '');
+      if (/^[=+\-\t\r]/.test(str)) {
+        str = `'${str}`;
+      }
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    const headers = [
+      'Student ID',
+      'Student Name',
+      'Username',
+      'Email',
+      'Phone',
+      'Gender',
+      'Address',
+      'Enrolled Courses',
+      'Rule Status',
+      'Declaration (သိရှိ လိုက်နာပါမည်)',
+      'Accepted Timestamp',
+    ];
+
+    const rows = targetStudents.map((stu) => {
+      const enrolledCodes = allCourses
+        .filter((c) => c.enrolledStudentIds.includes(stu.id))
+        .map((c) => `${c.code} (${c.batch})`)
+        .join('; ');
+
+      return [
+        stu.id,
+        stu.name,
+        `@${stu.username}`,
+        stu.email,
+        stu.phone || '',
+        stu.gender || '',
+        stu.address || '',
+        enrolledCodes || 'None',
+        stu.rulesAccepted ? 'Accepted' : 'Pending',
+        stu.rulesAccepted ? 'သိရှိ လိုက်နာပါမည် (Accepted)' : 'စည်းကမ်းချက် လက်ခံရန်ကျန် (Pending)',
+        stu.rulesAccepted ? stu.rulesAcceptedAt || 'Accepted' : '—',
+      ].map(escapeCsv);
+    });
+
+    const csvContent =
+      '\uFEFF' + [headers.map(escapeCsv).join(','), ...rows.map((r) => r.join(','))].join('\r\n');
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    const filename = `SwanArh_Rules_Acceptance_Audit_${dateStamp}.csv`;
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    return {
+      success: true,
+      filename,
+      acceptedCount: allStudents.filter((s) => Boolean(s.rulesAccepted)).length,
+      totalStudents: allStudents.length,
     };
   }
 

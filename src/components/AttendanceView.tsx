@@ -197,12 +197,12 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       {!isInstructor && (
         <div className="space-y-5">
           {/* Student Personal Attendance Percentage & Certificate Assessment Card */}
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-xs">
+          <div className="neu-card rounded-3xl p-5 sm:p-6">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div className="space-y-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <CalendarCheck className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-                  <h2 className="text-base font-bold text-slate-900 dark:text-white">
+                  <h2 className="text-base font-extrabold text-slate-900 dark:text-white">
                     My Class Attendance (ကျွန်ုပ်၏ အတန်းတက်ရောက်မှု မှတ်တမ်း)
                   </h2>
                   {currentUser.rulesAccepted && (
@@ -228,10 +228,10 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                   </div>
                 </div>
                 <div
-                  className={`px-3 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 ${
+                  className={`px-3.5 py-2 rounded-2xl neu-inset-sm text-xs font-semibold flex items-center gap-1.5 ${
                     myCertEligible
-                      ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'
-                      : 'bg-amber-50 dark:bg-amber-950/60 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300'
+                      ? 'text-emerald-700 dark:text-emerald-300'
+                      : 'text-amber-700 dark:text-amber-300'
                   }`}
                 >
                   <Award className="w-4 h-4 shrink-0" />
@@ -245,8 +245,8 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
             </div>
 
             {/* Progress Bar */}
-            <div className="mt-4">
-              <div className="w-full h-2.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+            <div className="mt-5">
+              <div className="w-full h-3 neu-inset-sm rounded-full overflow-hidden p-0.5">
                 <div
                   className={`h-full rounded-full transition-all duration-500 ${
                     myStats.percentage >= 75
@@ -259,36 +259,36 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                 />
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mt-4 text-xs">
-                <div className="p-2.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/40 border border-emerald-200/70 dark:border-emerald-900/50">
-                  <span className="text-[11px] text-emerald-700 dark:text-emerald-300 block">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 text-xs">
+                <div className="p-3 rounded-2xl neu-inset-sm">
+                  <span className="text-[11px] text-emerald-700 dark:text-emerald-300 font-semibold block">
                     Present (တက်ရောက်)
                   </span>
-                  <span className="text-base font-bold font-mono text-emerald-900 dark:text-emerald-100">
+                  <span className="text-base font-extrabold font-mono text-emerald-900 dark:text-emerald-100">
                     {myStats.presentCount}
                   </span>
                 </div>
-                <div className="p-2.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/40 border border-amber-200/70 dark:border-amber-900/50">
-                  <span className="text-[11px] text-amber-700 dark:text-amber-300 block">
+                <div className="p-3 rounded-2xl neu-inset-sm">
+                  <span className="text-[11px] text-amber-700 dark:text-amber-300 font-semibold block">
                     Late (နောက်ကျ)
                   </span>
-                  <span className="text-base font-bold font-mono text-amber-900 dark:text-amber-100">
+                  <span className="text-base font-extrabold font-mono text-amber-900 dark:text-amber-100">
                     {myStats.lateCount}
                   </span>
                 </div>
-                <div className="p-2.5 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200/70 dark:border-indigo-900/50">
-                  <span className="text-[11px] text-indigo-700 dark:text-indigo-300 block">
+                <div className="p-3 rounded-2xl neu-inset-sm">
+                  <span className="text-[11px] text-indigo-700 dark:text-indigo-300 font-semibold block">
                     Excused (ခွင့်တိုင်)
                   </span>
-                  <span className="text-base font-bold font-mono text-indigo-900 dark:text-indigo-100">
+                  <span className="text-base font-extrabold font-mono text-indigo-900 dark:text-indigo-100">
                     {myStats.excusedCount}
                   </span>
                 </div>
-                <div className="p-2.5 rounded-xl bg-rose-50/70 dark:bg-rose-950/40 border border-rose-200/70 dark:border-rose-900/50">
-                  <span className="text-[11px] text-rose-700 dark:text-rose-300 block">
+                <div className="p-3 rounded-2xl neu-inset-sm">
+                  <span className="text-[11px] text-rose-700 dark:text-rose-300 font-semibold block">
                     Absent (ပျက်ကွက်)
                   </span>
-                  <span className="text-base font-bold font-mono text-rose-900 dark:text-rose-100">
+                  <span className="text-base font-extrabold font-mono text-rose-900 dark:text-rose-100">
                     {myStats.absentCount}
                   </span>
                 </div>
@@ -298,8 +298,8 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
 
           {/* Open Daily Check-in Banner for Students */}
           {openSessions.length > 0 && (
-            <div className="bg-gradient-to-r from-emerald-500/15 via-teal-500/10 to-transparent dark:from-emerald-950/60 dark:via-teal-950/30 rounded-2xl border-2 border-emerald-400/80 dark:border-emerald-700 p-4 sm:p-5 space-y-3 shadow-xs">
-              <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-bold text-xs sm:text-sm">
+            <div className="neu-card rounded-3xl p-4 sm:p-5 space-y-3 ring-2 ring-emerald-400/50">
+              <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-bold text-xs sm:text-sm">
                 <Sparkles className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                 <span>Open Attendance — ယနေ့ အတန်းချိန် တက်ရောက်ကြောင်း နှိပ်ရန်</span>
               </div>
@@ -313,7 +313,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                   return (
                     <div
                       key={sess.id}
-                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-emerald-200 dark:border-emerald-800/70 shadow-2xs"
+                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-2xl neu-inset-sm"
                     >
                       <div>
                         <div className="flex items-center gap-2 flex-wrap">
@@ -340,7 +340,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                         <button
                           type="button"
                           onClick={() => handleStudentCheckIn(sess.id)}
-                          className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white text-xs sm:text-sm font-bold shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0"
+                          className="px-4 py-2.5 rounded-xl neu-btn-emerald text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0"
                         >
                           <Hand className="w-4 h-4" />
                           <span>Mark Present (တက်ရောက်သည်)</span>
@@ -354,8 +354,8 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
           )}
 
           {/* Student Session-by-Session History */}
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-xs">
-            <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+          <div className="neu-card rounded-3xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200/50 dark:border-slate-800 flex items-center justify-between">
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                 Attendance History (အတန်းချိန်အလိုက် တက်ရောက်မှု မှတ်တမ်း)
               </h3>
@@ -427,14 +427,14 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       {isInstructor && (
         <div className="space-y-6">
           {/* 1. Open New Daily Attendance Card */}
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-xs">
+          <div className="neu-card rounded-3xl p-5 sm:p-6">
             <div className="flex items-center justify-between gap-2 mb-4">
               <div className="flex items-center gap-2.5">
                 <div className="p-2.5 rounded-xl bg-indigo-600 text-white shadow-xs">
                   <CalendarCheck className="w-5 h-5" />
                 </div>
                 <div>
-                  <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                  <h2 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white">
                     Open Daily Attendance (အတန်းချိန် တက်ရောက်မှု ဖွင့်လှစ်ရန်)
                   </h2>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -446,10 +446,10 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
 
             <form
               onSubmit={handleCreateSession}
-              className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-200/80 dark:border-slate-800"
+              className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end neu-inset-sm p-4 rounded-2xl"
             >
               <div className="md:col-span-5">
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                   Session / Lecture Title (သင်ခန်းစာ / အတန်းချိန် အမည်)
                 </label>
                 <input
@@ -457,19 +457,19 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                   placeholder="ဥပမာ - Lecture 04: Daily Class Check-in..."
                   value={newTitle}
                   onChange={(e) => setNewTitle(e.target.value)}
-                  className="w-full px-3 py-2 text-xs sm:text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-hidden focus:border-indigo-500"
+                  className="w-full px-3.5 py-2.5 text-xs sm:text-sm neu-input rounded-xl text-slate-900 dark:text-slate-100"
                 />
               </div>
 
               <div className="md:col-span-3">
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                   Date (နေ့စွဲ)
                 </label>
                 <input
                   type="date"
                   value={newDate}
                   onChange={(e) => setNewDate(e.target.value)}
-                  className="w-full px-3 py-2 text-xs sm:text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 font-mono focus:outline-hidden focus:border-indigo-500"
+                  className="w-full px-3.5 py-2.5 text-xs sm:text-sm neu-input rounded-xl text-slate-900 dark:text-slate-100 font-mono"
                   required
                 />
               </div>
@@ -487,7 +487,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
 
                 <button
                   type="submit"
-                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
+                  className="px-4 py-2.5 neu-btn-emerald text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
                 >
                   <Plus className="w-4 h-4" />
                   <span>Open Attendance</span>
@@ -497,10 +497,10 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
           </div>
 
           {/* 2. Daily Roll Call & Self Check-in Control Panel */}
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
-            <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div className="neu-card rounded-3xl overflow-hidden">
+            <div className="p-4 sm:p-5 border-b border-slate-200/50 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
               <div>
-                <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <h3 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                   <span>Daily Roll Call Sheet (အမည်စာရင်းဖြင့် Attendance ခြစ်ရန်)</span>
                 </h3>
@@ -515,7 +515,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                   <select
                     value={activeSession?.id || ''}
                     onChange={(e) => setSelectedSessionId(e.target.value)}
-                    className="px-3 py-2 text-xs font-semibold bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-hidden focus:border-indigo-500"
+                    className="px-3.5 py-2 text-xs font-semibold neu-input rounded-xl text-slate-900 dark:text-slate-100"
                   >
                     {sessions.map((s) => (
                       <option key={s.id} value={s.id}>
@@ -700,10 +700,10 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
           </div>
 
           {/* 3. Overall Student Attendance Percentage (%) & Certificate Assessment Matrix */}
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
-            <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="neu-card rounded-3xl overflow-hidden">
+            <div className="p-4 sm:p-5 border-b border-slate-200/50 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
-                <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <h3 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
                   <Users className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                   <span>
                     Attendance Percentage & Certificate Eligibility (ကျောင်းသားတစ်ဦးချင်း တက်ရောက်မှု ရာခိုင်နှုန်းနှင့် Certificate သုံးသပ်ချက်)
@@ -725,7 +725,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                       showToast(`📥 Attendance Report CSV (${res.filename}) ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ!`);
                     }
                   }}
-                  className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                  className="px-3.5 py-2 rounded-xl neu-btn-emerald text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5" />
                   <span>Export CSV Report</span>

@@ -65,15 +65,17 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
       )}
 
       {/* Instructors & Faculty Section */}
-      <section className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs p-5 sm:p-6 transition-colors">
-        <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
-          <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100">
+      <section className="neu-card rounded-3xl p-5 sm:p-6 transition-colors">
+        <div className="flex items-center justify-between pb-4 border-b border-slate-200/50 dark:border-slate-800">
+          <h2 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-slate-100">
             Instructors & Faculty
           </h2>
-          <span className="text-xs text-indigo-600 dark:text-indigo-400 font-mono">Academic Staff</span>
+          <span className="text-xs text-indigo-600 dark:text-indigo-400 font-mono font-bold neu-inset-sm px-2.5 py-1 rounded-lg">
+            Academic Staff
+          </span>
         </div>
 
-        <div className="mt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="mt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-3.5 rounded-2xl neu-inset-sm">
           <div className="flex items-center gap-3">
             <img
               src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80"
@@ -82,9 +84,9 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
               className="w-11 h-11 rounded-full object-cover border border-slate-200 dark:border-slate-700"
             />
             <div>
-              <div className="text-sm font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <div className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
                 <span>{course.instructorName}</span>
-                <span className="text-[10px] font-medium text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded">
+                <span className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-md">
                   Lead Instructor
                 </span>
               </div>
@@ -94,25 +96,25 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
 
           <a
             href={`mailto:${course.instructorEmail}`}
-            className="self-start sm:self-auto flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-medium rounded-lg transition-colors"
+            className="self-start sm:self-auto flex items-center gap-1.5 px-3.5 py-2 neu-btn text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-xl transition-all"
           >
-            <Mail className="w-3.5 h-3.5 text-slate-400" />
+            <Mail className="w-3.5 h-3.5 text-indigo-500" />
             <span>Email</span>
           </a>
         </div>
       </section>
 
       {/* Enrolled Students & Classmates Section */}
-      <section className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs p-4 sm:p-6 transition-colors">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
+      <section className="neu-card rounded-3xl p-4 sm:p-6 transition-colors">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200/50 dark:border-slate-800">
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100">
+              <h2 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-slate-100">
                 {currentUser.role === 'admin' || currentUser.role === 'co_admin'
                   ? 'Enrolled Students (အတန်းတွင်း ကျောင်းသားများ)'
                   : 'Classmates & Enrolled Students (အတန်းဖော် ကျောင်းသားများ)'}
               </h2>
-              <span className="text-xs font-mono font-medium text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2.5 py-0.5 rounded-full">
+              <span className="text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400 neu-inset-sm px-2.5 py-0.5 rounded-full">
                 {course.enrolledStudentIds.length} ဦး
               </span>
             </div>
@@ -127,7 +129,7 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
           {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
             <button
               onClick={() => setShowAddModal(true)}
-              className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-xs transition-colors cursor-pointer shrink-0"
+              className="flex items-center justify-center gap-1.5 px-4 py-2.5 neu-btn-indigo text-xs font-bold rounded-xl transition-all cursor-pointer shrink-0"
             >
               <UserPlus className="w-4 h-4" />
               <span>+ Add Student (ကျောင်းသား ထည့်မည်)</span>
@@ -138,13 +140,13 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
         {/* Search Filter Bar (Accessible to both Admin & Students) */}
         {course.enrolledStudentIds.length > 0 && (
           <div className="my-4 relative">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={searchFilter}
               onChange={(e) => setSearchFilter(e.target.value)}
               placeholder="အတန်းတွင်း ကျောင်းသားအမည် သို့မဟုတ် Username ဖြင့် ရှာဖွေပါ..."
-              className="w-full pl-8 pr-3 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden focus:border-indigo-500 transition-colors"
+              className="w-full pl-10 pr-4 py-2.5 text-xs neu-input rounded-2xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 transition-all"
             />
           </div>
         )}

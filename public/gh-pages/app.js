@@ -1,4 +1,4 @@
-// SwanArh Classroom Static Bundle v9 (Academy Rules & Regulations Active)
+/* SwanArh Classroom Static Bundle v11 - Premium Neumorphism Interior UI */
 //#region \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -34989,10 +34989,12 @@ var ClassroomDB = class {
 		const users = this.getAllUsers();
 		const userIndex = users.findIndex((u) => u.id === userId);
 		if (userIndex === -1) return null;
-		const acceptedStamp = (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", {
+		const acceptedStamp = (/* @__PURE__ */ new Date()).toLocaleString("en-US", {
 			month: "short",
 			day: "numeric",
-			year: "numeric"
+			year: "numeric",
+			hour: "2-digit",
+			minute: "2-digit"
 		});
 		users[userIndex] = {
 			...users[userIndex],
@@ -36457,6 +36459,63 @@ var ClassroomDB = class {
 			success: true,
 			filename,
 			rowCount: rows.length
+		};
+	}
+	static downloadRulesAcceptanceAuditCSV(filterMode = "all") {
+		const allCourses = this.getItem(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+		const allStudents = this.getAllUsers().filter((u) => u.role === "student");
+		const targetStudents = filterMode === "accepted_only" ? allStudents.filter((s) => Boolean(s.rulesAccepted)) : allStudents;
+		const escapeCsv = (val) => {
+			let str = String(val ?? "");
+			if (/^[=+\-\t\r]/.test(str)) str = `'${str}`;
+			if (str.includes(",") || str.includes("\"") || str.includes("\n")) return `"${str.replace(/"/g, "\"\"")}"`;
+			return str;
+		};
+		const headers = [
+			"Student ID",
+			"Student Name",
+			"Username",
+			"Email",
+			"Phone",
+			"Gender",
+			"Address",
+			"Enrolled Courses",
+			"Rule Status",
+			"Declaration (သိရှိ လိုက်နာပါမည်)",
+			"Accepted Timestamp"
+		];
+		const rows = targetStudents.map((stu) => {
+			const enrolledCodes = allCourses.filter((c) => c.enrolledStudentIds.includes(stu.id)).map((c) => `${c.code} (${c.batch})`).join("; ");
+			return [
+				stu.id,
+				stu.name,
+				`@${stu.username}`,
+				stu.email,
+				stu.phone || "",
+				stu.gender || "",
+				stu.address || "",
+				enrolledCodes || "None",
+				stu.rulesAccepted ? "Accepted" : "Pending",
+				stu.rulesAccepted ? "သိရှိ လိုက်နာပါမည် (Accepted)" : "စည်းကမ်းချက် လက်ခံရန်ကျန် (Pending)",
+				stu.rulesAccepted ? stu.rulesAcceptedAt || "Accepted" : "—"
+			].map(escapeCsv);
+		});
+		const csvContent = "﻿" + [headers.map(escapeCsv).join(","), ...rows.map((r) => r.join(","))].join("\r\n");
+		const filename = `SwanArh_Rules_Acceptance_Audit_${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.csv`;
+		const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement("a");
+		link.href = url;
+		link.setAttribute("download", filename);
+		document.body.appendChild(link);
+		link.click();
+		document.body.removeChild(link);
+		URL.revokeObjectURL(url);
+		return {
+			success: true,
+			filename,
+			acceptedCount: allStudents.filter((s) => Boolean(s.rulesAccepted)).length,
+			totalStudents: allStudents.length
 		};
 	}
 	static getNotifications(userId) {
@@ -39275,34 +39334,41 @@ var PWAInstallButton = ({ variant = "navbar" }) => {
 		})
 	}), document.body) : null;
 	if (variant === "login-device-card") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-emerald-50/90 via-white to-emerald-50/60 dark:from-emerald-950/40 dark:via-slate-900 dark:to-slate-900 border border-emerald-200/90 dark:border-emerald-800/70 shadow-sm",
+		className: "neu-raised p-4 sm:p-5 rounded-3xl transition-all duration-200",
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "flex flex-col sm:flex-row sm:items-center justify-between gap-3.5",
+			className: "flex flex-col sm:flex-row sm:items-center justify-between gap-4",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "flex items-center gap-3 min-w-0",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
-					src: OFFICIAL_ACADEMY_LOGO,
-					alt: "SwanArh Classroom App Icon",
-					className: "w-12 h-12 rounded-xl shadow-xs border border-slate-200/90 dark:border-slate-700 bg-white shrink-0 object-contain"
+				className: "flex items-center gap-3.5 min-w-0",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "neu-inset-sm p-1.5 rounded-2xl shrink-0",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+						src: OFFICIAL_ACADEMY_LOGO,
+						alt: "SwanArh Classroom App Icon",
+						className: "w-11 h-11 rounded-xl bg-white object-contain"
+					})
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "min-w-0",
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "flex items-center gap-1.5 flex-wrap",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-								className: "inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-900/70 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DeviceIcon, { className: "w-3 h-3" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: deviceLabel })]
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "text-[10px] font-semibold text-emerald-700 dark:text-emerald-400",
-								children: isInstallable ? "1-Click Auto Install Ready" : "Official Native App"
-							})]
+							className: "flex items-center gap-2 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "inline-flex items-center gap-1",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DeviceIcon, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: deviceLabel })]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									"aria-hidden": "true",
+									children: "·"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: isInstallable ? "1-Click Auto Install Ready" : "Official Native App" })
+							]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate mt-0.5",
+							className: "text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white truncate mt-0.5",
 							children: "SwanArh Classroom"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "text-[11px] text-slate-600 dark:text-slate-400 leading-snug",
+							className: "text-[11px] text-slate-600 dark:text-slate-400 leading-snug mt-0.5",
 							children: "Install ကိုနှိပ်၍ SwanArh Classroom App Icon နှင့် Name ကို Home Screen ပေါ်သို့ တိုက်ရိုက်သွင်းယူပါ"
 						})
 					]
@@ -39313,7 +39379,7 @@ var PWAInstallButton = ({ variant = "navbar" }) => {
 					type: "button",
 					disabled: isInstalling,
 					onClick: handleInstallClick,
-					className: "w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-bold shadow-xs transition-all cursor-pointer whitespace-nowrap",
+					className: "neu-btn-emerald w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl disabled:opacity-60 text-white text-xs font-bold cursor-pointer whitespace-nowrap",
 					children: isInstalling ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LoaderCircle, { className: "w-3.5 h-3.5 animate-spin shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Installing..." })] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Download, { className: "w-3.5 h-3.5 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
 						"Install App (",
 						deviceLabel,
@@ -39344,7 +39410,7 @@ var PWAInstallButton = ({ variant = "navbar" }) => {
 		type: "button",
 		disabled: isInstalling,
 		onClick: handleInstallClick,
-		className: "flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap",
+		className: variant === "login" ? "neu-btn-emerald flex items-center gap-1.5 px-3.5 py-2 rounded-xl disabled:opacity-60 text-white text-xs font-bold cursor-pointer whitespace-nowrap" : "flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap",
 		title: `Install SwanArh Classroom on ${deviceLabel}`,
 		children: [isInstalling ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LoaderCircle, { className: "w-3.5 h-3.5 animate-spin shrink-0" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Download, { className: "w-3.5 h-3.5 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: variant === "navbar" ? "hidden sm:inline" : "",
@@ -39398,59 +39464,78 @@ var LoginView = ({ onLoginSuccess, theme, onToggleTheme }) => {
 		}
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col justify-between transition-colors duration-200",
+		className: "min-h-screen neu-canvas text-slate-900 dark:text-slate-100 flex flex-col justify-between transition-colors duration-300 selection:bg-emerald-500/20",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("header", {
-				className: "sticky top-0 z-30 w-full border-b border-slate-200/80 dark:border-slate-800/80 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md",
+				className: "sticky top-0 z-30 w-full px-3 sm:px-6 pt-3",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "max-w-7xl mx-auto px-4 sm:px-8 h-16 flex items-center justify-between gap-3",
+					className: "max-w-7xl mx-auto neu-raised rounded-2xl px-4 sm:px-6 h-16 flex items-center justify-between gap-3",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex items-center gap-2.5 sm:gap-3 min-w-0",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AcademyLogo, { size: "sm" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex items-center gap-3 min-w-0",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "neu-inset-sm p-1.5 rounded-xl shrink-0",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AcademyLogo, { size: "sm" })
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "truncate",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "text-sm sm:text-lg font-bold tracking-tight text-slate-900 dark:text-white block leading-tight truncate",
+								className: "text-sm sm:text-base font-extrabold tracking-tight text-slate-900 dark:text-white block leading-tight truncate",
 								children: "SwanArh Classroom"
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "text-[10px] sm:text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold tracking-wide block leading-tight truncate",
-								children: "DR. SI THU AUNG · SWANARH ACADEMY"
+								children: "Dr. Si Thu Aung · Swanarh Academy"
 							})]
 						})]
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex items-center gap-2 shrink-0",
+						className: "flex items-center gap-2.5 shrink-0",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PWAInstallButton, { variant: "login" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							onClick: onToggleTheme,
-							className: "flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 transition-colors cursor-pointer whitespace-nowrap",
+							className: "neu-btn flex items-center gap-1.5 px-3 sm:px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer whitespace-nowrap",
 							title: theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode",
 							children: theme === "dark" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sun, { className: "w-3.5 h-3.5 text-amber-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "hidden sm:inline",
-								children: "Light Mode"
+								children: "Light Surface"
 							})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Moon, { className: "w-3.5 h-3.5 text-slate-600" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "hidden sm:inline",
-								children: "Dark Mode"
+								children: "Dark Surface"
 							})] })
 						})]
 					})]
 				})
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("main", {
-				className: "max-w-6xl w-full mx-auto px-4 sm:px-8 py-6 sm:py-10 my-auto",
+				className: "max-w-6xl w-full mx-auto px-4 sm:px-8 py-8 sm:py-12 my-auto",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-center",
+					className: "grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "lg:col-span-5 flex flex-col items-center lg:items-start text-center lg:text-left space-y-5",
+						className: "lg:col-span-5 flex flex-col items-center lg:items-start text-center lg:text-left space-y-6",
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "p-2.5 rounded-full bg-white shadow-xl border border-slate-200/90 dark:border-slate-700",
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AcademyLogo, { size: "xl" })
+								className: "neu-card p-3.5 rounded-full inline-flex items-center justify-center",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "neu-inset p-2.5 rounded-full inline-flex items-center justify-center",
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+										className: "rounded-full bg-white p-1.5 shadow-xs",
+										children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AcademyLogo, { size: "xl" })
+									})
+								})
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "space-y-2.5",
+								className: "space-y-3",
 								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-										className: "text-xs font-bold tracking-widest uppercase text-rose-600 dark:text-rose-400",
-										children: "DR. SI THU AUNG"
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "flex items-center justify-center lg:justify-start gap-2 text-xs font-bold tracking-wide text-rose-600 dark:text-rose-400",
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Dr. Si Thu Aung" }),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												"aria-hidden": "true",
+												children: "·"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "text-emerald-700 dark:text-emerald-400",
+												children: "Official Digital Campus"
+											})
+										]
 									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", {
 										className: "text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-tight",
@@ -39458,174 +39543,185 @@ var LoginView = ({ onLoginSuccess, theme, onToggleTheme }) => {
 									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 										className: "text-sm text-slate-600 dark:text-slate-300 leading-relaxed max-w-md",
-										children: "ခေတ်မီ သင်ကြားရေးနှင့် ပညာရေးစီမံခန့်ခွဲမှုစနစ် — သင်ခန်းစာများ၊ ဗီဒီယိုပို့ချချက်များ၊ အိမ်စာနှင့် စာမေးပွဲများကို တစ်နေရာတည်းတွင် လုံခြုံစွာ သင်ယူနိုင်သော Digital Classroom Platform။"
+										children: "ခေတ်မီ သင်ကြားရေးနှင့် ပညာရေးစီမံခန့်ခွဲမှုစနစ် — သင်ခန်းစာများ၊ ဗီဒီယိုပို့ချချက်များနှင့် သင်တန်းတက်ရောက်မှုမှတ်တမ်းများကို တစ်နေရာတည်းတွင် လုံခြုံစွာ သင်ယူနိုင်သော Digital Classroom Platform။"
 									})
 								]
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "w-full max-w-md space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800 text-left",
+								className: "w-full max-w-md space-y-3.5 text-left",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "flex items-start gap-3",
+									className: "neu-raised p-4 rounded-2xl flex items-start gap-3.5",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-										className: "p-2 rounded-lg bg-emerald-100/80 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-400 shrink-0 mt-0.5",
+										className: "neu-inset-sm p-2.5 rounded-xl text-emerald-700 dark:text-emerald-400 shrink-0 mt-0.5",
 										children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BookOpen, { className: "w-4 h-4" })
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-										className: "text-xs font-bold text-slate-900 dark:text-slate-100",
+										className: "text-xs font-extrabold text-slate-900 dark:text-slate-100",
 										children: "Authorized Student Enrollment"
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-										className: "text-xs text-slate-500 dark:text-slate-400 mt-0.5",
+										className: "text-xs text-slate-600 dark:text-slate-400 mt-1 leading-relaxed",
 										children: "သင်တန်းသား အကောင့်သစ်များကို Admin နှင့် Co-Admin ဆရာများကသာ သင်တန်းအပ်နှံပေးရင်း တစ်ခါတည်း အကောင့်ဖွင့်ပေးသည့် လုံခြုံသောစနစ် ဖြစ်ပါသည်။"
 									})] })]
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "flex items-start gap-3",
+									className: "neu-raised p-4 rounded-2xl flex items-start gap-3.5",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-										className: "p-2 rounded-lg bg-amber-100/80 dark:bg-amber-950/80 text-amber-700 dark:text-amber-400 shrink-0 mt-0.5",
+										className: "neu-inset-sm p-2.5 rounded-xl text-amber-600 dark:text-amber-400 shrink-0 mt-0.5",
 										children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Award, { className: "w-4 h-4" })
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-										className: "text-xs font-bold text-slate-900 dark:text-slate-100",
-										children: "Verified Academic Certificates & Assessments"
+										className: "text-xs font-extrabold text-slate-900 dark:text-slate-100",
+										children: "Verified Academic Certificates & Attendance"
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-										className: "text-xs text-slate-500 dark:text-slate-400 mt-0.5",
-										children: "အိမ်စာနှင့် စာမေးပွဲ အမှတ်စာရင်းများအလိုက် အသိအမှတ်ပြု သင်တန်းဆင်းလက်မှတ် ရယူနိုင်ပါသည်။"
+										className: "text-xs text-slate-600 dark:text-slate-400 mt-1 leading-relaxed",
+										children: "သင်တန်းတက်ရောက်မှု (Attendance) နှင့် သင်ယူမှုမှတ်တမ်းများအလိုက် အသိအမှတ်ပြု သင်တန်းဆင်းလက်မှတ် ရယူနိုင်ပါသည်။"
 									})] })]
 								})]
 							})
 						]
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "lg:col-span-7 w-full max-w-xl mx-auto space-y-4",
+						className: "lg:col-span-7 w-full max-w-xl mx-auto space-y-5",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PWAInstallButton, { variant: "login-device-card" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200/90 dark:border-slate-800 overflow-hidden transition-colors",
+							className: "neu-card rounded-3xl p-6 sm:p-8 space-y-6 transition-all duration-300",
 							children: [
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-850 flex items-center justify-between",
+									className: "flex items-center justify-between gap-3",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "flex items-center gap-2",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Lock, { className: "w-4 h-4 text-emerald-600 dark:text-emerald-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "text-xs sm:text-sm font-bold text-slate-900 dark:text-white",
+										className: "flex items-center gap-3",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+											className: "neu-inset-sm p-2.5 rounded-2xl text-emerald-600 dark:text-emerald-400",
+											children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Lock, { className: "w-4 h-4" })
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+											className: "text-sm sm:text-base font-extrabold text-slate-900 dark:text-white leading-tight",
 											children: "Account Sign In (အကောင့်ဝင်ရန်)"
-										})]
-									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "text-[11px] font-medium text-slate-500 dark:text-slate-400",
-										children: "Authorized Access Only"
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "text-[11px] font-medium text-slate-500 dark:text-slate-400",
+											children: "Swanarh Academy · Authorized Access Only"
+										})] })]
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+										className: "neu-inset-sm px-3 py-1.5 rounded-xl text-[11px] font-mono font-semibold text-emerald-700 dark:text-emerald-400",
+										children: activeRole === "admin" ? "Admin" : activeRole === "co_admin" ? "Co-Admin" : "Student"
 									})]
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "grid grid-cols-3 p-1.5 bg-slate-100/90 dark:bg-slate-800/90 border-b border-slate-200 dark:border-slate-800",
+									className: "neu-inset p-1.5 rounded-2xl grid grid-cols-3 gap-1.5",
 									children: [
 										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 											type: "button",
 											onClick: () => handleSwitchTab("student"),
-											className: `flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${activeRole === "student" ? "bg-white dark:bg-slate-900 text-emerald-800 dark:text-emerald-300 shadow-xs" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
-											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GraduationCap, { className: "w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Student" })]
+											className: `flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${activeRole === "student" ? "neu-raised-sm text-emerald-800 dark:text-emerald-300" : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GraduationCap, { className: `w-3.5 h-3.5 ${activeRole === "student" ? "text-emerald-600 dark:text-emerald-400" : "text-slate-400"}` }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Student" })]
 										}),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 											type: "button",
 											onClick: () => handleSwitchTab("admin"),
-											className: `flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${activeRole === "admin" ? "bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-300 shadow-xs" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
-											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(School, { className: "w-3.5 h-3.5 text-rose-600 dark:text-rose-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Admin" })]
+											className: `flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${activeRole === "admin" ? "neu-raised-sm text-rose-700 dark:text-rose-300" : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(School, { className: `w-3.5 h-3.5 ${activeRole === "admin" ? "text-rose-600 dark:text-rose-400" : "text-slate-400"}` }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Admin" })]
 										}),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 											type: "button",
 											onClick: () => handleSwitchTab("co_admin"),
-											className: `flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${activeRole === "co_admin" ? "bg-white dark:bg-slate-900 text-amber-800 dark:text-amber-300 shadow-xs" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
-											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Users, { className: "w-3.5 h-3.5 text-amber-600 dark:text-amber-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Co-Admin" })]
+											className: `flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${activeRole === "co_admin" ? "neu-raised-sm text-amber-800 dark:text-amber-300" : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Users, { className: `w-3.5 h-3.5 ${activeRole === "co_admin" ? "text-amber-600 dark:text-amber-400" : "text-slate-400"}` }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Co-Admin" })]
 										})
 									]
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "p-6 sm:p-7 space-y-4",
+									className: "space-y-1",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+										className: "text-base sm:text-lg font-extrabold text-slate-900 dark:text-slate-100",
+										children: activeRole === "admin" ? "Administrator Sign In (ဆရာ / အက်ဒမင်)" : activeRole === "co_admin" ? "Co-Administrator Sign In (တွဲဖက်ဆရာ)" : "Student Account Sign In (သင်တန်းသား ဝင်ရန်)"
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+										className: "text-xs text-slate-600 dark:text-slate-400 leading-relaxed",
+										children: activeRole === "admin" ? "သင်တန်းများ၊ သင်ခန်းစာများနှင့် ကျောင်းသားအကောင့် အသစ်များကို စီမံခန့်ခွဲရန်" : activeRole === "co_admin" ? "ကျောင်းသားအသစ် ထည့်သွင်းခြင်း၊ သင်ခန်းစာ Post တင်ခြင်းနှင့် Attendance စီမံရန်" : "သင်တန်းမှ ထုတ်ပေးထားသော Username နှင့် Password ကို အသုံးပြု၍ ဝင်ရောက်ပါ"
+									})]
+								}),
+								errorMessage && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "neu-inset flex items-start gap-2.5 p-3.5 rounded-2xl text-rose-700 dark:text-rose-300 text-xs font-medium",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleAlert, { className: "w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+										className: "leading-snug",
+										children: errorMessage
+									})]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+									onSubmit: handleSignInSubmit,
+									className: "space-y-5",
 									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "text-xs font-mono font-semibold text-emerald-700 dark:text-emerald-400 block",
-												children: activeRole === "admin" ? "Swanarh Academy · Administrator Portal" : activeRole === "co_admin" ? "Swanarh Academy · Co-Administrator Portal" : "Swanarh Academy · Student Portal"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-												className: "text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 mt-1",
-												children: activeRole === "admin" ? "Administrator Sign In (ဆရာ / အက်ဒမင်)" : activeRole === "co_admin" ? "Co-Administrator Sign In (တွဲဖက်ဆရာ)" : "Student Account Sign In (သင်တန်းသား ဝင်ရန်)"
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-												className: "text-xs text-slate-500 dark:text-slate-400 mt-0.5",
-												children: activeRole === "admin" ? "သင်တန်းများ၊ သင်ခန်းစာများနှင့် ကျောင်းသားအကောင့် အသစ်များကို စီမံခန့်ခွဲရန်" : activeRole === "co_admin" ? "ကျောင်းသားအသစ် ထည့်သွင်းခြင်း၊ သင်ခန်းစာ Post တင်ခြင်းနှင့် အိမ်စာ အမှတ်ပေးရန်" : "သင်တန်းမှ ထုတ်ပေးထားသော Username နှင့် Password ကို အသုံးပြု၍ ဝင်ရောက်ပါ"
-											})
-										] }),
-										errorMessage && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-											className: "flex items-start gap-2.5 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 text-rose-800 dark:text-rose-300 text-xs",
-											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleAlert, { className: "w-4 h-4 text-rose-600 shrink-0 mt-0.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-												className: "leading-snug",
-												children: errorMessage
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+											className: "space-y-2",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+												className: "block text-xs font-bold text-slate-700 dark:text-slate-300 pl-1",
+												children: activeRole === "student" ? "Username သို့မဟုတ် Email" : "Admin / Co-Admin Username သို့မဟုတ် Email"
+											}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+												className: "relative flex items-center",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+													className: "absolute left-3.5 pointer-events-none text-slate-400 dark:text-slate-500",
+													children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(User, { className: "w-4 h-4" })
+												}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+													type: "text",
+													value: identifier,
+													onChange: (e) => setIdentifier(e.target.value),
+													placeholder: activeRole === "student" ? "Enter your student username or email" : "Enter administrator username or email",
+													className: "neu-input w-full pl-10 pr-4 py-3.5 text-xs sm:text-sm rounded-2xl text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 font-mono",
+													required: true
+												})]
 											})]
 										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
-											onSubmit: handleSignInSubmit,
-											className: "space-y-4",
-											children: [
-												/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
-													className: "block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1",
-													children: activeRole === "student" ? "Username သို့မဟုတ် Email" : "Admin / Co-Admin Username သို့မဟုတ် Email"
-												}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-													className: "relative",
-													children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(User, { className: "w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-														type: "text",
-														value: identifier,
-														onChange: (e) => setIdentifier(e.target.value),
-														placeholder: activeRole === "student" ? "Enter your student username or email" : "Enter administrator username or email",
-														className: "w-full pl-9 pr-3 py-2.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-hidden focus:border-emerald-600 font-mono",
-														required: true
-													})]
-												})] }),
-												/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
-													className: "block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1",
-													children: "Password (လျှို့ဝှက်နံပါတ်)"
-												}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-													className: "relative",
-													children: [
-														/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Lock, { className: "w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" }),
-														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-															type: showPassword ? "text" : "password",
-															value: password,
-															onChange: (e) => setPassword(e.target.value),
-															placeholder: "Enter password...",
-															className: "w-full pl-9 pr-9 py-2.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-hidden focus:border-emerald-600 font-mono",
-															required: true
-														}),
-														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-															type: "button",
-															onClick: () => setShowPassword(!showPassword),
-															className: "absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors cursor-pointer",
-															children: showPassword ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(EyeOff, { className: "w-4 h-4" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Eye, { className: "w-4 h-4" })
-														})
-													]
-												})] }),
-												/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-													type: "submit",
-													disabled: isLoading,
-													className: "w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl shadow-xs transition-all hover:shadow-sm cursor-pointer disabled:opacity-50",
-													children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: isLoading ? "Authenticating..." : "Sign In to Swanarh Academy" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ArrowRight, { className: "w-4 h-4" })]
-												})
-											]
-										}),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-											className: "p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/80 text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed",
-											children: [
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-													className: "font-semibold text-slate-900 dark:text-white",
-													children: "အကောင့်သစ်ဖွင့်ခြင်း သတ်မှတ်ချက်: "
-												}),
-												"ကျောင်းသားကိုယ်တိုင် အကောင့်သစ် ဖွင့်ခွင့်မရှိပါ။ ",
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Admin" }),
-												" နှင့် ",
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Co-Admin" }),
-												" ဆရာများကသာ ကျောင်းသားအသစ် စာရင်းသွင်းပေးရင်း တစ်ခါတည်း အကောင့်နှင့် သင်တန်းများ သတ်မှတ်ပေးပါသည်။"
-											]
+											className: "space-y-2",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+												className: "block text-xs font-bold text-slate-700 dark:text-slate-300 pl-1",
+												children: "Password (လျှို့ဝှက်နံပါတ်)"
+											}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+												className: "relative flex items-center",
+												children: [
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+														className: "absolute left-3.5 pointer-events-none text-slate-400 dark:text-slate-500",
+														children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Lock, { className: "w-4 h-4" })
+													}),
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+														type: showPassword ? "text" : "password",
+														value: password,
+														onChange: (e) => setPassword(e.target.value),
+														placeholder: "Enter password...",
+														className: "neu-input w-full pl-10 pr-12 py-3.5 text-xs sm:text-sm rounded-2xl text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 font-mono",
+														required: true
+													}),
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+														type: "button",
+														onClick: () => setShowPassword(!showPassword),
+														className: "neu-btn absolute right-2 p-2 rounded-xl text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 cursor-pointer",
+														"aria-label": showPassword ? "Hide password" : "Show password",
+														children: showPassword ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(EyeOff, { className: "w-3.5 h-3.5" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Eye, { className: "w-3.5 h-3.5" })
+													})
+												]
+											})]
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+											type: "submit",
+											disabled: isLoading,
+											className: "neu-btn-emerald w-full flex items-center justify-center gap-2 py-3.5 px-5 text-white text-xs sm:text-sm font-extrabold rounded-2xl cursor-pointer disabled:opacity-50",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: isLoading ? "Authenticating..." : "Sign In to Swanarh Academy" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ArrowRight, { className: "w-4 h-4" })]
 										})
 									]
 								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "neu-inset p-4 rounded-2xl text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+											className: "font-bold text-slate-900 dark:text-white",
+											children: ["အကောင့်သစ်ဖွင့်ခြင်း သတ်မှတ်ချက်:", " "]
+										}),
+										"ကျောင်းသားကိုယ်တိုင် အကောင့်သစ် ဖွင့်ခွင့်မရှိပါ။ ",
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Admin" }),
+										" နှင့်",
+										" ",
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Co-Admin" }),
+										" ဆရာများကသာ ကျောင်းသားအသစ် စာရင်းသွင်းပေးရင်း တစ်ခါတည်း အကောင့်နှင့် သင်တန်းများ သတ်မှတ်ပေးပါသည်။"
+									]
+								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-									className: "p-3 bg-slate-50 dark:bg-slate-800/60 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400",
+									className: "pt-2 flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400",
 									children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "flex items-center gap-1.5",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldCheck, { className: "w-4 h-4 text-emerald-600 dark:text-emerald-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Protected Classroom Environment · Swanarh Academy" })]
+										className: "flex items-center gap-1.5 font-medium",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldCheck, { className: "w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Protected Classroom Environment · Swanarh Academy" })]
 									})
 								})
 							]
@@ -39634,7 +39730,7 @@ var LoginView = ({ onLoginSuccess, theme, onToggleTheme }) => {
 				})
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("footer", {
-				className: "text-center text-xs text-slate-400 dark:text-slate-500 py-4 border-t border-slate-200/60 dark:border-slate-800/60",
+				className: "text-center text-xs text-slate-500 dark:text-slate-400 py-5",
 				children: "Dr. Si Thu Aung · Swanarh Academy · Classroom OS Learning Platform"
 			})
 		]
@@ -40102,27 +40198,30 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 		} else setPwdError(res.error || "စကားဝှက် ပြောင်းလဲရာတွင် အမှားဖြစ်ပေါ်ခဲ့ပါသည်။");
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
-		className: "sticky top-0 z-40 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 transition-colors duration-200",
+		className: "sticky top-0 z-40 w-full px-3 sm:px-6 pt-3",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "max-w-7xl mx-auto px-3 sm:px-6 h-15 sm:h-16 flex items-center justify-between gap-3 sm:gap-6",
+				className: "max-w-7xl mx-auto neu-raised rounded-2xl px-3.5 sm:px-6 h-16 flex items-center justify-between gap-3 sm:gap-6",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex items-center gap-2 sm:gap-3 shrink-0",
+						className: "flex items-center gap-2.5 sm:gap-3 shrink-0",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 							onClick: () => {
 								onNavigateHome();
 								setIsMobileMenuOpen(false);
 							},
-							className: "text-base sm:text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer text-left flex items-center gap-2",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AcademyLogo, { size: "sm" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "SwanArh Classroom" })]
+							className: "text-base sm:text-lg font-extrabold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer text-left flex items-center gap-2.5",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "neu-inset-sm p-1.5 rounded-xl shrink-0",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AcademyLogo, { size: "sm" })
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "SwanArh Classroom" })]
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "text-[10px] sm:text-xs font-medium text-slate-500 dark:text-slate-400 hidden xs:inline-block",
+							className: "text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 hidden xs:inline-block",
 							children: ["· ", currentUser.role === "admin" ? "Admin (ဆရာ)" : currentUser.role === "co_admin" ? "Co-Admin (တွဲဖက်)" : "Student (ကျောင်းသား)"]
 						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
-						className: "hidden lg:flex items-center gap-5 xl:gap-6 text-sm font-medium text-slate-600 dark:text-slate-300",
+						className: "hidden lg:flex items-center gap-5 xl:gap-6 text-xs sm:text-sm font-semibold text-slate-600 dark:text-slate-300",
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								onClick: onNavigateHome,
@@ -40131,13 +40230,13 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 							}),
 							onOpenRules && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 								onClick: onOpenRules,
-								className: "text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1",
+								className: "text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollText, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "စည်းကမ်းချက်များ" })]
 							}),
 							(currentUser.role === "admin" || currentUser.role === "co_admin") && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 								onOpenStudentDirectory && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 									onClick: onOpenStudentDirectory,
-									className: "text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1",
+									className: "text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Users, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Manage Users" })]
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -40154,16 +40253,16 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 						]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex items-center gap-1.5 sm:gap-2.5 shrink-0",
+						className: "flex items-center gap-2 sm:gap-2.5 shrink-0",
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PWAInstallButton, { variant: "navbar" }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								onClick: onToggleTheme,
-								className: "p-2 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer",
+								className: "neu-btn p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl cursor-pointer",
 								title: theme === "dark" ? "Switch to Light Mode (အလင်းရောင်)" : "Switch to Dark Mode (အမှောင်ရောင်)",
 								"aria-label": "Toggle color mode",
-								children: theme === "dark" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sun, { className: "w-4.5 h-4.5 sm:w-5 sm:h-5 text-amber-400 animate-in spin-in-90 duration-200" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Moon, { className: "w-4.5 h-4.5 sm:w-5 sm:h-5 text-slate-600 animate-in spin-in-90 duration-200" })
+								children: theme === "dark" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sun, { className: "w-4 h-4 sm:w-4.5 sm:h-4.5 text-amber-400 animate-in spin-in-90 duration-200" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Moon, { className: "w-4 h-4 sm:w-4.5 sm:h-4.5 text-slate-600 animate-in spin-in-90 duration-200" })
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "relative",
@@ -40172,15 +40271,15 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 										setShowNotifications(!showNotifications);
 										setShowUserDropdown(false);
 									},
-									className: "p-2 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors relative cursor-pointer",
+									className: "neu-btn p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl relative cursor-pointer",
 									"aria-label": "View notifications",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bell, { className: "w-4.5 h-4.5 sm:w-5 sm:h-5" }), unreadCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500 animate-pulse" })]
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bell, { className: "w-4 h-4 sm:w-4.5 sm:h-4.5" }), unreadCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500 animate-pulse" })]
 								}), showNotifications && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "absolute right-0 mt-2 w-76 sm:w-80 bg-white dark:bg-slate-900 rounded-xl shadow-xl border border-slate-200 dark:border-slate-800 p-3 z-50",
+									className: "neu-card absolute right-0 mt-3 w-76 sm:w-80 rounded-2xl p-4 z-50",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800",
+										className: "flex items-center justify-between pb-2.5 border-b border-slate-200/60 dark:border-slate-800",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-											className: "text-xs font-semibold text-slate-900 dark:text-slate-100",
+											className: "text-xs font-extrabold text-slate-900 dark:text-slate-100",
 											children: [
 												"Notifications (",
 												unreadCount,
@@ -40188,19 +40287,19 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 											]
 										}), unreadCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 											onClick: handleMarkNotificationsRead,
-											className: "text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer",
+											className: "text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer",
 											children: "Mark all read"
 										})]
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-										className: "divide-y divide-slate-100 dark:divide-slate-800 max-h-72 overflow-y-auto mt-2",
+										className: "space-y-2 max-h-72 overflow-y-auto mt-2.5",
 										children: notifications.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-											className: "p-4 text-center text-xs text-slate-400",
+											className: "neu-inset-sm p-4 rounded-xl text-center text-xs text-slate-500 dark:text-slate-400",
 											children: "No notifications at this time"
 										}) : notifications.map((notif) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-											className: `py-2 px-1 text-xs ${!notif.isRead ? "bg-indigo-50/50 dark:bg-indigo-950/30 rounded" : ""}`,
+											className: `p-2.5 rounded-xl text-xs ${!notif.isRead ? "neu-inset-sm" : ""}`,
 											children: [
 												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-													className: "font-semibold text-slate-900 dark:text-slate-100",
+													className: "font-bold text-slate-900 dark:text-slate-100",
 													children: notif.title
 												}),
 												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -40223,18 +40322,18 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 										setShowUserDropdown(!showUserDropdown);
 										setShowNotifications(false);
 									},
-									className: "flex items-center gap-1.5 sm:gap-2 p-1 sm:p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer",
+									className: "neu-btn flex items-center gap-2 p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl cursor-pointer",
 									children: [
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
 											src: currentUser.avatar,
 											alt: currentUser.name,
 											referrerPolicy: "no-referrer",
-											className: "w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover shrink-0 ring-1 ring-slate-200 dark:ring-slate-700"
+											className: "w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover shrink-0 ring-2 ring-white/80 dark:ring-slate-700"
 										}),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 											className: "hidden sm:block text-left pr-1 max-w-[150px] md:max-w-[190px]",
 											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-												className: "text-xs font-semibold text-slate-900 dark:text-slate-100 truncate flex items-center gap-1",
+												className: "text-xs font-bold text-slate-900 dark:text-slate-100 truncate flex items-center gap-1",
 												children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 													className: "truncate",
 													children: currentUser.name
@@ -40250,19 +40349,19 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChevronDown, { className: "w-3.5 h-3.5 text-slate-400 shrink-0" })
 									]
 								}), showUserDropdown && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "absolute right-0 mt-2 w-72 sm:w-80 bg-white dark:bg-slate-900 rounded-xl shadow-xl border border-slate-200 dark:border-slate-800 p-2 z-50",
+									className: "neu-card absolute right-0 mt-3 w-72 sm:w-80 rounded-2xl p-3 z-50 space-y-2",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "px-3 py-2.5 border-b border-slate-100 dark:border-slate-800 flex items-center gap-2.5",
+										className: "neu-inset-sm p-3 rounded-xl flex items-center gap-3",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
 											src: currentUser.avatar,
 											alt: currentUser.name,
 											referrerPolicy: "no-referrer",
-											className: "w-9 h-9 rounded-full object-cover shrink-0 ring-1 ring-slate-200 dark:ring-slate-700"
+											className: "w-10 h-10 rounded-full object-cover shrink-0 ring-2 ring-white/80 dark:ring-slate-700"
 										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 											className: "min-w-0 flex-1",
 											children: [
 												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-													className: "text-xs font-bold text-slate-900 dark:text-slate-100 truncate",
+													className: "text-xs font-extrabold text-slate-900 dark:text-slate-100 truncate",
 													children: currentUser.name
 												}),
 												/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -40270,7 +40369,7 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 													children: ["@", currentUser.username]
 												}),
 												currentUser.role === "student" && currentUser.rulesAccepted && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-													className: "mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-[10px] font-bold",
+													className: "mt-1 inline-flex items-center gap-1 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold",
 													children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleCheck, { className: "w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "သိရှိ လိုက်နာပါမည်" })]
 												}),
 												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -40280,14 +40379,14 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 											]
 										})]
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "pt-1.5 border-t border-slate-100 dark:border-slate-800 space-y-0.5",
+										className: "space-y-1",
 										children: [
 											onOpenRules && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 												onClick: () => {
 													setShowUserDropdown(false);
 													onOpenRules();
 												},
-												className: "w-full flex items-center gap-2 p-2 rounded-lg text-xs text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors cursor-pointer font-semibold",
+												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-emerald-700 dark:text-emerald-300 hover:bg-white/60 dark:hover:bg-slate-800/70 transition-colors cursor-pointer font-bold",
 												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollText, { className: "w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "သင်တန်းစည်းကမ်းချက်များ (Academy Rules)" })]
 											}),
 											(currentUser.role === "admin" || currentUser.role === "co_admin") && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
@@ -40295,7 +40394,7 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 													setShowUserDropdown(false);
 													setShowProfilePictureModal(true);
 												},
-												className: "w-full flex items-center gap-2 p-2 rounded-lg text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer font-medium",
+												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-slate-700 dark:text-slate-200 hover:bg-white/60 dark:hover:bg-slate-800/70 transition-colors cursor-pointer font-semibold",
 												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Camera, { className: "w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Change Profile Picture (ဓာတ်ပုံ ပြောင်းမည်)" })]
 											}),
 											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
@@ -40305,7 +40404,7 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 													setPwdError(null);
 													setPwdSuccess(null);
 												},
-												className: "w-full flex items-center gap-2 p-2 rounded-lg text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer font-medium",
+												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-slate-700 dark:text-slate-200 hover:bg-white/60 dark:hover:bg-slate-800/70 transition-colors cursor-pointer font-semibold",
 												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Key, { className: "w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Change Password (စကားဝှက် ပြောင်းမည်)" })]
 											}),
 											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
@@ -40313,7 +40412,7 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 													setShowUserDropdown(false);
 													onLogout();
 												},
-												className: "w-full flex items-center gap-2 p-2 rounded-lg text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer font-medium",
+												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50/70 dark:hover:bg-rose-950/40 transition-colors cursor-pointer font-bold",
 												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LogOut, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Sign Out (အကောင့်မှ ထွက်ရန်)" })]
 											})
 										]
@@ -40322,7 +40421,7 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								onClick: () => setIsMobileMenuOpen(!isMobileMenuOpen),
-								className: "lg:hidden p-2 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer",
+								className: "lg:hidden neu-btn p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl cursor-pointer",
 								"aria-label": "Toggle navigation menu",
 								children: isMobileMenuOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(X, { className: "w-5 h-5" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Menu, { className: "w-5 h-5" })
 							})
@@ -40331,11 +40430,11 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 				]
 			}),
 			isMobileMenuOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "lg:hidden bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 py-3 space-y-2 shadow-lg animate-in slide-in-from-top-2 duration-150",
+				className: "lg:hidden max-w-7xl mx-auto mt-2 neu-card rounded-2xl px-4 py-3.5 space-y-2.5 animate-in slide-in-from-top-2 duration-150",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 mb-2 flex items-center justify-between",
+					className: "p-3 rounded-xl neu-inset-sm mb-2 flex items-center justify-between",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex items-center gap-2",
+						className: "flex items-center gap-2.5",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
 							src: currentUser.avatar,
 							alt: currentUser.name,
@@ -40344,7 +40443,7 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5 flex-wrap",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: currentUser.name }), currentUser.role === "student" && currentUser.rulesAccepted && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-								className: "inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-[10px] font-bold",
+								className: "inline-flex items-center gap-1 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleCheck, { className: "w-2.5 h-2.5 text-emerald-600 dark:text-emerald-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "သိရှိ လိုက်နာပါမည်" })]
 							})]
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -40562,32 +40661,35 @@ var CourseCard = ({ course, currentUser, progress, onSelectCourse, onRefresh }) 
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		onClick: () => onSelectCourse(course),
-		className: "group bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-xs hover:shadow-md transition-all duration-200 flex flex-col justify-between cursor-pointer",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "relative w-full aspect-[4/1] bg-slate-900 overflow-hidden border-b border-slate-100 dark:border-slate-800",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
-				src: course.bannerImage,
-				alt: course.title,
-				referrerPolicy: "no-referrer",
-				className: "w-full h-full object-cover object-center group-hover:scale-103 transition-transform duration-500"
-			}), isInstructor && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				onClick: (e) => {
-					e.stopPropagation();
-					setShowDeleteConfirm(true);
-				},
-				className: "absolute top-2.5 right-2.5 p-1.5 rounded-lg bg-slate-900/75 hover:bg-rose-600 text-white backdrop-blur-xs transition-colors cursor-pointer shadow-sm",
-				title: "Delete Classroom (အတန်းဖျက်မည်)",
-				"aria-label": "Delete Classroom",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Trash2, { className: "w-3.5 h-3.5" })
-			})]
+		className: "group neu-card-interactive rounded-3xl p-3 sm:p-3.5 flex flex-col justify-between cursor-pointer",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "neu-inset-sm p-1.5 rounded-2xl",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "relative w-full aspect-[4/1] bg-slate-900 rounded-xl overflow-hidden",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+					src: course.bannerImage,
+					alt: course.title,
+					referrerPolicy: "no-referrer",
+					className: "w-full h-full object-cover object-center group-hover:scale-103 transition-transform duration-500"
+				}), isInstructor && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					onClick: (e) => {
+						e.stopPropagation();
+						setShowDeleteConfirm(true);
+					},
+					className: "absolute top-2 right-2 p-1.5 rounded-lg bg-slate-900/75 hover:bg-rose-600 text-white backdrop-blur-xs transition-colors cursor-pointer shadow-sm",
+					title: "Delete Classroom (အတန်းဖျက်မည်)",
+					"aria-label": "Delete Classroom",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Trash2, { className: "w-3.5 h-3.5" })
+				})]
+			})
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "p-4 sm:p-5 space-y-2.5",
+			className: "px-2 sm:px-2.5 pt-4 pb-3 space-y-2.5",
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "flex items-center justify-between gap-2",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex items-center gap-1.5 text-[11px] font-mono font-semibold text-indigo-600 dark:text-indigo-400",
+						className: "flex items-center gap-1.5 text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400",
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: course.code }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -40605,13 +40707,13 @@ var CourseCard = ({ course, currentUser, progress, onSelectCourse, onRefresh }) 
 							e.stopPropagation();
 							setShowDeleteConfirm(true);
 						},
-						className: "inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors cursor-pointer",
+						className: "inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50/70 dark:hover:bg-rose-950/50 transition-colors cursor-pointer",
 						title: "Delete Classroom & SQL Data",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Trash2, { className: "w-3 h-3" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Delete" })]
 					})]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-					className: "text-sm sm:text-base font-bold text-slate-900 dark:text-white leading-snug line-clamp-1 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors",
+					className: "text-sm sm:text-base font-extrabold text-slate-900 dark:text-white leading-snug line-clamp-1 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors",
 					children: course.title
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate",
@@ -40635,27 +40737,27 @@ var CourseCard = ({ course, currentUser, progress, onSelectCourse, onRefresh }) 
 				currentUser.role === "student" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "pt-2",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex items-center justify-between text-[11px] font-mono text-slate-500 dark:text-slate-400 mb-1",
+						className: "flex items-center justify-between text-[11px] font-mono text-slate-500 dark:text-slate-400 mb-1.5",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Attendance Rate" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "font-semibold text-slate-700 dark:text-slate-200",
+							className: "font-bold text-slate-800 dark:text-slate-200",
 							children: [attendancePct, "%"]
 						})]
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "w-full h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden",
+						className: "w-full h-2.5 neu-inset-sm rounded-full p-0.5 overflow-hidden",
 						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "h-full bg-indigo-600 dark:bg-indigo-500 rounded-full transition-all duration-300",
+							className: "h-full bg-gradient-to-r from-indigo-500 to-emerald-500 rounded-full transition-all duration-300",
 							style: { width: `${attendancePct}%` }
 						})
 					})]
 				})
 			]
 		})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "px-4 sm:px-5 py-3 bg-slate-50/80 dark:bg-slate-850 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs",
+			className: "neu-inset-sm px-3.5 py-2.5 rounded-2xl flex items-center justify-between text-xs mt-1",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "text-slate-500 dark:text-slate-400 font-mono",
+				className: "text-slate-500 dark:text-slate-400 font-mono font-medium",
 				children: isInstructor ? `${course.enrolledStudentIds.length} Enrolled Students` : "Access Granted"
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "flex items-center gap-1 font-semibold text-indigo-600 dark:text-indigo-400 group-hover:translate-x-0.5 transition-transform",
+				className: "flex items-center gap-1 font-bold text-indigo-600 dark:text-indigo-400 group-hover:translate-x-0.5 transition-transform",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Enter Classroom" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ArrowRight, { className: "w-3.5 h-3.5" })]
 			})]
 		})]
@@ -42372,9 +42474,9 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "rounded-2xl overflow-hidden shadow-xs border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-900",
+				className: "neu-card rounded-3xl p-3 sm:p-4 overflow-hidden",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "relative w-full aspect-[4/1] bg-slate-900 overflow-hidden group",
+					className: "relative w-full aspect-[4/1] bg-slate-900 rounded-2xl overflow-hidden group neu-inset-sm p-1",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
 						src: course.bannerImage,
 						alt: course.title,
@@ -42383,7 +42485,7 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 							url: course.bannerImage,
 							name: `${course.title} - Header Photo`
 						}),
-						className: "w-full h-full object-cover object-center cursor-zoom-in transition-transform duration-300",
+						className: "w-full h-full object-cover object-center rounded-xl cursor-zoom-in transition-transform duration-300",
 						title: "ပုံအကြီးချဲ့ကြည့်ရန် နှိပ်ပါ (Click to view full header photo)"
 					}), isInstructor && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "absolute top-2.5 right-2.5 sm:top-4 sm:right-4 z-10",
@@ -42399,15 +42501,15 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 						})
 					})]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "p-4 sm:p-5 md:p-6 bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3",
+					className: "pt-4 pb-1 px-2 sm:px-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "space-y-1 min-w-0",
+						className: "space-y-1.5 min-w-0",
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "flex flex-wrap items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs font-mono text-indigo-600 dark:text-indigo-400",
 								children: [
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "font-semibold bg-indigo-50 dark:bg-indigo-950/70 px-2 py-0.5 rounded border border-indigo-200/80 dark:border-indigo-800/60",
+										className: "font-bold neu-inset-sm px-2.5 py-0.5 rounded-lg",
 										children: course.code
 									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "·" }),
@@ -42423,7 +42525,7 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 								]
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", {
-								className: "text-base sm:text-xl md:text-2xl font-bold tracking-tight text-slate-900 dark:text-white leading-snug",
+								className: "text-base sm:text-xl md:text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-snug",
 								children: course.title
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -42440,7 +42542,7 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 									})] }),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "·" }),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "text-amber-600 dark:text-amber-400 font-medium",
+										className: "text-amber-600 dark:text-amber-400 font-semibold",
 										children: [
 											"📌 Pinned: ",
 											pinnedPosts.length,
@@ -42448,7 +42550,7 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 										]
 									}),
 									isInstructor && scheduledPosts.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "·" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "text-indigo-600 dark:text-indigo-400 font-medium",
+										className: "text-indigo-600 dark:text-indigo-400 font-semibold",
 										children: ["⏰ Scheduled: ", scheduledPosts.length]
 									})] })
 								]
@@ -42458,14 +42560,14 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 				})]
 			}),
 			isInstructor && scheduledPosts.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "bg-gradient-to-r from-indigo-500/10 via-purple-500/5 to-transparent dark:from-indigo-950/40 dark:via-purple-950/20 rounded-2xl border border-indigo-200 dark:border-indigo-800/80 p-4 sm:p-5 space-y-3 transition-all",
+				className: "neu-card rounded-3xl p-4 sm:p-5 space-y-3 transition-all",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					onClick: () => setScheduledDrawerOpen(!scheduledDrawerOpen),
 					className: "flex items-center justify-between cursor-pointer select-none",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "flex items-center gap-2.5",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "p-2 rounded-xl bg-indigo-600 text-white shadow-xs",
+							className: "p-2.5 rounded-xl bg-indigo-600 text-white shadow-xs",
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CalendarClock, { className: "w-4 h-4" })
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "flex items-center gap-2",
@@ -42485,13 +42587,13 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 							children: "ဤပို့စ်များကို ကျောင်းသားများ မမြင်တွေ့နိုင်သေးဘဲ သတ်မှတ်ချိန်ရောက်မှ အလိုအလျောက် ပေါ်လာပါမည်။"
 						})] })]
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						className: "p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg",
+						className: "p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl neu-btn",
 						children: scheduledDrawerOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChevronUp, { className: "w-4 h-4" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChevronDown, { className: "w-4 h-4" })
 					})]
 				}), scheduledDrawerOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "space-y-2.5 pt-2 border-t border-indigo-100 dark:border-indigo-900/40",
+					className: "space-y-2.5 pt-2",
 					children: scheduledPosts.map((sp) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 rounded-xl bg-white dark:bg-slate-900 border border-indigo-100 dark:border-indigo-900/50 text-xs shadow-2xs hover:border-indigo-300 dark:hover:border-indigo-700 transition-colors",
+						className: "flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3.5 rounded-2xl neu-inset-sm text-xs transition-colors",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "min-w-0",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -42522,13 +42624,13 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 							children: [
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 									onClick: () => handlePublishNow(sp.id),
-									className: "px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white rounded-lg text-xs font-semibold shadow-2xs flex items-center gap-1 transition-all cursor-pointer",
+									className: "px-3 py-1.5 neu-btn-indigo rounded-xl text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer",
 									title: "Publish immediately to all students",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Send, { className: "w-3 h-3" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Publish Now" })]
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 									onClick: () => setEditingPost(sp),
-									className: "px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg text-xs font-medium transition-colors cursor-pointer flex items-center gap-1",
+									className: "px-2.5 py-1.5 neu-btn text-slate-700 dark:text-slate-300 rounded-xl text-xs font-medium transition-colors cursor-pointer flex items-center gap-1",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PenLine, { className: "w-3 h-3" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Edit" })]
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -42543,13 +42645,13 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 				})]
 			}),
 			pinnedPosts.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "bg-gradient-to-r from-amber-500/10 via-amber-400/5 to-transparent dark:from-amber-950/40 dark:via-amber-950/20 rounded-2xl border border-amber-300/80 dark:border-amber-700/50 p-4 sm:p-5 space-y-3.5",
+				className: "neu-card rounded-3xl p-4 sm:p-5 space-y-3.5",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "flex items-center justify-between",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "flex items-center gap-2.5",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "p-2 rounded-xl bg-amber-500 text-white shadow-xs",
+							className: "p-2.5 rounded-xl bg-amber-500 text-white shadow-xs",
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Pin, { className: "w-4 h-4 fill-white" })
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "flex items-center gap-2",
@@ -42579,7 +42681,7 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3",
 					children: pinnedPosts.map((p, idx) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "bg-white dark:bg-slate-900 rounded-xl p-3.5 border border-amber-200 dark:border-amber-800/60 shadow-2xs flex flex-col justify-between space-y-2 hover:border-amber-400 dark:hover:border-amber-500 transition-colors",
+						className: "neu-inset-sm rounded-2xl p-3.5 flex flex-col justify-between space-y-2 transition-colors",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "flex items-center justify-between gap-1 mb-1.5",
@@ -42604,7 +42706,7 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 								children: renderTextWithLinks(p.content)
 							})
 						] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px]",
+							className: "flex items-center justify-between pt-2 border-t border-slate-200/40 dark:border-slate-700/40 text-[11px]",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "text-slate-400 dark:text-slate-500 text-[10px] truncate max-w-[120px]",
 								children: p.createdAt
@@ -42627,7 +42729,7 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 				})]
 			}),
 			isInstructor && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs hover:shadow-md transition-all overflow-hidden",
+				className: "neu-card rounded-3xl transition-all overflow-hidden",
 				children: !isComposing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "p-3.5 sm:p-4.5 flex items-center justify-between gap-3",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -42741,7 +42843,7 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 							placeholder: "Post Title (သင်ခန်းစာ သို့မဟုတ် ကြေညာချက် ခေါင်းစဉ်)...",
 							value: postTitle,
 							onChange: (e) => setPostTitle(e.target.value),
-							className: "w-full px-3.5 py-2.5 text-xs sm:text-sm font-semibold bg-white dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all",
+							className: "w-full px-4 py-3 text-xs sm:text-sm font-semibold neu-input rounded-2xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 transition-all",
 							required: true
 						}) }),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
@@ -42749,7 +42851,7 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 							placeholder: "Announce something to your class (အတန်းတွင်း ကြေညာချက်၊ သင်ခန်းစာ အကြောင်းအရာ သို့မဟုတ် ညွှန်ကြားချက်များ ရေးသားပါ)...",
 							value: postContent,
 							onChange: (e) => setPostContent(e.target.value),
-							className: "w-full px-3.5 py-3 text-xs sm:text-sm bg-white dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 resize-none transition-all leading-relaxed",
+							className: "w-full px-4 py-3.5 text-xs sm:text-sm neu-input rounded-2xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 resize-none transition-all leading-relaxed",
 							required: true
 						}) }),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -43001,13 +43103,13 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 				})
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "space-y-4 sm:space-y-5",
+				className: "space-y-5 sm:space-y-6",
 				children: posts.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "p-8 text-center bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400",
+					className: "p-8 text-center neu-card rounded-3xl text-slate-500 dark:text-slate-400",
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MessageSquare, { className: "w-8 h-8 mx-auto text-slate-300 dark:text-slate-600 mb-2" }),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "text-sm font-medium text-slate-700 dark:text-slate-300",
+							className: "text-sm font-bold text-slate-700 dark:text-slate-300",
 							children: "No stream posts yet"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -43020,7 +43122,7 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 					const isCommentsOpen = expandedComments[post.id] ?? post.comments.length > 0;
 					const isPostScheduled = post.status === "scheduled";
 					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", {
-						className: `bg-white dark:bg-slate-900 rounded-2xl border ${post.isPinned ? "border-amber-300 dark:border-amber-700/60 ring-1 ring-amber-400/20" : isPostScheduled ? "border-indigo-300 dark:border-indigo-700/60 ring-1 ring-indigo-400/20" : "border-slate-200/90 dark:border-slate-800"} shadow-xs overflow-hidden transition-all hover:shadow-md`,
+						className: `neu-card rounded-3xl ${post.isPinned ? "ring-2 ring-amber-400/40" : isPostScheduled ? "ring-2 ring-indigo-400/40" : ""} overflow-hidden transition-all`,
 						children: [
 							isPostScheduled && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "bg-indigo-50 dark:bg-indigo-950/60 px-4 py-2 border-b border-indigo-100 dark:border-indigo-900/50 flex items-center justify-between text-xs text-indigo-700 dark:text-indigo-300",
@@ -43156,7 +43258,7 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 										const isVideo = att.type === "video";
 										const isSafeMediaUrl = !(!att.url || att.url === "#" || att.url === "#attachment") && /^(https?:|data:image\/|data:audio\/|data:video\/|data:application\/pdf|data:text\/plain|blob:|\/|\.\/)/i.test(att.url.trim());
 										return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-											className: "flex flex-col justify-between p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 text-xs shadow-2xs hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors",
+											className: "flex flex-col justify-between p-3 rounded-2xl neu-inset-sm text-xs transition-colors",
 											children: [
 												isImg && isSafeMediaUrl && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 													onClick: () => setPreviewImage({
@@ -43249,7 +43351,7 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 								})]
 							}),
 							isCommentsOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "bg-slate-50/70 dark:bg-slate-850/70 border-t border-slate-100 dark:border-slate-800 px-3.5 sm:px-5 py-4 space-y-3",
+								className: "neu-inset-sm mx-3.5 sm:mx-5 mb-4 rounded-2xl px-3.5 sm:px-5 py-4 space-y-3",
 								children: [post.comments.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 									className: "space-y-2.5",
 									children: post.comments.map((comm) => {
@@ -43263,16 +43365,16 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 												referrerPolicy: "no-referrer",
 												className: "w-7 h-7 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0 mt-0.5"
 											}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-												className: "flex-1 bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800 shadow-2xs",
+												className: "flex-1 neu-raised-sm p-3 rounded-2xl",
 												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 													className: "flex items-center justify-between gap-2",
 													children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 														className: "flex items-center gap-1.5 flex-wrap",
 														children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-															className: "font-semibold text-slate-900 dark:text-slate-100",
+															className: "font-bold text-slate-900 dark:text-slate-100",
 															children: comm.authorName
 														}), comm.authorRole === "admin" || comm.authorRole === "co_admin" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-															className: "text-[9px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1 rounded",
+															className: "text-[9px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded",
 															children: "Instructor"
 														}) : commentUser?.rulesAccepted && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 															className: "inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700",
@@ -43299,14 +43401,14 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 										}, comm.id);
 									})
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "flex items-center gap-2 pt-1",
+									className: "flex items-center gap-2.5 pt-1",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
 										src: currentUser.avatar,
 										alt: currentUser.name,
 										referrerPolicy: "no-referrer",
-										className: "w-7 h-7 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+										className: "w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "flex-1 flex items-center gap-1.5",
+										className: "flex-1 flex items-center gap-2",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 											type: "text",
 											placeholder: "Add a class comment or question...",
@@ -43318,11 +43420,11 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 											onKeyDown: (e) => {
 												if (e.key === "Enter") handleAddComment(post.id);
 											},
-											className: "flex-1 px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden focus:border-indigo-500"
+											className: "flex-1 px-3.5 py-2.5 text-xs rounded-xl neu-input text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500"
 										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 											type: "button",
 											onClick: () => handleAddComment(post.id),
-											className: "p-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-xs transition-colors cursor-pointer shrink-0",
+											className: "p-2.5 neu-btn-indigo rounded-xl transition-all cursor-pointer shrink-0",
 											title: "Send comment",
 											children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Send, { className: "w-3.5 h-3.5" })
 										})]
@@ -43882,18 +43984,18 @@ var PeopleView = ({ course, currentUser, onRefresh }) => {
 				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-				className: "bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs p-5 sm:p-6 transition-colors",
+				className: "neu-card rounded-3xl p-5 sm:p-6 transition-colors",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800",
+					className: "flex items-center justify-between pb-4 border-b border-slate-200/50 dark:border-slate-800",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-						className: "text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100",
+						className: "text-base sm:text-lg font-extrabold text-slate-900 dark:text-slate-100",
 						children: "Instructors & Faculty"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "text-xs text-indigo-600 dark:text-indigo-400 font-mono",
+						className: "text-xs text-indigo-600 dark:text-indigo-400 font-mono font-bold neu-inset-sm px-2.5 py-1 rounded-lg",
 						children: "Academic Staff"
 					})]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "mt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4",
+					className: "mt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-3.5 rounded-2xl neu-inset-sm",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "flex items-center gap-3",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
@@ -43902,9 +44004,9 @@ var PeopleView = ({ course, currentUser, onRefresh }) => {
 							referrerPolicy: "no-referrer",
 							className: "w-11 h-11 rounded-full object-cover border border-slate-200 dark:border-slate-700"
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "text-sm font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2",
+							className: "text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: course.instructorName }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "text-[10px] font-medium text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded",
+								className: "text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-md",
 								children: "Lead Instructor"
 							})]
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -43913,23 +44015,23 @@ var PeopleView = ({ course, currentUser, onRefresh }) => {
 						})] })]
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
 						href: `mailto:${course.instructorEmail}`,
-						className: "self-start sm:self-auto flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-medium rounded-lg transition-colors",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Mail, { className: "w-3.5 h-3.5 text-slate-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Email" })]
+						className: "self-start sm:self-auto flex items-center gap-1.5 px-3.5 py-2 neu-btn text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-xl transition-all",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Mail, { className: "w-3.5 h-3.5 text-indigo-500" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Email" })]
 					})]
 				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-				className: "bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs p-4 sm:p-6 transition-colors",
+				className: "neu-card rounded-3xl p-4 sm:p-6 transition-colors",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800",
+						className: "flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200/50 dark:border-slate-800",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "flex items-center gap-2",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-								className: "text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100",
+								className: "text-base sm:text-lg font-extrabold text-slate-900 dark:text-slate-100",
 								children: currentUser.role === "admin" || currentUser.role === "co_admin" ? "Enrolled Students (အတန်းတွင်း ကျောင်းသားများ)" : "Classmates & Enrolled Students (အတန်းဖော် ကျောင်းသားများ)"
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-								className: "text-xs font-mono font-medium text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2.5 py-0.5 rounded-full",
+								className: "text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400 neu-inset-sm px-2.5 py-0.5 rounded-full",
 								children: [course.enrolledStudentIds.length, " ဦး"]
 							})]
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -43937,18 +44039,18 @@ var PeopleView = ({ course, currentUser, onRefresh }) => {
 							children: currentUser.role === "admin" || currentUser.role === "co_admin" ? "Instructor / Admin ကွပ်ကဲရေး: ဤအတန်းတွင် စာရင်းဝင်ထားသော ကျောင်းသားများအားလုံးကို ကြည့်ရှုခြင်း၊ ထပ်ထည့်ခြင်းနှင့် ထုတ်ပယ်ခြင်း ပြုလုပ်နိုင်ပါသည်။" : "ဤအတန်းတွင် အတူတကွ တက်ရောက်သင်ယူနေကြသော အတန်းဖော် ကျောင်းသား/သူများ စာရင်း"
 						})] }), (currentUser.role === "admin" || currentUser.role === "co_admin") && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 							onClick: () => setShowAddModal(true),
-							className: "flex items-center justify-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-xs transition-colors cursor-pointer shrink-0",
+							className: "flex items-center justify-center gap-1.5 px-4 py-2.5 neu-btn-indigo text-xs font-bold rounded-xl transition-all cursor-pointer shrink-0",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UserPlus, { className: "w-4 h-4" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "+ Add Student (ကျောင်းသား ထည့်မည်)" })]
 						})]
 					}),
 					course.enrolledStudentIds.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "my-4 relative",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Search, { className: "w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Search, { className: "w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 							type: "text",
 							value: searchFilter,
 							onChange: (e) => setSearchFilter(e.target.value),
 							placeholder: "အတန်းတွင်း ကျောင်းသားအမည် သို့မဟုတ် Username ဖြင့် ရှာဖွေပါ...",
-							className: "w-full pl-8 pr-3 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden focus:border-indigo-500 transition-colors"
+							className: "w-full pl-10 pr-4 py-2.5 text-xs neu-input rounded-2xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 transition-all"
 						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -44205,7 +44307,7 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 				className: "space-y-5",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-xs",
+						className: "neu-card rounded-3xl p-5 sm:p-6",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "flex flex-col md:flex-row md:items-center justify-between gap-4",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -44215,7 +44317,7 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 									children: [
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CalendarCheck, { className: "w-5 h-5 text-indigo-600 dark:text-indigo-400" }),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-											className: "text-base font-bold text-slate-900 dark:text-white",
+											className: "text-base font-extrabold text-slate-900 dark:text-white",
 											children: "My Class Attendance (ကျွန်ုပ်၏ အတန်းတက်ရောက်မှု မှတ်တမ်း)"
 										}),
 										currentUser.rulesAccepted && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
@@ -44251,58 +44353,58 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 										]
 									})]
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: `px-3 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 ${myCertEligible ? "bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300" : "bg-amber-50 dark:bg-amber-950/60 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300"}`,
+									className: `px-3.5 py-2 rounded-2xl neu-inset-sm text-xs font-semibold flex items-center gap-1.5 ${myCertEligible ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"}`,
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Award, { className: "w-4 h-4 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: myCertEligible ? "Certificate Attendance Qualified (≥75%)" : "Needs ≥75% for Certificate" })]
 								})]
 							})]
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "mt-4",
+							className: "mt-5",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "w-full h-2.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden",
+								className: "w-full h-3 neu-inset-sm rounded-full overflow-hidden p-0.5",
 								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 									className: `h-full rounded-full transition-all duration-500 ${myStats.percentage >= 75 ? "bg-emerald-500" : myStats.percentage >= 50 ? "bg-amber-500" : "bg-rose-500"}`,
 									style: { width: `${myStats.percentage}%` }
 								})
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "grid grid-cols-2 sm:grid-cols-4 gap-2.5 mt-4 text-xs",
+								className: "grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 text-xs",
 								children: [
 									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "p-2.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/40 border border-emerald-200/70 dark:border-emerald-900/50",
+										className: "p-3 rounded-2xl neu-inset-sm",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "text-[11px] text-emerald-700 dark:text-emerald-300 block",
+											className: "text-[11px] text-emerald-700 dark:text-emerald-300 font-semibold block",
 											children: "Present (တက်ရောက်)"
 										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "text-base font-bold font-mono text-emerald-900 dark:text-emerald-100",
+											className: "text-base font-extrabold font-mono text-emerald-900 dark:text-emerald-100",
 											children: myStats.presentCount
 										})]
 									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "p-2.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/40 border border-amber-200/70 dark:border-amber-900/50",
+										className: "p-3 rounded-2xl neu-inset-sm",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "text-[11px] text-amber-700 dark:text-amber-300 block",
+											className: "text-[11px] text-amber-700 dark:text-amber-300 font-semibold block",
 											children: "Late (နောက်ကျ)"
 										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "text-base font-bold font-mono text-amber-900 dark:text-amber-100",
+											className: "text-base font-extrabold font-mono text-amber-900 dark:text-amber-100",
 											children: myStats.lateCount
 										})]
 									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "p-2.5 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200/70 dark:border-indigo-900/50",
+										className: "p-3 rounded-2xl neu-inset-sm",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "text-[11px] text-indigo-700 dark:text-indigo-300 block",
+											className: "text-[11px] text-indigo-700 dark:text-indigo-300 font-semibold block",
 											children: "Excused (ခွင့်တိုင်)"
 										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "text-base font-bold font-mono text-indigo-900 dark:text-indigo-100",
+											className: "text-base font-extrabold font-mono text-indigo-900 dark:text-indigo-100",
 											children: myStats.excusedCount
 										})]
 									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "p-2.5 rounded-xl bg-rose-50/70 dark:bg-rose-950/40 border border-rose-200/70 dark:border-rose-900/50",
+										className: "p-3 rounded-2xl neu-inset-sm",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "text-[11px] text-rose-700 dark:text-rose-300 block",
+											className: "text-[11px] text-rose-700 dark:text-rose-300 font-semibold block",
 											children: "Absent (ပျက်ကွက်)"
 										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "text-base font-bold font-mono text-rose-900 dark:text-rose-100",
+											className: "text-base font-extrabold font-mono text-rose-900 dark:text-rose-100",
 											children: myStats.absentCount
 										})]
 									})
@@ -44311,9 +44413,9 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 						})]
 					}),
 					openSessions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "bg-gradient-to-r from-emerald-500/15 via-teal-500/10 to-transparent dark:from-emerald-950/60 dark:via-teal-950/30 rounded-2xl border-2 border-emerald-400/80 dark:border-emerald-700 p-4 sm:p-5 space-y-3 shadow-xs",
+						className: "neu-card rounded-3xl p-4 sm:p-5 space-y-3 ring-2 ring-emerald-400/50",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-bold text-xs sm:text-sm",
+							className: "flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-bold text-xs sm:text-sm",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sparkles, { className: "w-4 h-4 text-emerald-600 dark:text-emerald-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Open Attendance — ယနေ့ အတန်းချိန် တက်ရောက်ကြောင်း နှိပ်ရန်" })]
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "space-y-2.5",
@@ -44321,7 +44423,7 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 								const myRecord = sess.records[currentUser.id];
 								const isAlreadyPresent = myRecord?.status === "present" || myRecord?.status === "late";
 								return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-emerald-200 dark:border-emerald-800/70 shadow-2xs",
+									className: "flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-2xl neu-inset-sm",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 										className: "flex items-center gap-2 flex-wrap",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -44348,7 +44450,7 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 									}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 										type: "button",
 										onClick: () => handleStudentCheckIn(sess.id),
-										className: "px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white text-xs sm:text-sm font-bold shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0",
+										className: "px-4 py-2.5 rounded-xl neu-btn-emerald text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Hand, { className: "w-4 h-4" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Mark Present (တက်ရောက်သည်)" })]
 									})]
 								}, sess.id);
@@ -44356,9 +44458,9 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-xs",
+						className: "neu-card rounded-3xl overflow-hidden",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between",
+							className: "px-5 py-4 border-b border-slate-200/50 dark:border-slate-800 flex items-center justify-between",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 								className: "text-sm font-bold text-slate-900 dark:text-white",
 								children: "Attendance History (အတန်းချိန်အလိုက် တက်ရောက်မှု မှတ်တမ်း)"
@@ -44423,7 +44525,7 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 				className: "space-y-6",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-xs",
+						className: "neu-card rounded-3xl p-5 sm:p-6",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "flex items-center justify-between gap-2 mb-4",
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -44432,7 +44534,7 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 									className: "p-2.5 rounded-xl bg-indigo-600 text-white shadow-xs",
 									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CalendarCheck, { className: "w-5 h-5" })
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-									className: "text-sm sm:text-base font-bold text-slate-900 dark:text-white",
+									className: "text-sm sm:text-base font-extrabold text-slate-900 dark:text-white",
 									children: "Open Daily Attendance (အတန်းချိန် တက်ရောက်မှု ဖွင့်လှစ်ရန်)"
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 									className: "text-xs text-slate-500 dark:text-slate-400",
@@ -44441,31 +44543,31 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 							})
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 							onSubmit: handleCreateSession,
-							className: "grid grid-cols-1 md:grid-cols-12 gap-3 items-end bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-200/80 dark:border-slate-800",
+							className: "grid grid-cols-1 md:grid-cols-12 gap-3 items-end neu-inset-sm p-4 rounded-2xl",
 							children: [
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 									className: "md:col-span-5",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
-										className: "block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1",
+										className: "block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5",
 										children: "Session / Lecture Title (သင်ခန်းစာ / အတန်းချိန် အမည်)"
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 										type: "text",
 										placeholder: "ဥပမာ - Lecture 04: Daily Class Check-in...",
 										value: newTitle,
 										onChange: (e) => setNewTitle(e.target.value),
-										className: "w-full px-3 py-2 text-xs sm:text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-hidden focus:border-indigo-500"
+										className: "w-full px-3.5 py-2.5 text-xs sm:text-sm neu-input rounded-xl text-slate-900 dark:text-slate-100"
 									})]
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 									className: "md:col-span-3",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
-										className: "block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1",
+										className: "block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5",
 										children: "Date (နေ့စွဲ)"
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 										type: "date",
 										value: newDate,
 										onChange: (e) => setNewDate(e.target.value),
-										className: "w-full px-3 py-2 text-xs sm:text-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 font-mono focus:outline-hidden focus:border-indigo-500",
+										className: "w-full px-3.5 py-2.5 text-xs sm:text-sm neu-input rounded-xl text-slate-900 dark:text-slate-100 font-mono",
 										required: true
 									})]
 								}),
@@ -44481,7 +44583,7 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Open Self Check-in" })]
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 										type: "submit",
-										className: "px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer shrink-0",
+										className: "px-4 py-2.5 neu-btn-emerald text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shrink-0",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Plus, { className: "w-4 h-4" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Open Attendance" })]
 									})]
 								})
@@ -44489,11 +44591,11 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden",
+						className: "neu-card rounded-3xl overflow-hidden",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-3",
+							className: "p-4 sm:p-5 border-b border-slate-200/50 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-3",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
-								className: "text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center gap-2",
+								className: "text-sm sm:text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Calendar, { className: "w-4 h-4 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Daily Roll Call Sheet (အမည်စာရင်းဖြင့် Attendance ခြစ်ရန်)" })]
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 								className: "text-xs text-slate-500 dark:text-slate-400 mt-0.5",
@@ -44503,7 +44605,7 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
 									value: activeSession?.id || "",
 									onChange: (e) => setSelectedSessionId(e.target.value),
-									className: "px-3 py-2 text-xs font-semibold bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-hidden focus:border-indigo-500",
+									className: "px-3.5 py-2 text-xs font-semibold neu-input rounded-xl text-slate-900 dark:text-slate-100",
 									children: sessions.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
 										value: s.id,
 										children: [
@@ -44620,11 +44722,11 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden",
+						className: "neu-card rounded-3xl overflow-hidden",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2",
+							className: "p-4 sm:p-5 border-b border-slate-200/50 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
-								className: "text-sm sm:text-base font-bold text-slate-900 dark:text-white flex items-center gap-2",
+								className: "text-sm sm:text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Users, { className: "w-4 h-4 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Attendance Percentage & Certificate Eligibility (ကျောင်းသားတစ်ဦးချင်း တက်ရောက်မှု ရာခိုင်နှုန်းနှင့် Certificate သုံးသပ်ချက်)" })]
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 								className: "text-xs text-slate-500 dark:text-slate-400 mt-0.5",
@@ -44640,7 +44742,7 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 										const res = ClassroomDB.downloadClassAttendanceCSV(course.id);
 										if (res.success) showToast(`📥 Attendance Report CSV (${res.filename}) ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ!`);
 									},
-									className: "px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer",
+									className: "px-3.5 py-2 rounded-xl neu-btn-emerald text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Download, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Export CSV Report" })]
 								})]
 							})]
@@ -44831,41 +44933,48 @@ var CourseDetail = ({ course, currentUser, posts, onBack, onRefresh, onOpenCerti
 	});
 	const hasOpenAttendance = ClassroomDB.getAttendanceSessions(course.id).some((s) => s.isOpen);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "space-y-4 sm:space-y-6",
+		className: "space-y-5 sm:space-y-6",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800",
+			className: "neu-raised rounded-3xl p-3.5 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "flex items-center gap-2.5 sm:gap-3 min-w-0",
+				className: "flex items-center gap-3 min-w-0",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					onClick: onBack,
-					className: "p-1.5 sm:p-2 -ml-1 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer shrink-0",
+					className: "neu-btn p-2.5 rounded-xl text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white cursor-pointer shrink-0",
 					"aria-label": "Back to classes",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ArrowLeft, { className: "w-5 h-5" })
+					title: "Back to My Classes",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ArrowLeft, { className: "w-4.5 h-4.5" })
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "min-w-0",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-						className: "text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100 truncate",
+						className: "text-base sm:text-lg font-extrabold text-slate-900 dark:text-slate-100 truncate",
 						children: course.title
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "flex items-center gap-2 text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 font-mono mt-0.5",
 						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: course.code }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "·" }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "font-bold text-indigo-600 dark:text-indigo-400",
+								children: course.code
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								"aria-hidden": "true",
+								children: "·"
+							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: course.batch })
 						]
 					})]
 				})]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-xs font-medium self-stretch sm:self-auto justify-center overflow-x-auto",
+				className: "neu-inset p-1.5 rounded-2xl flex items-center gap-1.5 text-xs font-bold self-stretch sm:self-auto justify-center overflow-x-auto",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						onClick: () => handleSwitchTab("stream"),
-						className: `flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer whitespace-nowrap ${activeTab === "stream" ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs font-semibold" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
+						className: `flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${activeTab === "stream" ? "neu-raised-sm text-indigo-700 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MessageSquare, { className: "w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Stream" })]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						onClick: () => handleSwitchTab("attendance"),
-						className: `flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer whitespace-nowrap ${activeTab === "attendance" ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs font-semibold" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
+						className: `flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${activeTab === "attendance" ? "neu-raised-sm text-emerald-700 dark:text-emerald-300" : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CalendarCheck, { className: "w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Attendance" }),
@@ -44877,7 +44986,7 @@ var CourseDetail = ({ course, currentUser, posts, onBack, onRefresh, onOpenCerti
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						onClick: () => handleSwitchTab("people"),
-						className: `flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer whitespace-nowrap ${activeTab === "people" ? "bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs font-semibold" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
+						className: `flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${activeTab === "people" ? "neu-raised-sm text-indigo-700 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Users, { className: "w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "People" })]
 					})
 				]
@@ -46214,6 +46323,8 @@ var AdminStudentDirectoryModal = ({ isOpen, onClose, courses, onRefresh }) => {
 	const [editingAvatarUser, setEditingAvatarUser] = (0, import_react.useState)(null);
 	const [revealedPasswords, setRevealedPasswords] = (0, import_react.useState)({});
 	const [selectedCsvCourseId, setSelectedCsvCourseId] = (0, import_react.useState)(courses[0]?.id || "all");
+	const [auditFilterMode, setAuditFilterMode] = (0, import_react.useState)("accepted_only");
+	const [ruleStatusFilter, setRuleStatusFilter] = (0, import_react.useState)("all");
 	if (!isOpen) return null;
 	const handleExportAttendanceCSV = (courseId) => {
 		if (courseId === "all") {
@@ -46230,12 +46341,26 @@ var AdminStudentDirectoryModal = ({ isOpen, onClose, courses, onRefresh }) => {
 			setTimeout(() => setToastMsg(null), 4e3);
 		}
 	};
+	const handleExportAcceptanceAudit = (mode = auditFilterMode) => {
+		const res = ClassroomDB.downloadRulesAcceptanceAuditCSV(mode);
+		if (res.success) {
+			setToastMsg(`🛡️ စည်းကမ်းချက် လက်ခံပြီးကြောင်း စာရင်း Acceptance Audit CSV (${res.filename} — ကျောင်းသား ${res.acceptedCount} ဦး အတည်ပြုပြီး) ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ!`);
+			setTimeout(() => setToastMsg(null), 4500);
+		}
+	};
 	const allUsers = ClassroomDB.getAllUsers();
 	const staffUsers = allUsers.filter((u) => u.role === "admin" || u.role === "co_admin");
 	const studentUsers = allUsers.filter((u) => u.role === "student");
+	const acceptedStudentsCount = studentUsers.filter((u) => u.rulesAccepted === true).length;
+	const pendingStudentsCount = studentUsers.length - acceptedStudentsCount;
 	const filteredUsers = allUsers.filter((u) => {
 		if (roleFilter === "staff" && u.role !== "admin" && u.role !== "co_admin") return false;
 		if (roleFilter === "student" && u.role !== "student") return false;
+		if (ruleStatusFilter === "accepted") {
+			if (u.role !== "student" || !u.rulesAccepted) return false;
+		} else if (ruleStatusFilter === "pending") {
+			if (u.role !== "student" || u.rulesAccepted) return false;
+		}
 		const q = searchQuery.toLowerCase().trim();
 		if (!q) return true;
 		return u.name.toLowerCase().includes(q) || u.username.toLowerCase().includes(q) || u.email.toLowerCase().includes(q) || u.address && u.address.toLowerCase().includes(q) || u.title && u.title.toLowerCase().includes(q) || u.role.toLowerCase().includes(q);
@@ -46875,85 +47000,187 @@ var AdminStudentDirectoryModal = ({ isOpen, onClose, courses, onRefresh }) => {
 							]
 						}) : null,
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "p-3.5 sm:p-4 rounded-xl border border-emerald-200 dark:border-emerald-800/70 bg-emerald-50/60 dark:bg-emerald-950/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3",
+							className: "grid grid-cols-1 lg:grid-cols-2 gap-3",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "flex items-start sm:items-center gap-2.5",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-									className: "p-2 rounded-lg bg-emerald-600 text-white shrink-0",
-									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CalendarCheck, { className: "w-4 h-4" })
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
-									className: "text-xs sm:text-sm font-bold text-slate-900 dark:text-white",
-									children: "Export Class Attendance Report (CSV ဖိုင်ထုတ်ယူရန်)"
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-									className: "text-[11px] text-slate-600 dark:text-slate-300",
-									children: "အတန်းတစ်ခုချင်းစီအလိုက် ကျောင်းသားများ၏ တက်ရောက်မှု ရာခိုင်နှုန်း (%) နှင့် နေ့စွဲအလိုက် Attendance မှတ်တမ်းအပြည့်အစုံကို CSV (Excel) ဖိုင်အဖြစ် ဒေါင်းလုဒ်ဆွဲနိုင်ပါသည်။"
-								})] })]
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "flex flex-wrap items-center gap-2 shrink-0",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-									value: selectedCsvCourseId,
-									onChange: (e) => setSelectedCsvCourseId(e.target.value),
-									className: "px-3 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-emerald-300 dark:border-emerald-700 rounded-lg text-slate-900 dark:text-white focus:outline-hidden",
-									children: [courses.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
-										value: c.id,
-										children: [
-											c.code,
-											" — ",
-											c.title,
-											" (",
-											c.enrolledStudentIds.length,
-											" students)"
-										]
-									}, c.id)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-										value: "all",
-										children: "All Classes Combined Report"
+								className: "p-3.5 sm:p-4 rounded-xl border border-emerald-200 dark:border-emerald-800/70 bg-emerald-50/60 dark:bg-emerald-950/30 flex flex-col justify-between gap-3",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "flex items-start gap-2.5",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+										className: "p-2 rounded-lg bg-emerald-600 text-white shrink-0",
+										children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CalendarCheck, { className: "w-4 h-4" })
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+										className: "text-xs sm:text-sm font-bold text-slate-900 dark:text-white",
+										children: "Export Class Attendance Report (CSV ဖိုင်ထုတ်ယူရန်)"
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+										className: "text-[11px] text-slate-600 dark:text-slate-300",
+										children: "အတန်းတစ်ခုချင်းစီအလိုက် ကျောင်းသားများ၏ တက်ရောက်မှု ရာခိုင်နှုန်း (%) နှင့် နေ့စွဲအလိုက် Attendance မှတ်တမ်းအပြည့်အစုံကို CSV (Excel) ဖိုင်အဖြစ် ဒေါင်းလုဒ်ဆွဲနိုင်ပါသည်။"
+									})] })]
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "flex flex-wrap items-center gap-2",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+										value: selectedCsvCourseId,
+										onChange: (e) => setSelectedCsvCourseId(e.target.value),
+										className: "flex-1 min-w-[180px] px-3 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-emerald-300 dark:border-emerald-700 rounded-lg text-slate-900 dark:text-white focus:outline-hidden",
+										children: [courses.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
+											value: c.id,
+											children: [
+												c.code,
+												" — ",
+												c.title,
+												" (",
+												c.enrolledStudentIds.length,
+												" students)"
+											]
+										}, c.id)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+											value: "all",
+											children: "All Classes Combined Report"
+										})]
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+										type: "button",
+										onClick: () => handleExportAttendanceCSV(selectedCsvCourseId),
+										className: "px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Download, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Export Attendance CSV" })]
 									})]
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-									type: "button",
-									onClick: () => handleExportAttendanceCSV(selectedCsvCourseId),
-									className: "px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Download, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Export Attendance CSV" })]
+								})]
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "p-3.5 sm:p-4 rounded-xl border border-indigo-200 dark:border-indigo-800/70 bg-indigo-50/60 dark:bg-indigo-950/30 flex flex-col justify-between gap-3",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "flex items-start justify-between gap-2.5",
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "flex items-start gap-2.5",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+											className: "p-2 rounded-lg bg-indigo-600 text-white shrink-0",
+											children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldCheck, { className: "w-4 h-4" })
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+											className: "flex items-center gap-2 flex-wrap",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+												className: "text-xs sm:text-sm font-bold text-slate-900 dark:text-white",
+												children: "Export Acceptance Audit (စည်းကမ်းချက် လက်ခံပြီးစာရင်း)"
+											}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+												className: "inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldCheck, { className: "w-3 h-3 text-emerald-600 dark:text-emerald-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+													acceptedStudentsCount,
+													" / ",
+													studentUsers.length,
+													" Accepted"
+												] })]
+											})]
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+											className: "text-[11px] text-slate-600 dark:text-slate-300 mt-0.5",
+											children: "သင်တန်းစည်းကမ်းချက် ၁၄ ချက်ကို “သိရှိ လိုက်နာပါမည်” ဟု အတည်ပြုပြီးသော ကျောင်းသားများနှင့် အချိန်မှတ်တမ်း (Timestamp) ကို CSV ဖိုင်ထုတ်ယူနိုင်ပါသည်။"
+										})] })]
+									})
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "flex flex-wrap items-center gap-2",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+										value: auditFilterMode,
+										onChange: (e) => setAuditFilterMode(e.target.value),
+										className: "flex-1 min-w-[180px] px-3 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700 rounded-lg text-slate-900 dark:text-white focus:outline-hidden",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
+											value: "accepted_only",
+											children: [
+												"Accepted Students Only (",
+												acceptedStudentsCount,
+												" completed onboarding)"
+											]
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
+											value: "all",
+											children: [
+												"All Students Audit Report (",
+												studentUsers.length,
+												" total — ",
+												pendingStudentsCount,
+												" pending)"
+											]
+										})]
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+										type: "button",
+										onClick: () => handleExportAcceptanceAudit(auditFilterMode),
+										className: "px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Download, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Export Acceptance Audit" })]
+									})]
 								})]
 							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "flex flex-col sm:flex-row sm:items-center justify-between gap-3",
+							className: "flex flex-col lg:flex-row lg:items-center justify-between gap-3",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-xs font-semibold self-start sm:self-auto",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								className: "flex flex-wrap items-center gap-2",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-xs font-semibold",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+											type: "button",
+											onClick: () => {
+												setRoleFilter("all");
+												setRuleStatusFilter("all");
+											},
+											className: `px-3 py-1.5 rounded-lg transition-all cursor-pointer ${roleFilter === "all" && ruleStatusFilter === "all" ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-2xs font-bold" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"}`,
+											children: [
+												"All Accounts (",
+												allUsers.length,
+												")"
+											]
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+											type: "button",
+											onClick: () => {
+												setRoleFilter("staff");
+												setRuleStatusFilter("all");
+											},
+											className: `px-3 py-1.5 rounded-lg transition-all cursor-pointer ${roleFilter === "staff" ? "bg-white dark:bg-slate-900 text-purple-600 dark:text-purple-400 shadow-2xs font-bold" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"}`,
+											children: [
+												"🛡️ Admins & Co-Admins (",
+												staffUsers.length,
+												")"
+											]
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+											type: "button",
+											onClick: () => {
+												setRoleFilter("student");
+												setRuleStatusFilter("all");
+											},
+											className: `px-3 py-1.5 rounded-lg transition-all cursor-pointer ${roleFilter === "student" && ruleStatusFilter === "all" ? "bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs font-bold" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"}`,
+											children: [
+												"🎓 Students (",
+												studentUsers.length,
+												")"
+											]
+										})
+									]
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-[11px] font-semibold",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 										type: "button",
-										onClick: () => setRoleFilter("all"),
-										className: `px-3 py-1.5 rounded-lg transition-all cursor-pointer ${roleFilter === "all" ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-2xs font-bold" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"}`,
-										children: [
-											"All Accounts (",
-											allUsers.length,
+										onClick: () => {
+											setRoleFilter("student");
+											setRuleStatusFilter(ruleStatusFilter === "accepted" ? "all" : "accepted");
+										},
+										className: `px-2.5 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${ruleStatusFilter === "accepted" ? "bg-emerald-600 text-white shadow-2xs font-bold" : "text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/50"}`,
+										title: "Filter students who accepted Academy Rules",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldCheck, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+											"Rule Accepted (",
+											acceptedStudentsCount,
 											")"
-										]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+										] })]
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 										type: "button",
-										onClick: () => setRoleFilter("staff"),
-										className: `px-3 py-1.5 rounded-lg transition-all cursor-pointer ${roleFilter === "staff" ? "bg-white dark:bg-slate-900 text-purple-600 dark:text-purple-400 shadow-2xs font-bold" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"}`,
-										children: [
-											"🛡️ Admins & Co-Admins (",
-											staffUsers.length,
+										onClick: () => {
+											setRoleFilter("student");
+											setRuleStatusFilter(ruleStatusFilter === "pending" ? "all" : "pending");
+										},
+										className: `px-2.5 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${ruleStatusFilter === "pending" ? "bg-amber-600 text-white shadow-2xs font-bold" : "text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/50"}`,
+										title: "Filter students pending Academy Rules acceptance",
+										children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+											"⏳ Pending (",
+											pendingStudentsCount,
 											")"
-										]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-										type: "button",
-										onClick: () => setRoleFilter("student"),
-										className: `px-3 py-1.5 rounded-lg transition-all cursor-pointer ${roleFilter === "student" ? "bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs font-bold" : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"}`,
-										children: [
-											"🎓 Students (",
-											studentUsers.length,
-											")"
-										]
-									})
-								]
+										] })
+									})]
+								})]
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "relative w-full sm:w-72",
+								className: "relative w-full lg:w-64",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Search, { className: "w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 									type: "text",
 									value: searchQuery,
@@ -47011,12 +47238,20 @@ var AdminStudentDirectoryModal = ({ isOpen, onClose, courses, onRefresh }) => {
 															children: user.role === "admin" ? "🛡️ Admin" : user.role === "co_admin" ? "👥 Co-Admin" : "🎓 Student"
 														}),
 														user.role === "student" && (user.rulesAccepted ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-															className: "inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700",
-															title: user.rulesAcceptedAt ? `သင်တန်းစည်းကမ်းချက် သိရှိလိုက်နာပါမည် အတည်ပြုပြီး (${user.rulesAcceptedAt})` : "သင်တန်းစည်းကမ်းချက် သိရှိလိုက်နာပါမည် အတည်ပြုပြီး",
-															children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Check, { className: "w-3 h-3 text-emerald-600 dark:text-emerald-400 stroke-[3]" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "သိရှိ လိုက်နာပါမည်" })]
+															className: "inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 shadow-2xs",
+															title: user.rulesAcceptedAt ? `Rule Status: Accepted — သိရှိ လိုက်နာပါမည် (${user.rulesAcceptedAt})` : "Rule Status: Accepted — သိရှိ လိုက်နာပါမည်",
+															children: [
+																/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldCheck, { className: "w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" }),
+																/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Rule Status: ✓ သိရှိ လိုက်နာပါမည်" }),
+																user.rulesAcceptedAt && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+																	className: "text-[9px] font-semibold text-emerald-700/90 dark:text-emerald-300/80 pl-1 border-l border-emerald-300 dark:border-emerald-700",
+																	children: user.rulesAcceptedAt
+																})
+															]
 														}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-															className: "inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/70 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800",
-															children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "⏳ စည်းကမ်းချက် လက်ခံရန်ကျန်" })
+															className: "inline-flex items-center gap-1 text-[10px] font-semibold px-2.5 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/70 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800",
+															title: "Rule Status: Pending Onboarding Acceptance",
+															children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "⏳ Rule Status: စည်းကမ်းချက် လက်ခံရန်ကျန်" })
 														})),
 														normalizedGender && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 															className: `text-[10px] font-semibold px-2 py-0.5 rounded-full border ${normalizedGender === "female" ? "bg-pink-50 dark:bg-pink-950/60 text-pink-700 dark:text-pink-300 border-pink-200 dark:border-pink-800" : "bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800"}`,
@@ -48107,7 +48342,7 @@ function App() {
 		})
 	})] });
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: `min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-200 ${securitySettings.textProtectionEnabled ? "select-none" : ""}`,
+		className: `min-h-screen neu-canvas text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-300 ${securitySettings.textProtectionEnabled ? "select-none" : ""}`,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_react.Suspense, {
 				fallback: null,
@@ -48136,11 +48371,11 @@ function App() {
 				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
-				className: "flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-4 sm:py-8",
+				className: "flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-5 sm:py-8",
 				children: [appBannerError && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "mb-4 p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800/70 text-rose-800 dark:text-rose-200 text-xs flex items-center justify-between gap-3",
+					className: "mb-5 p-4 rounded-2xl neu-inset text-rose-800 dark:text-rose-200 text-xs flex items-center justify-between gap-3",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex items-center gap-2",
+						className: "flex items-center gap-2.5",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TriangleAlert, { className: "w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: appBannerError })]
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						onClick: () => setAppBannerError(null),
@@ -48162,34 +48397,49 @@ function App() {
 						textProtectionEnabled: securitySettings.textProtectionEnabled
 					})
 				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "space-y-6 sm:space-y-8",
+					className: "space-y-7 sm:space-y-9",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs p-4 sm:p-6 md:p-8 flex flex-col md:flex-row md:items-center justify-between gap-5 sm:gap-6",
+						className: "neu-card rounded-3xl p-5 sm:p-7 md:p-8 flex flex-col md:flex-row md:items-center justify-between gap-5 sm:gap-6",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "space-y-1.5 sm:space-y-2",
+							className: "space-y-2",
 							children: [
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "flex flex-wrap items-center gap-2 text-xs font-mono text-slate-500 dark:text-slate-400",
+									className: "flex flex-wrap items-center gap-2 text-xs font-mono text-slate-600 dark:text-slate-400",
 									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["Logged in as: ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
-											className: "text-slate-800 dark:text-slate-200",
-											children: currentUser.name
-										})] }),
-										currentUser.role === "student" && currentUser.rulesAccepted && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+											"Logged in as:",
+											" ",
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
+												className: "text-slate-900 dark:text-white",
+												children: currentUser.name
+											})
+										] }),
+										currentUser.role === "student" && currentUser.rulesAccepted && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											"aria-hidden": "true",
+											children: "·"
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+											type: "button",
 											onClick: () => setShowRulesModal(true),
-											className: "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 font-sans font-bold text-[11px] cursor-pointer hover:bg-emerald-200/70 transition-colors",
+											className: "neu-inset-sm inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-emerald-800 dark:text-emerald-300 font-sans font-bold text-[11px] cursor-pointer hover:text-emerald-600 transition-colors",
 											title: "သင်တန်းစည်းကမ်းချက်များကို သိရှိလိုက်နာပါမည်ဟု အတည်ပြုပြီး",
-											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleCheck, { className: "w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "သိရှိ လိုက်နာပါမည်" })]
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleCheck, { className: "w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "သိရှိ လိုက်နာပါမည်" })]
+										})] }),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											"aria-hidden": "true",
+											children: "·"
 										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "·" }),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 											className: "capitalize font-semibold text-indigo-600 dark:text-indigo-400",
-											children: ["Role: ", currentUser.role === "admin" ? "Faculty / Admin (ဆရာ)" : currentUser.role === "co_admin" ? "Co-Admin (တွဲဖက် အက်ဒမင်)" : "Student (ကျောင်းသား)"]
+											children: [
+												"Role:",
+												" ",
+												currentUser.role === "admin" ? "Faculty / Admin (ဆရာ)" : currentUser.role === "co_admin" ? "Co-Admin (တွဲဖက် အက်ဒမင်)" : "Student (ကျောင်းသား)"
+											]
 										})
 									]
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", {
-									className: "text-xl sm:text-2xl md:text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100",
+									className: "text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100",
 									children: currentUser.role === "admin" || currentUser.role === "co_admin" ? "Faculty & Classroom Management" : "My Enrolled Classes"
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -48198,91 +48448,99 @@ function App() {
 								})
 							]
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "flex flex-wrap items-center gap-2 sm:gap-3 shrink-0",
+							className: "flex flex-wrap items-center gap-2.5 sm:gap-3 shrink-0",
 							children: [
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 									onClick: () => setShowRulesModal(true),
-									className: "flex items-center justify-center gap-1.5 px-3 sm:px-3.5 py-2 sm:py-2.5 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 text-xs font-semibold rounded-xl shadow-2xs transition-colors cursor-pointer",
+									className: "neu-btn flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2.5 text-emerald-800 dark:text-emerald-300 text-xs font-bold rounded-2xl cursor-pointer",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollText, { className: "w-4 h-4 text-emerald-600 dark:text-emerald-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "စည်းကမ်းချက်များ" })]
 								}),
 								(currentUser.role === "admin" || currentUser.role === "co_admin") && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 										onClick: () => setShowStudentDirectoryModal(true),
-										className: "flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 sm:py-2.5 bg-slate-900 hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 text-white text-xs font-medium rounded-xl shadow-xs transition-colors cursor-pointer",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Users, { className: "w-4 h-4" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Manage Users (အကောင့်များ စီမံရန်)" })]
+										className: "neu-btn flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2.5 text-slate-800 dark:text-slate-100 text-xs font-bold rounded-2xl cursor-pointer",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Users, { className: "w-4 h-4 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Manage Users (အကောင့်များ စီမံရန်)" })]
 									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 										onClick: () => setShowCreateCourseModal(true),
-										className: "flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 sm:py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-xl shadow-xs transition-colors cursor-pointer",
+										className: "neu-btn-indigo flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2.5 text-white text-xs font-bold rounded-2xl cursor-pointer",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Plus, { className: "w-4 h-4" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Create Class / Batch" })]
 									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 										onClick: () => setShowSupabaseModal(true),
-										className: "flex items-center justify-center gap-1.5 px-3 sm:px-3.5 py-2 sm:py-2.5 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 text-xs font-semibold rounded-xl shadow-2xs transition-colors cursor-pointer",
+										className: "neu-btn flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-emerald-800 dark:text-emerald-300 text-xs font-bold rounded-2xl cursor-pointer",
 										title: "View Supabase configuration, connection test and SQL schema",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Database, { className: "w-4 h-4 text-emerald-600 dark:text-emerald-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Supabase SQL" })]
 									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 										onClick: () => setShowArchitectureModal(true),
-										className: "flex items-center justify-center gap-1.5 px-3 sm:px-3.5 py-2 sm:py-2.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium rounded-xl shadow-2xs transition-colors cursor-pointer",
+										className: "neu-btn flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-slate-700 dark:text-slate-200 text-xs font-semibold rounded-2xl cursor-pointer",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Layers, { className: "w-4 h-4 text-slate-500 dark:text-slate-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "DB Spec" })]
 									})
 								] }),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 									onClick: handleLogout,
-									className: "flex items-center justify-center gap-1.5 px-3 py-2 sm:py-2.5 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/50 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900/60 text-xs font-medium rounded-xl shadow-2xs transition-colors cursor-pointer",
+									className: "neu-btn flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-rose-700 dark:text-rose-300 text-xs font-bold rounded-2xl cursor-pointer",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LogOut, { className: "w-4 h-4 text-rose-600 dark:text-rose-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Sign Out" })]
 								})
 							]
 						})]
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "space-y-4",
+						className: "space-y-5",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "flex flex-col sm:flex-row sm:items-center justify-between gap-3",
+							className: "flex flex-col sm:flex-row sm:items-center justify-between gap-3.5",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "flex items-center gap-2",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BookOpen, { className: "w-5 h-5 text-indigo-600 dark:text-indigo-400" }),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-										className: "text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100",
+								className: "flex items-center gap-3",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "neu-inset-sm p-2.5 rounded-2xl text-indigo-600 dark:text-indigo-400",
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BookOpen, { className: "w-5 h-5" })
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "flex items-center gap-2",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+										className: "text-base sm:text-lg font-extrabold text-slate-900 dark:text-slate-100",
 										children: currentUser.role === "admin" || currentUser.role === "co_admin" ? "All Managed Classes" : "Authorized Courses"
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "text-xs font-mono text-slate-500 dark:text-slate-400 ml-1",
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400",
 										children: [
 											"(",
 											courses.length,
 											")"
 										]
-									})
-								]
+									})]
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+									className: "text-xs text-slate-500 dark:text-slate-400",
+									children: "သင်တက်ရောက်ခွင့်ရရှိထားသော အတန်းများသို့ ဝင်ရောက်၍ သင်ခန်းစာများ လေ့လာနိုင်ပါသည်"
+								})] })]
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "relative w-full sm:w-64",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Search, { className: "w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								className: "relative w-full sm:w-72",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Search, { className: "w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 									type: "text",
 									placeholder: "Search courses or batches...",
 									value: courseSearch,
 									onChange: (e) => setCourseSearch(e.target.value),
-									className: "w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 rounded-xl focus:outline-hidden focus:border-indigo-500 shadow-2xs"
+									className: "neu-input w-full pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 rounded-2xl"
 								})]
 							})]
 						}), courses.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "p-8 sm:p-12 text-center bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400",
+							className: "neu-card p-8 sm:p-12 text-center rounded-3xl text-slate-500 dark:text-slate-400",
 							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Lock, { className: "w-8 h-8 mx-auto text-slate-300 dark:text-slate-600 mb-2" }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "neu-inset-sm w-14 h-14 rounded-2xl mx-auto flex items-center justify-center mb-3 text-slate-400 dark:text-slate-500",
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Lock, { className: "w-6 h-6" })
+								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-									className: "text-sm font-semibold text-slate-800 dark:text-slate-200",
+									className: "text-sm font-bold text-slate-800 dark:text-slate-200",
 									children: "No Authorized Courses Found"
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 									className: "text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto",
-									children: "You are not currently enrolled in any active class cohorts. Please contact Dr. Kyaw Swar to obtain batch authorization."
+									children: "You are not currently enrolled in any active class cohorts. Please contact the Academy Faculty to obtain batch authorization."
 								})
 							]
 						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.Suspense, {
 							fallback: null,
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6",
+								className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-7",
 								children: courses.filter((c) => {
 									if (!courseSearch.trim()) return true;
 									const q = courseSearch.toLowerCase();
@@ -48353,15 +48611,15 @@ function App() {
 				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("footer", {
-				className: "mt-auto border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 py-6 text-center text-xs text-slate-500 dark:text-slate-400",
+				className: "mt-auto py-6 text-center text-xs text-slate-500 dark:text-slate-400",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Classroom OS · Enterprise Academic Learning Platform" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex items-center gap-4 text-slate-400 dark:text-slate-500",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Dr. Si Thu Aung · Swanarh Academy · Classroom OS Learning Platform" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex items-center gap-3 text-slate-400 dark:text-slate-500",
 						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Domain-Locked Video DRM" }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Protected Video Playback" }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "·" }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "PostgreSQL RLS" }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Row-Level Security" }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "·" }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Mobile-First Engine" })
 						]

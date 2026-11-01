@@ -363,32 +363,33 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ variant = 'n
         )
       : null;
 
-  // On Login Page: Prominent Device-Smart 1-Click Install Card
+  // On Login Page: Prominent Device-Smart 1-Click Neumorphic Install Card
   if (variant === 'login-device-card') {
     return (
       <>
-        <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-emerald-50/90 via-white to-emerald-50/60 dark:from-emerald-950/40 dark:via-slate-900 dark:to-slate-900 border border-emerald-200/90 dark:border-emerald-800/70 shadow-sm">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5">
-            <div className="flex items-center gap-3 min-w-0">
-              <img
-                src={OFFICIAL_ACADEMY_LOGO}
-                alt="SwanArh Classroom App Icon"
-                className="w-12 h-12 rounded-xl shadow-xs border border-slate-200/90 dark:border-slate-700 bg-white shrink-0 object-contain"
-              />
+        <div className="neu-raised p-4 sm:p-5 rounded-3xl transition-all duration-200">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5 min-w-0">
+              <div className="neu-inset-sm p-1.5 rounded-2xl shrink-0">
+                <img
+                  src={OFFICIAL_ACADEMY_LOGO}
+                  alt="SwanArh Classroom App Icon"
+                  className="w-11 h-11 rounded-xl bg-white object-contain"
+                />
+              </div>
               <div className="min-w-0">
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-900/70 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold">
-                    <DeviceIcon className="w-3 h-3" />
+                <div className="flex items-center gap-2 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
+                  <span className="inline-flex items-center gap-1">
+                    <DeviceIcon className="w-3.5 h-3.5" />
                     <span>{deviceLabel}</span>
                   </span>
-                  <span className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400">
-                    {isInstallable ? '1-Click Auto Install Ready' : 'Official Native App'}
-                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span>{isInstallable ? '1-Click Auto Install Ready' : 'Official Native App'}</span>
                 </div>
-                <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate mt-0.5">
+                <div className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white truncate mt-0.5">
                   SwanArh Classroom
                 </div>
-                <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-snug">
+                <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-snug mt-0.5">
                   Install ကိုနှိပ်၍ SwanArh Classroom App Icon နှင့် Name ကို Home Screen ပေါ်သို့ တိုက်ရိုက်သွင်းယူပါ
                 </p>
               </div>
@@ -399,7 +400,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ variant = 'n
                 type="button"
                 disabled={isInstalling}
                 onClick={handleInstallClick}
-                className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-bold shadow-xs transition-all cursor-pointer whitespace-nowrap"
+                className="neu-btn-emerald w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl disabled:opacity-60 text-white text-xs font-bold cursor-pointer whitespace-nowrap"
               >
                 {isInstalling ? (
                   <>
@@ -455,7 +456,11 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ variant = 'n
         type="button"
         disabled={isInstalling}
         onClick={handleInstallClick}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap"
+        className={
+          variant === 'login'
+            ? 'neu-btn-emerald flex items-center gap-1.5 px-3.5 py-2 rounded-xl disabled:opacity-60 text-white text-xs font-bold cursor-pointer whitespace-nowrap'
+            : 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer whitespace-nowrap'
+        }
         title={`Install SwanArh Classroom on ${deviceLabel}`}
       >
         {isInstalling ? (

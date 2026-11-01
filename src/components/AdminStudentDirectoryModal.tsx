@@ -89,6 +89,8 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
   // Revealed passwords state per user
   const [revealedPasswords, setRevealedPasswords] = useState<Record<string, boolean>>({});
   const [selectedCsvCourseId, setSelectedCsvCourseId] = useState<string>(courses[0]?.id || 'all');
+  const [auditFilterMode, setAuditFilterMode] = useState<'accepted_only' | 'all'>('accepted_only');
+  const [ruleStatusFilter, setRuleStatusFilter] = useState<'all' | 'accepted' | 'pending'>('all');
 
   if (!isOpen) return null;
 
@@ -113,13 +115,31 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     }
   };
 
+  const handleExportAcceptanceAudit = (mode: 'all' | 'accepted_only' = auditFilterMode) => {
+    const res = ClassroomDB.downloadRulesAcceptanceAuditCSV(mode);
+    if (res.success) {
+      setToastMsg(
+        `🛡️ စည်းကမ်းချက် လက်ခံပြီးကြောင်း စာရင်း Acceptance Audit CSV (${res.filename} — ကျောင်းသား ${res.acceptedCount} ဦး အတည်ပြုပြီး) ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ!`
+      );
+      setTimeout(() => setToastMsg(null), 4500);
+    }
+  };
+
   const allUsers = ClassroomDB.getAllUsers();
   const staffUsers = allUsers.filter((u) => u.role === 'admin' || u.role === 'co_admin');
   const studentUsers = allUsers.filter((u) => u.role === 'student');
+  const acceptedStudentsCount = studentUsers.filter((u) => u.rulesAccepted === true).length;
+  const pendingStudentsCount = studentUsers.length - acceptedStudentsCount;
 
   const filteredUsers = allUsers.filter((u) => {
     if (roleFilter === 'staff' && u.role !== 'admin' && u.role !== 'co_admin') return false;
     if (roleFilter === 'student' && u.role !== 'student') return false;
+
+    if (ruleStatusFilter === 'accepted') {
+      if (u.role !== 'student' || !u.rulesAccepted) return false;
+    } else if (ruleStatusFilter === 'pending') {
+      if (u.role !== 'student' || u.rulesAccepted) return false;
+    }
 
     const q = searchQuery.toLowerCase().trim();
     if (!q) return true;
@@ -933,88 +953,188 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
               </form>
             ) : null}
 
-            {/* Class Attendance Report CSV Export Bar (For Admins & Co-Admins) */}
-            <div className="p-3.5 sm:p-4 rounded-xl border border-emerald-200 dark:border-emerald-800/70 bg-emerald-50/60 dark:bg-emerald-950/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-start sm:items-center gap-2.5">
-                <div className="p-2 rounded-lg bg-emerald-600 text-white shrink-0">
-                  <CalendarCheck className="w-4 h-4" />
+            {/* Class Attendance Report CSV Export Bar & Rules Acceptance Audit Bar (For Admins & Co-Admins) */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+              {/* Attendance Report CSV Export */}
+              <div className="p-3.5 sm:p-4 rounded-xl border border-emerald-200 dark:border-emerald-800/70 bg-emerald-50/60 dark:bg-emerald-950/30 flex flex-col justify-between gap-3">
+                <div className="flex items-start gap-2.5">
+                  <div className="p-2 rounded-lg bg-emerald-600 text-white shrink-0">
+                    <CalendarCheck className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                      Export Class Attendance Report (CSV ဖိုင်ထုတ်ယူရန်)
+                    </h4>
+                    <p className="text-[11px] text-slate-600 dark:text-slate-300">
+                      အတန်းတစ်ခုချင်းစီအလိုက် ကျောင်းသားများ၏ တက်ရောက်မှု ရာခိုင်နှုန်း (%) နှင့် နေ့စွဲအလိုက် Attendance မှတ်တမ်းအပြည့်အစုံကို CSV (Excel) ဖိုင်အဖြစ် ဒေါင်းလုဒ်ဆွဲနိုင်ပါသည်။
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
-                    Export Class Attendance Report (CSV ဖိုင်ထုတ်ယူရန်)
-                  </h4>
-                  <p className="text-[11px] text-slate-600 dark:text-slate-300">
-                    အတန်းတစ်ခုချင်းစီအလိုက် ကျောင်းသားများ၏ တက်ရောက်မှု ရာခိုင်နှုန်း (%) နှင့် နေ့စွဲအလိုက် Attendance မှတ်တမ်းအပြည့်အစုံကို CSV (Excel) ဖိုင်အဖြစ် ဒေါင်းလုဒ်ဆွဲနိုင်ပါသည်။
-                  </p>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={selectedCsvCourseId}
+                    onChange={(e) => setSelectedCsvCourseId(e.target.value)}
+                    className="flex-1 min-w-[180px] px-3 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-emerald-300 dark:border-emerald-700 rounded-lg text-slate-900 dark:text-white focus:outline-hidden"
+                  >
+                    {courses.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.code} — {c.title} ({c.enrolledStudentIds.length} students)
+                      </option>
+                    ))}
+                    <option value="all">All Classes Combined Report</option>
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={() => handleExportAttendanceCSV(selectedCsvCourseId)}
+                    className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Export Attendance CSV</span>
+                  </button>
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <select
-                  value={selectedCsvCourseId}
-                  onChange={(e) => setSelectedCsvCourseId(e.target.value)}
-                  className="px-3 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-emerald-300 dark:border-emerald-700 rounded-lg text-slate-900 dark:text-white focus:outline-hidden"
-                >
-                  {courses.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.code} — {c.title} ({c.enrolledStudentIds.length} students)
-                    </option>
-                  ))}
-                  <option value="all">All Classes Combined Report</option>
-                </select>
+              {/* Onboarding Rules Acceptance Audit Export */}
+              <div className="p-3.5 sm:p-4 rounded-xl border border-indigo-200 dark:border-indigo-800/70 bg-indigo-50/60 dark:bg-indigo-950/30 flex flex-col justify-between gap-3">
+                <div className="flex items-start justify-between gap-2.5">
+                  <div className="flex items-start gap-2.5">
+                    <div className="p-2 rounded-lg bg-indigo-600 text-white shrink-0">
+                      <ShieldCheck className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                          Export Acceptance Audit (စည်းကမ်းချက် လက်ခံပြီးစာရင်း)
+                        </h4>
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700">
+                          <ShieldCheck className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                          <span>
+                            {acceptedStudentsCount} / {studentUsers.length} Accepted
+                          </span>
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5">
+                        သင်တန်းစည်းကမ်းချက် ၁၄ ချက်ကို &ldquo;သိရှိ လိုက်နာပါမည်&rdquo; ဟု အတည်ပြုပြီးသော ကျောင်းသားများနှင့် အချိန်မှတ်တမ်း (Timestamp) ကို CSV ဖိုင်ထုတ်ယူနိုင်ပါသည်။
+                      </p>
+                    </div>
+                  </div>
+                </div>
 
-                <button
-                  type="button"
-                  onClick={() => handleExportAttendanceCSV(selectedCsvCourseId)}
-                  className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Export Attendance CSV</span>
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={auditFilterMode}
+                    onChange={(e) => setAuditFilterMode(e.target.value as 'accepted_only' | 'all')}
+                    className="flex-1 min-w-[180px] px-3 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700 rounded-lg text-slate-900 dark:text-white focus:outline-hidden"
+                  >
+                    <option value="accepted_only">
+                      Accepted Students Only ({acceptedStudentsCount} completed onboarding)
+                    </option>
+                    <option value="all">
+                      All Students Audit Report ({studentUsers.length} total — {pendingStudentsCount} pending)
+                    </option>
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={() => handleExportAcceptanceAudit(auditFilterMode)}
+                    className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Export Acceptance Audit</span>
+                  </button>
+                </div>
               </div>
             </div>
 
             {/* Filter Tabs & Search bar */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              {/* Role Filter Tabs */}
-              <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-xs font-semibold self-start sm:self-auto">
-                <button
-                  type="button"
-                  onClick={() => setRoleFilter('all')}
-                  className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                    roleFilter === 'all'
-                      ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-2xs font-bold'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                  }`}
-                >
-                  All Accounts ({allUsers.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRoleFilter('staff')}
-                  className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                    roleFilter === 'staff'
-                      ? 'bg-white dark:bg-slate-900 text-purple-600 dark:text-purple-400 shadow-2xs font-bold'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                  }`}
-                >
-                  🛡️ Admins & Co-Admins ({staffUsers.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRoleFilter('student')}
-                  className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                    roleFilter === 'student'
-                      ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs font-bold'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                  }`}
-                >
-                  🎓 Students ({studentUsers.length})
-                </button>
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Role Filter Tabs */}
+                <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-xs font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRoleFilter('all');
+                      setRuleStatusFilter('all');
+                    }}
+                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                      roleFilter === 'all' && ruleStatusFilter === 'all'
+                        ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-2xs font-bold'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    All Accounts ({allUsers.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRoleFilter('staff');
+                      setRuleStatusFilter('all');
+                    }}
+                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                      roleFilter === 'staff'
+                        ? 'bg-white dark:bg-slate-900 text-purple-600 dark:text-purple-400 shadow-2xs font-bold'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    🛡️ Admins & Co-Admins ({staffUsers.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRoleFilter('student');
+                      setRuleStatusFilter('all');
+                    }}
+                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                      roleFilter === 'student' && ruleStatusFilter === 'all'
+                        ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs font-bold'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    🎓 Students ({studentUsers.length})
+                  </button>
+                </div>
+
+                {/* Quick Rule Status Filter Pills */}
+                <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-[11px] font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRoleFilter('student');
+                      setRuleStatusFilter(ruleStatusFilter === 'accepted' ? 'all' : 'accepted');
+                    }}
+                    className={`px-2.5 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                      ruleStatusFilter === 'accepted'
+                        ? 'bg-emerald-600 text-white shadow-2xs font-bold'
+                        : 'text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/50'
+                    }`}
+                    title="Filter students who accepted Academy Rules"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>Rule Accepted ({acceptedStudentsCount})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRoleFilter('student');
+                      setRuleStatusFilter(ruleStatusFilter === 'pending' ? 'all' : 'pending');
+                    }}
+                    className={`px-2.5 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                      ruleStatusFilter === 'pending'
+                        ? 'bg-amber-600 text-white shadow-2xs font-bold'
+                        : 'text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/50'
+                    }`}
+                    title="Filter students pending Academy Rules acceptance"
+                  >
+                    <span>⏳ Pending ({pendingStudentsCount})</span>
+                  </button>
+                </div>
               </div>
 
               {/* Search Bar */}
-              <div className="relative w-full sm:w-72">
+              <div className="relative w-full lg:w-64">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
@@ -1089,23 +1209,31 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                               {user.role === 'admin' ? '🛡️ Admin' : user.role === 'co_admin' ? '👥 Co-Admin' : '🎓 Student'}
                             </span>
 
-                            {/* Academy Rules Accepted Badge for Students */}
+                            {/* Visual Rule Status Indicator for Students */}
                             {user.role === 'student' && (
                               user.rulesAccepted ? (
                                 <span
-                                  className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700"
+                                  className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 shadow-2xs"
                                   title={
                                     user.rulesAcceptedAt
-                                      ? `သင်တန်းစည်းကမ်းချက် သိရှိလိုက်နာပါမည် အတည်ပြုပြီး (${user.rulesAcceptedAt})`
-                                      : 'သင်တန်းစည်းကမ်းချက် သိရှိလိုက်နာပါမည် အတည်ပြုပြီး'
+                                      ? `Rule Status: Accepted — သိရှိ လိုက်နာပါမည် (${user.rulesAcceptedAt})`
+                                      : 'Rule Status: Accepted — သိရှိ လိုက်နာပါမည်'
                                   }
                                 >
-                                  <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400 stroke-[3]" />
-                                  <span>သိရှိ လိုက်နာပါမည်</span>
+                                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                                  <span>Rule Status: ✓ သိရှိ လိုက်နာပါမည်</span>
+                                  {user.rulesAcceptedAt && (
+                                    <span className="text-[9px] font-semibold text-emerald-700/90 dark:text-emerald-300/80 pl-1 border-l border-emerald-300 dark:border-emerald-700">
+                                      {user.rulesAcceptedAt}
+                                    </span>
+                                  )}
                                 </span>
                               ) : (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/70 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                                  <span>⏳ စည်းကမ်းချက် လက်ခံရန်ကျန်</span>
+                                <span
+                                  className="inline-flex items-center gap-1 text-[10px] font-semibold px-2.5 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/70 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800"
+                                  title="Rule Status: Pending Onboarding Acceptance"
+                                >
+                                  <span>⏳ Rule Status: စည်းကမ်းချက် လက်ခံရန်ကျန်</span>
                                 </span>
                               )
                             )}

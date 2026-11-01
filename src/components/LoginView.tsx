@@ -92,39 +92,41 @@ export const LoginView: React.FC<LoginViewProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col justify-between transition-colors duration-200">
-      {/* Top Bar */}
-      <header className="sticky top-0 z-30 w-full border-b border-slate-200/80 dark:border-slate-800/80 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-8 h-16 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
-            <AcademyLogo size="sm" />
+    <div className="min-h-screen neu-canvas text-slate-900 dark:text-slate-100 flex flex-col justify-between transition-colors duration-300 selection:bg-emerald-500/20">
+      {/* Top Sculpted Neumorphic Header Bar */}
+      <header className="sticky top-0 z-30 w-full px-3 sm:px-6 pt-3">
+        <div className="max-w-7xl mx-auto neu-raised rounded-2xl px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="neu-inset-sm p-1.5 rounded-xl shrink-0">
+              <AcademyLogo size="sm" />
+            </div>
             <div className="truncate">
-              <span className="text-sm sm:text-lg font-bold tracking-tight text-slate-900 dark:text-white block leading-tight truncate">
+              <span className="text-sm sm:text-base font-extrabold tracking-tight text-slate-900 dark:text-white block leading-tight truncate">
                 SwanArh Classroom
               </span>
               <span className="text-[10px] sm:text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold tracking-wide block leading-tight truncate">
-                DR. SI THU AUNG · SWANARH ACADEMY
+                Dr. Si Thu Aung · Swanarh Academy
               </span>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2.5 shrink-0">
             <PWAInstallButton variant="login" />
             <button
               type="button"
               onClick={onToggleTheme}
-              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 transition-colors cursor-pointer whitespace-nowrap"
+              className="neu-btn flex items-center gap-1.5 px-3 sm:px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer whitespace-nowrap"
               title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
             >
               {theme === 'dark' ? (
                 <>
                   <Sun className="w-3.5 h-3.5 text-amber-400" />
-                  <span className="hidden sm:inline">Light Mode</span>
+                  <span className="hidden sm:inline">Light Surface</span>
                 </>
               ) : (
                 <>
                   <Moon className="w-3.5 h-3.5 text-slate-600" />
-                  <span className="hidden sm:inline">Dark Mode</span>
+                  <span className="hidden sm:inline">Dark Surface</span>
                 </>
               )}
             </button>
@@ -133,222 +135,261 @@ export const LoginView: React.FC<LoginViewProps> = ({
       </header>
 
       {/* Main Content Split Layout */}
-      <main className="max-w-6xl w-full mx-auto px-4 sm:px-8 py-6 sm:py-10 my-auto">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-center">
-          {/* Left Column: Academy Brand Showcase & Official White Crest Logo */}
-          <div className="lg:col-span-5 flex flex-col items-center lg:items-start text-center lg:text-left space-y-5">
-            {/* Official Logo Showcase Badge */}
-            <div className="p-2.5 rounded-full bg-white shadow-xl border border-slate-200/90 dark:border-slate-700">
-              <AcademyLogo size="xl" />
+      <main className="max-w-6xl w-full mx-auto px-4 sm:px-8 py-8 sm:py-12 my-auto">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center">
+          {/* Left Column: Sculpted Neumorphic Academy Brand Showcase */}
+          <div className="lg:col-span-5 flex flex-col items-center lg:items-start text-center lg:text-left space-y-6">
+            {/* Double-Ring Sculpted Neumorphic Pedestal for Official Crest Logo */}
+            <div className="neu-card p-3.5 rounded-full inline-flex items-center justify-center">
+              <div className="neu-inset p-2.5 rounded-full inline-flex items-center justify-center">
+                <div className="rounded-full bg-white p-1.5 shadow-xs">
+                  <AcademyLogo size="xl" />
+                </div>
+              </div>
             </div>
 
             {/* Academy Title & Mission */}
-            <div className="space-y-2.5">
-              <div className="text-xs font-bold tracking-widest uppercase text-rose-600 dark:text-rose-400">
-                DR. SI THU AUNG
+            <div className="space-y-3">
+              <div className="flex items-center justify-center lg:justify-start gap-2 text-xs font-bold tracking-wide text-rose-600 dark:text-rose-400">
+                <span>Dr. Si Thu Aung</span>
+                <span aria-hidden="true">·</span>
+                <span className="text-emerald-700 dark:text-emerald-400">Official Digital Campus</span>
               </div>
               <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-tight">
                 SWANARH ACADEMY
               </h1>
               <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed max-w-md">
-                ခေတ်မီ သင်ကြားရေးနှင့် ပညာရေးစီမံခန့်ခွဲမှုစနစ် — သင်ခန်းစာများ၊ ဗီဒီယိုပို့ချချက်များ၊ အိမ်စာနှင့် စာမေးပွဲများကို တစ်နေရာတည်းတွင် လုံခြုံစွာ သင်ယူနိုင်သော Digital Classroom Platform။
+                ခေတ်မီ သင်ကြားရေးနှင့် ပညာရေးစီမံခန့်ခွဲမှုစနစ် — သင်ခန်းစာများ၊ ဗီဒီယိုပို့ချချက်များနှင့် သင်တန်းတက်ရောက်မှုမှတ်တမ်းများကို တစ်နေရာတည်းတွင် လုံခြုံစွာ သင်ယူနိုင်သော Digital Classroom Platform။
               </p>
             </div>
 
-            {/* Key Academy Highlights */}
-            <div className="w-full max-w-md space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800 text-left">
-              <div className="flex items-start gap-3">
-                <div className="p-2 rounded-lg bg-emerald-100/80 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-400 shrink-0 mt-0.5">
+            {/* Tactile Neumorphic Feature Modules */}
+            <div className="w-full max-w-md space-y-3.5 text-left">
+              <div className="neu-raised p-4 rounded-2xl flex items-start gap-3.5">
+                <div className="neu-inset-sm p-2.5 rounded-xl text-emerald-700 dark:text-emerald-400 shrink-0 mt-0.5">
                   <BookOpen className="w-4 h-4" />
                 </div>
                 <div>
-                  <div className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                  <div className="text-xs font-extrabold text-slate-900 dark:text-slate-100">
                     Authorized Student Enrollment
                   </div>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">
                     သင်တန်းသား အကောင့်သစ်များကို Admin နှင့် Co-Admin ဆရာများကသာ သင်တန်းအပ်နှံပေးရင်း တစ်ခါတည်း အကောင့်ဖွင့်ပေးသည့် လုံခြုံသောစနစ် ဖြစ်ပါသည်။
                   </p>
                 </div>
               </div>
 
-              <div className="flex items-start gap-3">
-                <div className="p-2 rounded-lg bg-amber-100/80 dark:bg-amber-950/80 text-amber-700 dark:text-amber-400 shrink-0 mt-0.5">
+              <div className="neu-raised p-4 rounded-2xl flex items-start gap-3.5">
+                <div className="neu-inset-sm p-2.5 rounded-xl text-amber-600 dark:text-amber-400 shrink-0 mt-0.5">
                   <Award className="w-4 h-4" />
                 </div>
                 <div>
-                  <div className="text-xs font-bold text-slate-900 dark:text-slate-100">
-                    Verified Academic Certificates & Assessments
+                  <div className="text-xs font-extrabold text-slate-900 dark:text-slate-100">
+                    Verified Academic Certificates & Attendance
                   </div>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    အိမ်စာနှင့် စာမေးပွဲ အမှတ်စာရင်းများအလိုက် အသိအမှတ်ပြု သင်တန်းဆင်းလက်မှတ် ရယူနိုင်ပါသည်။
+                  <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">
+                    သင်တန်းတက်ရောက်မှု (Attendance) နှင့် သင်ယူမှုမှတ်တမ်းများအလိုက် အသိအမှတ်ပြု သင်တန်းဆင်းလက်မှတ် ရယူနိုင်ပါသည်။
                   </p>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Right Column: Device-Aware Direct Install Card + Dedicated Sign In Card */}
-          <div className="lg:col-span-7 w-full max-w-xl mx-auto space-y-4">
+          {/* Right Column: Device-Aware Direct Install Card + Premium Neumorphic Sign In Console */}
+          <div className="lg:col-span-7 w-full max-w-xl mx-auto space-y-5">
             {/* Device-Aware Direct App Install Banner */}
             <PWAInstallButton variant="login-device-card" />
 
-            <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200/90 dark:border-slate-800 overflow-hidden transition-colors">
-              {/* Card Header Banner */}
-              <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-850 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Lock className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                  <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
-                    Account Sign In (အကောင့်ဝင်ရန်)
-                  </span>
+            {/* Main Sculpted Neumorphic Sign In Card */}
+            <div className="neu-card rounded-3xl p-6 sm:p-8 space-y-6 transition-all duration-300">
+              {/* Console Header */}
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="neu-inset-sm p-2.5 rounded-2xl text-emerald-600 dark:text-emerald-400">
+                    <Lock className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white leading-tight">
+                      Account Sign In (အကောင့်ဝင်ရန်)
+                    </h2>
+                    <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                      Swanarh Academy · Authorized Access Only
+                    </span>
+                  </div>
                 </div>
-                <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-                  Authorized Access Only
-                </span>
+
+                <div className="neu-inset-sm px-3 py-1.5 rounded-xl text-[11px] font-mono font-semibold text-emerald-700 dark:text-emerald-400">
+                  {activeRole === 'admin'
+                    ? 'Admin'
+                    : activeRole === 'co_admin'
+                    ? 'Co-Admin'
+                    : 'Student'}
+                </div>
               </div>
 
-              {/* 3 Role Selector Tab Bar */}
-              <div className="grid grid-cols-3 p-1.5 bg-slate-100/90 dark:bg-slate-800/90 border-b border-slate-200 dark:border-slate-800">
+              {/* Recessed Neumorphic 3-Role Segmented Switcher */}
+              <div className="neu-inset p-1.5 rounded-2xl grid grid-cols-3 gap-1.5">
                 <button
                   type="button"
                   onClick={() => handleSwitchTab('student')}
-                  className={`flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+                  className={`flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
                     activeRole === 'student'
-                      ? 'bg-white dark:bg-slate-900 text-emerald-800 dark:text-emerald-300 shadow-xs'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                      ? 'neu-raised-sm text-emerald-800 dark:text-emerald-300'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                   }`}
                 >
-                  <GraduationCap className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                  <GraduationCap
+                    className={`w-3.5 h-3.5 ${
+                      activeRole === 'student'
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : 'text-slate-400'
+                    }`}
+                  />
                   <span>Student</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleSwitchTab('admin')}
-                  className={`flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+                  className={`flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
                     activeRole === 'admin'
-                      ? 'bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-300 shadow-xs'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                      ? 'neu-raised-sm text-rose-700 dark:text-rose-300'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                   }`}
                 >
-                  <School className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                  <School
+                    className={`w-3.5 h-3.5 ${
+                      activeRole === 'admin'
+                        ? 'text-rose-600 dark:text-rose-400'
+                        : 'text-slate-400'
+                    }`}
+                  />
                   <span>Admin</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleSwitchTab('co_admin')}
-                  className={`flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+                  className={`flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
                     activeRole === 'co_admin'
-                      ? 'bg-white dark:bg-slate-900 text-amber-800 dark:text-amber-300 shadow-xs'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                      ? 'neu-raised-sm text-amber-800 dark:text-amber-300'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
                   }`}
                 >
-                  <Users className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                  <Users
+                    className={`w-3.5 h-3.5 ${
+                      activeRole === 'co_admin'
+                        ? 'text-amber-600 dark:text-amber-400'
+                        : 'text-slate-400'
+                    }`}
+                  />
                   <span>Co-Admin</span>
                 </button>
               </div>
 
-              {/* Sign In Form Container */}
-              <div className="p-6 sm:p-7 space-y-4">
-                <div>
-                  <span className="text-xs font-mono font-semibold text-emerald-700 dark:text-emerald-400 block">
-                    {activeRole === 'admin'
-                      ? 'Swanarh Academy · Administrator Portal'
-                      : activeRole === 'co_admin'
-                      ? 'Swanarh Academy · Co-Administrator Portal'
-                      : 'Swanarh Academy · Student Portal'}
-                  </span>
-                  <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 mt-1">
-                    {activeRole === 'admin'
-                      ? 'Administrator Sign In (ဆရာ / အက်ဒမင်)'
-                      : activeRole === 'co_admin'
-                      ? 'Co-Administrator Sign In (တွဲဖက်ဆရာ)'
-                      : 'Student Account Sign In (သင်တန်းသား ဝင်ရန်)'}
-                  </h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    {activeRole === 'admin'
-                      ? 'သင်တန်းများ၊ သင်ခန်းစာများနှင့် ကျောင်းသားအကောင့် အသစ်များကို စီမံခန့်ခွဲရန်'
-                      : activeRole === 'co_admin'
-                      ? 'ကျောင်းသားအသစ် ထည့်သွင်းခြင်း၊ သင်ခန်းစာ Post တင်ခြင်းနှင့် အိမ်စာ အမှတ်ပေးရန်'
-                      : 'သင်တန်းမှ ထုတ်ပေးထားသော Username နှင့် Password ကို အသုံးပြု၍ ဝင်ရောက်ပါ'}
-                  </p>
+              {/* Active Role Subtitle */}
+              <div className="space-y-1">
+                <div className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-slate-100">
+                  {activeRole === 'admin'
+                    ? 'Administrator Sign In (ဆရာ / အက်ဒမင်)'
+                    : activeRole === 'co_admin'
+                    ? 'Co-Administrator Sign In (တွဲဖက်ဆရာ)'
+                    : 'Student Account Sign In (သင်တန်းသား ဝင်ရန်)'}
                 </div>
-
-                {/* Error Message Toast */}
-                {errorMessage && (
-                  <div className="flex items-start gap-2.5 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 text-rose-800 dark:text-rose-300 text-xs">
-                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                    <div className="leading-snug">{errorMessage}</div>
-                  </div>
-                )}
-
-                <form onSubmit={handleSignInSubmit} className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                      {activeRole === 'student' ? 'Username သို့မဟုတ် Email' : 'Admin / Co-Admin Username သို့မဟုတ် Email'}
-                    </label>
-                    <div className="relative">
-                      <UserIcon className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                      <input
-                        type="text"
-                        value={identifier}
-                        onChange={(e) => setIdentifier(e.target.value)}
-                        placeholder={
-                          activeRole === 'student'
-                            ? 'Enter your student username or email'
-                            : 'Enter administrator username or email'
-                        }
-                        className="w-full pl-9 pr-3 py-2.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-hidden focus:border-emerald-600 font-mono"
-                        required
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                      Password (လျှို့ဝှက်နံပါတ်)
-                    </label>
-                    <div className="relative">
-                      <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                      <input
-                        type={showPassword ? 'text' : 'password'}
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        placeholder="Enter password..."
-                        className="w-full pl-9 pr-9 py-2.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-hidden focus:border-emerald-600 font-mono"
-                        required
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors cursor-pointer"
-                      >
-                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={isLoading}
-                    className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl shadow-xs transition-all hover:shadow-sm cursor-pointer disabled:opacity-50"
-                  >
-                    <span>{isLoading ? 'Authenticating...' : 'Sign In to Swanarh Academy'}</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
-                </form>
-
-                {/* Notice about Account Creation by Admin / Co-Admin Only */}
-                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/80 text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
-                  <span className="font-semibold text-slate-900 dark:text-white">အကောင့်သစ်ဖွင့်ခြင်း သတ်မှတ်ချက်: </span>
-                  ကျောင်းသားကိုယ်တိုင် အကောင့်သစ် ဖွင့်ခွင့်မရှိပါ။ <strong>Admin</strong> နှင့် <strong>Co-Admin</strong> ဆရာများကသာ ကျောင်းသားအသစ် စာရင်းသွင်းပေးရင်း တစ်ခါတည်း အကောင့်နှင့် သင်တန်းများ သတ်မှတ်ပေးပါသည်။
-                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  {activeRole === 'admin'
+                    ? 'သင်တန်းများ၊ သင်ခန်းစာများနှင့် ကျောင်းသားအကောင့် အသစ်များကို စီမံခန့်ခွဲရန်'
+                    : activeRole === 'co_admin'
+                    ? 'ကျောင်းသားအသစ် ထည့်သွင်းခြင်း၊ သင်ခန်းစာ Post တင်ခြင်းနှင့် Attendance စီမံရန်'
+                    : 'သင်တန်းမှ ထုတ်ပေးထားသော Username နှင့် Password ကို အသုံးပြု၍ ဝင်ရောက်ပါ'}
+                </p>
               </div>
 
-              {/* Security Footer */}
-              <div className="p-3 bg-slate-50 dark:bg-slate-800/60 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
-                <span className="flex items-center gap-1.5">
-                  <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+              {/* Error Message Toast */}
+              {errorMessage && (
+                <div className="neu-inset flex items-start gap-2.5 p-3.5 rounded-2xl text-rose-700 dark:text-rose-300 text-xs font-medium">
+                  <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                  <div className="leading-snug">{errorMessage}</div>
+                </div>
+              )}
+
+              {/* Neumorphic Sign In Form */}
+              <form onSubmit={handleSignInSubmit} className="space-y-5">
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 pl-1">
+                    {activeRole === 'student'
+                      ? 'Username သို့မဟုတ် Email'
+                      : 'Admin / Co-Admin Username သို့မဟုတ် Email'}
+                  </label>
+                  <div className="relative flex items-center">
+                    <div className="absolute left-3.5 pointer-events-none text-slate-400 dark:text-slate-500">
+                      <UserIcon className="w-4 h-4" />
+                    </div>
+                    <input
+                      type="text"
+                      value={identifier}
+                      onChange={(e) => setIdentifier(e.target.value)}
+                      placeholder={
+                        activeRole === 'student'
+                          ? 'Enter your student username or email'
+                          : 'Enter administrator username or email'
+                      }
+                      className="neu-input w-full pl-10 pr-4 py-3.5 text-xs sm:text-sm rounded-2xl text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 font-mono"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 pl-1">
+                    Password (လျှို့ဝှက်နံပါတ်)
+                  </label>
+                  <div className="relative flex items-center">
+                    <div className="absolute left-3.5 pointer-events-none text-slate-400 dark:text-slate-500">
+                      <Lock className="w-4 h-4" />
+                    </div>
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Enter password..."
+                      className="neu-input w-full pl-10 pr-12 py-3.5 text-xs sm:text-sm rounded-2xl text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 font-mono"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="neu-btn absolute right-2 p-2 rounded-xl text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 cursor-pointer"
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="neu-btn-emerald w-full flex items-center justify-center gap-2 py-3.5 px-5 text-white text-xs sm:text-sm font-extrabold rounded-2xl cursor-pointer disabled:opacity-50"
+                >
+                  <span>{isLoading ? 'Authenticating...' : 'Sign In to Swanarh Academy'}</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </form>
+
+              {/* Recessed Neumorphic Notice about Account Creation */}
+              <div className="neu-inset p-4 rounded-2xl text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                <span className="font-bold text-slate-900 dark:text-white">
+                  အကောင့်သစ်ဖွင့်ခြင်း သတ်မှတ်ချက်:{' '}
+                </span>
+                ကျောင်းသားကိုယ်တိုင် အကောင့်သစ် ဖွင့်ခွင့်မရှိပါ။ <strong>Admin</strong> နှင့်{' '}
+                <strong>Co-Admin</strong> ဆရာများကသာ ကျောင်းသားအသစ် စာရင်းသွင်းပေးရင်း တစ်ခါတည်း အကောင့်နှင့် သင်တန်းများ သတ်မှတ်ပေးပါသည်။
+              </div>
+
+              {/* Clean Unboxed Security Footer */}
+              <div className="pt-2 flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+                <span className="flex items-center gap-1.5 font-medium">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
                   <span>Protected Classroom Environment · Swanarh Academy</span>
                 </span>
               </div>
@@ -358,7 +399,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       </main>
 
       {/* Footer */}
-      <footer className="text-center text-xs text-slate-400 dark:text-slate-500 py-4 border-t border-slate-200/60 dark:border-slate-800/60">
+      <footer className="text-center text-xs text-slate-500 dark:text-slate-400 py-5">
         Dr. Si Thu Aung · Swanarh Academy · Classroom OS Learning Platform
       </footer>
     </div>
