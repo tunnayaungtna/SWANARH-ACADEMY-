@@ -332,13 +332,22 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-slate-100">
                     <span className="w-5 h-5 rounded-full bg-blue-600 text-white text-[11px] flex items-center justify-center font-bold">4</span>
-                    <span>App အတွင်းမှ အကောင့်များ စိတ်ကြိုက် ဖန်တီးခြင်းနှင့် Login ဝင်ခြင်း</span>
+                    <span>Custom Domain (www.swanarhclassroom.online) ချိတ်ဆက်ခြင်း</span>
                   </div>
+                  <a
+                    href="https://supabase.com/dashboard/project/wxfassadxuxfvywvnlxs/auth/url-configuration"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-950/80 hover:bg-blue-200 px-2.5 py-1 rounded-lg transition-colors cursor-pointer border border-blue-300 dark:border-blue-800"
+                  >
+                    <span>Open URL Config</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
                 </div>
                 <p className="text-slate-600 dark:text-slate-400 leading-relaxed pl-7">
-                  1. App ပေါ်ရှိ <strong>Test Connection</strong> ခလုတ်ကို နှိပ်ပြီး စိမ်းသွားပါက အားလုံး ချိတ်ဆက်မှု အောင်မြင်ပါပြီ။<br />
-                  2. Admin ဖြင့် Login ဝင်၍ <strong>Student Directory</strong> &gt; <strong>+ Add New Account</strong> ကို နှိပ်ပြီး မိမိစိတ်ကြိုက် Admin, Co-Admin, Student အကောင့်များကို အကန့်အသတ်မရှိ ဖန်တီးနိုင်ပါသည်။<br />
-                  3. <strong>Copy Credentials</strong> ခလုတ်ဖြင့် Username / Password များကို ကာယကံရှင်ထံသို့ ချက်ချင်း ပေးပို့နိုင်ပါသည်။
+                  1. <strong>Authentication</strong> &gt; <strong>URL Configuration</strong> သို့ သွားပါ။<br />
+                  2. <strong>Site URL</strong> တွင် <code className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-emerald-600 font-mono">https://www.swanarhclassroom.online</code> ကို ထည့်ပြီး Save နှိပ်ပါ။<br />
+                  3. <strong>Redirect URLs</strong> တွင် <code className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-indigo-600 font-mono">https://www.swanarhclassroom.online/**</code> နှင့် <code className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-indigo-600 font-mono">http://www.swanarhclassroom.online/**</code> တို့ကို ထည့်သွင်းထားပါ။
                 </p>
               </div>
             </div>

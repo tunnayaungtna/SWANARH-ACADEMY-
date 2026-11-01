@@ -1,4 +1,3 @@
-/* SwanArh Classroom Static Bundle v11 - Premium Neumorphism Interior UI */
 //#region \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -32970,6 +32969,7 @@ function shouldShowDeprecationWarning() {
 if (shouldShowDeprecationWarning()) console.warn("⚠️  Node.js 20 and below are deprecated and will no longer be supported in future versions of @supabase/supabase-js. Please upgrade to Node.js 22 or later. For more information, visit: https://github.com/orgs/supabase/discussions/45715");
 //#endregion
 //#region src/services/supabase.ts
+var NOTIFICATION_TTL_MS = 18e5;
 var SUPABASE_CONFIG = {
 	url: "https://wxfassadxuxfvywvnlxs.supabase.co",
 	publishableKey: "sb_publishable_mhYrcHRIdU-2EXQoXATDaw_s4vO4ZXv",
@@ -33250,21 +33250,48 @@ CREATE INDEX IF NOT EXISTS idx_submissions_student_id ON public.assignment_submi
 CREATE INDEX IF NOT EXISTS idx_quizzes_course_id ON public.quizzes (course_id);
 CREATE INDEX IF NOT EXISTS idx_quiz_submissions_quiz_id ON public.quiz_submissions (quiz_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_course_id ON public.attendance_sessions (course_id);
+
+-- 10. Classroom Notifications Table (Auto-expires 30 minutes after post creation)
+CREATE TABLE IF NOT EXISTS public.notifications (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  course_id TEXT NOT NULL,
+  course_code TEXT,
+  course_title TEXT NOT NULL,
+  post_id TEXT,
+  author_name TEXT,
+  author_role TEXT,
+  title TEXT NOT NULL,
+  message TEXT NOT NULL,
+  type TEXT DEFAULT 'post',
+  is_read BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '30 minutes')
+);
+
+ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Notifications full access" ON public.notifications;
+CREATE POLICY "Notifications full access" ON public.notifications FOR ALL USING (true);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON public.notifications (user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_expires_at ON public.notifications (expires_at);
+CREATE INDEX IF NOT EXISTS idx_notifications_post_id ON public.notifications (post_id);
 `;
 var DEFAULT_FALLBACK_AVATAR = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80";
 var DEFAULT_FALLBACK_BANNER = "https://images.unsplash.com/photo-1517694712202-14dd9538aa97?w=1200&auto=format&fit=crop&q=80";
 /**
-* Strips oversized base64 strings (> 8KB) before sending to Supabase SQL
-* so the 500MB Free Plan database and 5GB monthly Egress Bandwidth never fill up.
+* Strips base64 images & oversized strings (> 2.5KB) before sending to Supabase SQL
+* so the 500MB Free Plan database and 5GB monthly Egress Bandwidth stay ultra-lean.
+* Local storage retains high-res data:image/ URLs on the user's device.
 */
 function compactAvatarForCloud(avatar) {
 	if (!avatar) return DEFAULT_FALLBACK_AVATAR;
-	if (avatar.length > 8e3) return DEFAULT_FALLBACK_AVATAR;
+	if (avatar.startsWith("data:") || avatar.length > 2500) return DEFAULT_FALLBACK_AVATAR;
 	return avatar;
 }
 function compactBannerForCloud(banner) {
 	if (!banner) return DEFAULT_FALLBACK_BANNER;
-	if (banner.length > 12e3) return DEFAULT_FALLBACK_BANNER;
+	if (banner.startsWith("data:") || banner.length > 3500) return DEFAULT_FALLBACK_BANNER;
 	return banner;
 }
 var RULES_MARKER_PREFIX = "||RULES_OK:";
@@ -33292,6 +33319,29 @@ function decodeTitleAndRules(rawTitle, rowRulesAccepted, rowRulesAcceptedAt) {
 var SupabaseService = class {
 	static {
 		this.profileSchemaMode = "full";
+	}
+	static {
+		this.notificationsTableStatus = "unknown";
+	}
+	static {
+		this.lastUpsertSignatures = /* @__PURE__ */ new Map();
+	}
+	static {
+		this.lastExpiredCleanupAt = 0;
+	}
+	static hasChangedSignature(key, payload) {
+		try {
+			const sig = JSON.stringify(payload);
+			if (this.lastUpsertSignatures.get(key) === sig) return false;
+			return true;
+		} catch {
+			return true;
+		}
+	}
+	static recordSignature(key, payload) {
+		try {
+			this.lastUpsertSignatures.set(key, JSON.stringify(payload));
+		} catch {}
 	}
 	/**
 	* Check connection status to Supabase
@@ -33381,37 +33431,44 @@ var SupabaseService = class {
 		}
 	}
 	/**
-	* Fetch all posts (stream lessons, announcements, videos, comments, likes) from Supabase
+	* Fetch posts from Supabase (optionally scoped to enrolled courseIds to save Egress bandwidth)
 	*/
-	static async getRemotePosts() {
+	static async getRemotePosts(courseIds) {
 		try {
-			const { data, error } = await supabase.from("posts").select("*").limit(400);
+			if (courseIds && courseIds.length === 0) return [];
+			let query = supabase.from("posts").select("id,course_id,author_id,author_name,author_role,author_avatar,title,content,post_type,status,scheduled_for,scheduled_for_display,is_pinned,pinned_at,pin_order,attachments,likes,comments,created_at").order("created_at", { ascending: false }).limit(150);
+			if (courseIds && courseIds.length > 0 && courseIds.length <= 25) query = query.in("course_id", courseIds);
+			const { data, error } = await query;
 			if (error || !data) return null;
-			return data.map((row) => ({
-				id: row.id,
-				courseId: row.course_id,
-				authorId: row.author_id || "user-admin-1",
-				authorName: row.author_name || "Instructor",
-				authorRole: row.author_role || "admin",
-				authorAvatar: row.author_avatar || "",
-				title: row.title || "",
-				content: row.content || "",
-				createdAt: row.created_at ? new Date(row.created_at).toLocaleDateString("en-US", {
-					month: "short",
-					day: "numeric",
-					year: "numeric"
-				}) : "Recently",
-				postType: row.post_type || "announcement",
-				status: row.status || "published",
-				scheduledFor: row.scheduled_for || void 0,
-				scheduledForDisplay: row.scheduled_for_display || void 0,
-				isPinned: Boolean(row.is_pinned),
-				pinnedAt: row.pinned_at || void 0,
-				pinOrder: row.pin_order ?? void 0,
-				attachments: Array.isArray(row.attachments) ? row.attachments : [],
-				likes: Array.isArray(row.likes) ? row.likes : [],
-				comments: Array.isArray(row.comments) ? row.comments : []
-			}));
+			return data.map((row) => {
+				const parsedMs = row.created_at ? new Date(row.created_at).getTime() : void 0;
+				return {
+					id: row.id,
+					courseId: row.course_id,
+					authorId: row.author_id || "user-admin-1",
+					authorName: row.author_name || "Instructor",
+					authorRole: row.author_role || "admin",
+					authorAvatar: row.author_avatar || "",
+					title: row.title || "",
+					content: row.content || "",
+					createdAt: row.created_at ? new Date(row.created_at).toLocaleDateString("en-US", {
+						month: "short",
+						day: "numeric",
+						year: "numeric"
+					}) : "Recently",
+					createdAtMs: parsedMs && !isNaN(parsedMs) ? parsedMs : void 0,
+					postType: row.post_type || "announcement",
+					status: row.status || "published",
+					scheduledFor: row.scheduled_for || void 0,
+					scheduledForDisplay: row.scheduled_for_display || void 0,
+					isPinned: Boolean(row.is_pinned),
+					pinnedAt: row.pinned_at || void 0,
+					pinOrder: row.pin_order ?? void 0,
+					attachments: Array.isArray(row.attachments) ? row.attachments : [],
+					likes: Array.isArray(row.likes) ? row.likes : [],
+					comments: Array.isArray(row.comments) ? row.comments : []
+				};
+			});
 		} catch {
 			return null;
 		}
@@ -33491,11 +33548,14 @@ var SupabaseService = class {
 		}
 	}
 	/**
-	* Fetch all attendance sessions from Supabase
+	* Fetch attendance sessions from Supabase (optionally scoped to enrolled courseIds)
 	*/
-	static async getRemoteAttendanceSessions() {
+	static async getRemoteAttendanceSessions(courseIds) {
 		try {
-			const { data, error } = await supabase.from("attendance_sessions").select("*").limit(400);
+			if (courseIds && courseIds.length === 0) return [];
+			let query = supabase.from("attendance_sessions").select("id,course_id,date,display_date,title,is_open,opened_by,records,created_at").limit(150);
+			if (courseIds && courseIds.length > 0 && courseIds.length <= 25) query = query.in("course_id", courseIds);
+			const { data, error } = await query;
 			if (error || !data) return null;
 			return data.map((row) => ({
 				id: row.id,
@@ -33510,6 +33570,136 @@ var SupabaseService = class {
 			}));
 		} catch {
 			return null;
+		}
+	}
+	/**
+	* Fetch active (non-expired) notifications for a user from Supabase and auto-purge expired (>30 mins) rows
+	*/
+	static async getRemoteNotifications(userId) {
+		if (this.notificationsTableStatus === "missing") return null;
+		try {
+			await this.purgeExpiredNotifications();
+			const cutoffIso = (/* @__PURE__ */ new Date(Date.now() - NOTIFICATION_TTL_MS)).toISOString();
+			let query = supabase.from("notifications").select("id,user_id,course_id,course_code,course_title,post_id,author_name,author_role,title,message,type,is_read,created_at,expires_at").gt("created_at", cutoffIso).order("created_at", { ascending: false }).limit(60);
+			if (userId) query = query.eq("user_id", userId);
+			const { data, error } = await query;
+			if (error) {
+				if (error.code === "42P01" || error.message?.includes("notifications")) this.notificationsTableStatus = "missing";
+				return null;
+			}
+			this.notificationsTableStatus = "available";
+			if (!data) return [];
+			return data.map((row) => {
+				const createdMs = row.created_at ? new Date(row.created_at).getTime() : Date.now();
+				const expiresMs = row.expires_at ? new Date(row.expires_at).getTime() : createdMs + NOTIFICATION_TTL_MS;
+				return {
+					id: row.id,
+					userId: row.user_id,
+					courseId: row.course_id,
+					courseCode: row.course_code || void 0,
+					courseTitle: row.course_title || "",
+					postId: row.post_id || void 0,
+					authorName: row.author_name || void 0,
+					authorRole: row.author_role || void 0,
+					title: row.title || "",
+					message: row.message || "",
+					type: row.type || "post",
+					isRead: Boolean(row.is_read),
+					createdAt: row.created_at ? new Date(row.created_at).toLocaleString("en-US", {
+						month: "short",
+						day: "numeric",
+						hour: "2-digit",
+						minute: "2-digit"
+					}) : "Just now",
+					createdAtMs: createdMs,
+					expiresAtMs: expiresMs
+				};
+			});
+		} catch {
+			return null;
+		}
+	}
+	/**
+	* Batch upsert notifications to Supabase (with 30-minute expiration timestamp)
+	*/
+	static async upsertNotifications(notifs) {
+		if (this.notificationsTableStatus === "missing" || notifs.length === 0) return false;
+		try {
+			const now = Date.now();
+			const validNotifs = notifs.filter((n) => {
+				const created = n.createdAtMs || now;
+				return now - created < NOTIFICATION_TTL_MS;
+			});
+			if (validNotifs.length === 0) return true;
+			const rows = validNotifs.map((n) => {
+				const createdMs = n.createdAtMs || now;
+				const expiresMs = n.expiresAtMs || createdMs + 18e5;
+				return {
+					id: n.id,
+					user_id: n.userId,
+					course_id: n.courseId,
+					course_code: n.courseCode || null,
+					course_title: n.courseTitle,
+					post_id: n.postId || null,
+					author_name: n.authorName || null,
+					author_role: n.authorRole || null,
+					title: n.title,
+					message: n.message,
+					type: n.type || "post",
+					is_read: Boolean(n.isRead),
+					created_at: new Date(createdMs).toISOString(),
+					expires_at: new Date(expiresMs).toISOString()
+				};
+			});
+			const { error } = await supabase.from("notifications").upsert(rows, { onConflict: "id" });
+			if (error) {
+				if (error.code === "42P01" || error.message?.includes("notifications")) this.notificationsTableStatus = "missing";
+				return false;
+			}
+			this.notificationsTableStatus = "available";
+			return true;
+		} catch {
+			return false;
+		}
+	}
+	/**
+	* Auto-delete notifications older than 30 minutes (or specific expired IDs) from Supabase SQL database
+	*/
+	static async purgeExpiredNotifications(expiredIds = [], force = false) {
+		if (this.notificationsTableStatus === "missing") return false;
+		const now = Date.now();
+		const shouldRunTimeSweep = force || now - this.lastExpiredCleanupAt >= 45e3;
+		if (!shouldRunTimeSweep && expiredIds.length === 0) return true;
+		try {
+			if (shouldRunTimeSweep) {
+				this.lastExpiredCleanupAt = now;
+				const cutoffIso = (/* @__PURE__ */ new Date(now - NOTIFICATION_TTL_MS)).toISOString();
+				const nowIso = new Date(now).toISOString();
+				const { error } = await supabase.from("notifications").delete().or(`created_at.lt.${cutoffIso},expires_at.lte.${nowIso}`);
+				if (error) {
+					if (error.code === "42P01" || error.message?.includes("notifications")) {
+						this.notificationsTableStatus = "missing";
+						return false;
+					}
+				} else this.notificationsTableStatus = "available";
+			}
+			if (expiredIds.length > 0) await supabase.from("notifications").delete().in("id", expiredIds.slice(0, 100));
+			return true;
+		} catch {
+			return false;
+		}
+	}
+	/**
+	* Delete notifications associated with a deleted post or course in Supabase
+	*/
+	static async deleteNotificationsByPostId(postId) {
+		if (this.notificationsTableStatus === "missing") return false;
+		try {
+			const { error } = await supabase.from("notifications").delete().eq("post_id", postId);
+			if (error && (error.code === "42P01" || error.message?.includes("notifications"))) this.notificationsTableStatus = "missing";
+			return !error;
+		} catch {
+			return false;
 		}
 	}
 	static buildProfilePayload(user, mode) {
@@ -33556,19 +33746,26 @@ var SupabaseService = class {
 		};
 	}
 	/**
-	* Create or update a profile in Supabase with cached schema mode
-	* so Free Plan never wastes extra fallback HTTP calls.
+	* Create or update a profile in Supabase with cached schema mode & signature deduplication
+	* so Free Plan never wastes extra HTTP calls.
 	*/
 	static async upsertProfile(user) {
 		try {
 			const payload = this.buildProfilePayload(user, this.profileSchemaMode);
+			const sigKey = `profile:${user.id}`;
+			const { updated_at: _ignoreTs, ...comparablePayload } = payload;
+			if (!this.hasChangedSignature(sigKey, comparablePayload)) return { success: true };
 			const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
-			if (!error) return { success: true };
+			if (!error) {
+				this.recordSignature(sigKey, comparablePayload);
+				return { success: true };
+			}
 			if (this.profileSchemaMode === "full") {
 				const noPwdPayload = this.buildProfilePayload(user, "no_password");
 				const { error: errNoPwd } = await supabase.from("profiles").upsert(noPwdPayload, { onConflict: "id" });
 				if (!errNoPwd) {
 					this.profileSchemaMode = "no_password";
+					this.recordSignature(sigKey, comparablePayload);
 					return { success: true };
 				}
 			}
@@ -33576,6 +33773,7 @@ var SupabaseService = class {
 			const { error: fallbackError } = await supabase.from("profiles").upsert(corePayload, { onConflict: "id" });
 			if (!fallbackError) {
 				this.profileSchemaMode = "core";
+				this.recordSignature(sigKey, comparablePayload);
 				return { success: true };
 			}
 			return {
@@ -33594,6 +33792,7 @@ var SupabaseService = class {
 	*/
 	static async deleteProfile(userId) {
 		try {
+			this.lastUpsertSignatures.delete(`profile:${userId}`);
 			await Promise.allSettled([supabase.from("assignment_submissions").delete().eq("student_id", userId), supabase.from("quiz_submissions").delete().eq("student_id", userId)]);
 			const { error } = await supabase.from("profiles").delete().eq("id", userId);
 			return !error;
@@ -33606,7 +33805,7 @@ var SupabaseService = class {
 	*/
 	static async upsertCourse(course) {
 		try {
-			const { error } = await supabase.from("courses").upsert({
+			const row = {
 				id: course.id,
 				code: course.code,
 				title: course.title,
@@ -33621,11 +33820,15 @@ var SupabaseService = class {
 				total_lessons: course.totalLessons || 0,
 				total_assignments: course.totalAssignments || 0,
 				total_quizzes: course.totalQuizzes || 0
-			}, { onConflict: "id" });
+			};
+			const sigKey = `course:${course.id}`;
+			if (!this.hasChangedSignature(sigKey, row)) return { success: true };
+			const { error } = await supabase.from("courses").upsert(row, { onConflict: "id" });
 			if (error) return {
 				success: false,
 				error: error.message
 			};
+			this.recordSignature(sigKey, row);
 			return { success: true };
 		} catch (err) {
 			return {
@@ -33639,11 +33842,13 @@ var SupabaseService = class {
 	*/
 	static async deleteCourse(courseId) {
 		try {
+			this.lastUpsertSignatures.delete(`course:${courseId}`);
 			await Promise.allSettled([
 				supabase.from("posts").delete().eq("course_id", courseId),
 				supabase.from("assignments").delete().eq("course_id", courseId),
 				supabase.from("quizzes").delete().eq("course_id", courseId),
-				supabase.from("attendance_sessions").delete().eq("course_id", courseId)
+				supabase.from("attendance_sessions").delete().eq("course_id", courseId),
+				this.notificationsTableStatus !== "missing" ? supabase.from("notifications").delete().eq("course_id", courseId) : Promise.resolve()
 			]);
 			const { error } = await supabase.from("courses").delete().eq("id", courseId);
 			return !error;
@@ -33653,12 +33858,21 @@ var SupabaseService = class {
 	}
 	static formatPostRow(post) {
 		const safeAttachments = (post.attachments || []).map((att) => ({
-			...att,
-			url: att.url && att.url.length > 8e3 ? "#attachment" : att.url
+			id: att.id,
+			name: att.name,
+			size: att.size,
+			type: att.type,
+			url: att.url && (att.url.startsWith("data:") || att.url.length > 2e3) ? "#attachment" : att.url
 		}));
-		const safeComments = (post.comments || []).map((c) => ({
-			...c,
-			authorAvatar: compactAvatarForCloud(c.authorAvatar)
+		const safeComments = (post.comments || []).slice(-50).map((c) => ({
+			id: c.id,
+			postId: c.postId,
+			authorId: c.authorId,
+			authorName: c.authorName,
+			authorRole: c.authorRole,
+			authorAvatar: compactAvatarForCloud(c.authorAvatar),
+			content: (c.content || "").slice(0, 1e3),
+			createdAt: c.createdAt
 		}));
 		return {
 			id: post.id,
@@ -33686,17 +33900,23 @@ var SupabaseService = class {
 	*/
 	static async upsertPost(post) {
 		try {
-			const { error } = await supabase.from("posts").upsert(this.formatPostRow(post), { onConflict: "id" });
+			const row = this.formatPostRow(post);
+			const sigKey = `post:${post.id}`;
+			if (!this.hasChangedSignature(sigKey, row)) return true;
+			const { error } = await supabase.from("posts").upsert(row, { onConflict: "id" });
+			if (!error) this.recordSignature(sigKey, row);
 			return !error;
 		} catch {
 			return false;
 		}
 	}
 	/**
-	* Auto-delete a post from Supabase SQL database
+	* Auto-delete a post and its associated student notifications from Supabase SQL database
 	*/
 	static async deletePost(postId) {
 		try {
+			this.lastUpsertSignatures.delete(`post:${postId}`);
+			await this.deleteNotificationsByPostId(postId);
 			const { error } = await supabase.from("posts").delete().eq("id", postId);
 			return !error;
 		} catch {
@@ -33825,7 +34045,7 @@ var SupabaseService = class {
 	*/
 	static async upsertAttendanceSession(session) {
 		try {
-			const { error } = await supabase.from("attendance_sessions").upsert({
+			const row = {
 				id: session.id,
 				course_id: session.courseId,
 				date: session.date,
@@ -33834,7 +34054,11 @@ var SupabaseService = class {
 				is_open: session.isOpen,
 				opened_by: session.openedBy,
 				records: session.records || {}
-			}, { onConflict: "id" });
+			};
+			const sigKey = `att:${session.id}`;
+			if (!this.hasChangedSignature(sigKey, row)) return true;
+			const { error } = await supabase.from("attendance_sessions").upsert(row, { onConflict: "id" });
+			if (!error) this.recordSignature(sigKey, row);
 			return !error;
 		} catch {
 			return false;
@@ -33845,6 +34069,7 @@ var SupabaseService = class {
 	*/
 	static async deleteAttendanceSession(sessionId) {
 		try {
+			this.lastUpsertSignatures.delete(`att:${sessionId}`);
 			const { error } = await supabase.from("attendance_sessions").delete().eq("id", sessionId);
 			return !error;
 		} catch {
@@ -33857,6 +34082,7 @@ var SupabaseService = class {
 	*/
 	static async syncAllData(users, courses, posts = [], assignments = [], quizzes = [], attendanceSessions = [], deletedIds = [], submissions = []) {
 		let lastError;
+		await this.purgeExpiredNotifications(deletedIds, true);
 		if (deletedIds.length > 0) await Promise.allSettled([
 			supabase.from("courses").delete().in("id", deletedIds),
 			supabase.from("profiles").delete().in("id", deletedIds),
@@ -34531,7 +34757,7 @@ var INITIAL_PROGRESS = [
 			issuedAt: "October 15, 2026",
 			gradeAverage: 98,
 			attendancePercentage: 100,
-			verificationUrl: "https://classroomos.edu/verify/CERT-EDU-2026-8819",
+			verificationUrl: "https://www.swanarhclassroom.online/verify/CERT-EDU-2026-8819",
 			instructorSignature: "Dr. Kyaw Swar (Dean)"
 		}
 	},
@@ -35282,27 +35508,42 @@ var ClassroomDB = class {
 		this.lastFullPullAt = 0;
 	}
 	static {
+		this.lastCatalogPullAt = 0;
+	}
+	static {
 		this.lastProfilePullAt = 0;
 	}
 	static {
 		this.purgedRemoteIds = /* @__PURE__ */ new Set();
 	}
+	static extractTimestampFromId(id) {
+		if (!id) return void 0;
+		const match = id.match(/(\d{13})/);
+		if (match) {
+			const parsed = Number(match[1]);
+			if (Number.isFinite(parsed) && parsed > 16e11) return parsed;
+		}
+	}
 	/**
-	* Supabase Free Plan Optimized Pull:
+	* Supabase Free Plan Ultra-Optimized Pull:
 	* - Coalesces concurrent requests
-	* - Enforces a 40-second cooldown on background polls (unless `force: true`)
-	* - Supports `onlyProfiles: true` when on the Login screen (cuts queries by 85%)
-	* - Performs diff checking before writing to localStorage so React only re-renders when data actually changes.
+	* - Enforces a 75-second cooldown on background polls (unless `force: true`)
+	* - Caches heavy catalog tables (`profiles`, `courses`) for 5 minutes on background ticks
+	* - Scopes `posts`, `attendance_sessions`, and `notifications` to the student's enrolled courses
+	* - Automatically purges notifications older than 30 minutes from both local storage & Supabase
 	*/
 	static async pullFromSupabase(options) {
 		if (typeof navigator !== "undefined" && navigator.onLine === false) return false;
+		const purgedLocalNotifs = this.purgeExpiredNotifications();
 		const force = Boolean(options?.force);
 		const onlyProfiles = Boolean(options?.onlyProfiles);
+		const isBackground = Boolean(options?.background);
 		const now = Date.now();
-		const COOLDOWN_MS = 4e4;
+		const COOLDOWN_MS = 75e3;
+		const CATALOG_TTL_MS = 3e5;
 		if (!force) {
-			if (onlyProfiles && now - this.lastProfilePullAt < COOLDOWN_MS) return false;
-			if (!onlyProfiles && now - this.lastFullPullAt < COOLDOWN_MS) return false;
+			if (onlyProfiles && now - this.lastProfilePullAt < COOLDOWN_MS) return purgedLocalNotifs;
+			if (!onlyProfiles && now - this.lastFullPullAt < COOLDOWN_MS) return purgedLocalNotifs;
 		}
 		if (this.activePullPromise) return this.activePullPromise;
 		this.activePullPromise = (async () => {
@@ -35311,7 +35552,7 @@ var ClassroomDB = class {
 				if (onlyProfiles) {
 					this.lastProfilePullAt = Date.now();
 					const remoteProfiles = await SupabaseService.getRemoteProfiles();
-					if (!remoteProfiles || remoteProfiles.length === 0) return false;
+					if (!remoteProfiles || remoteProfiles.length === 0) return purgedLocalNotifs;
 					const localUsers = this.getAllUsers().filter((u) => !deletedSet.has(u.id));
 					const prevJson = JSON.stringify(localUsers);
 					const userMap = /* @__PURE__ */ new Map();
@@ -35333,17 +35574,25 @@ var ClassroomDB = class {
 						this.setItem(STORAGE_KEYS.USERS, mergedUsers);
 						return true;
 					}
-					return false;
+					return purgedLocalNotifs;
 				}
-				this.lastFullPullAt = Date.now();
-				this.lastProfilePullAt = Date.now();
-				const [remoteProfiles, remoteCourses, remotePosts, remoteAttendance] = await Promise.all([
-					SupabaseService.getRemoteProfiles(),
-					SupabaseService.getRemoteCourses(),
-					SupabaseService.getRemotePosts(),
-					SupabaseService.getRemoteAttendanceSessions()
+				this.lastFullPullAt = now;
+				const shouldFetchCatalog = !isBackground || force || now - this.lastCatalogPullAt >= CATALOG_TTL_MS;
+				if (shouldFetchCatalog) {
+					this.lastCatalogPullAt = now;
+					this.lastProfilePullAt = now;
+				}
+				const loggedUser = this.getCurrentUser();
+				const currentCourses = this.getItem(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter((c) => !deletedSet.has(c.id));
+				const studentScopedCourseIds = loggedUser && loggedUser.role === "student" ? currentCourses.filter((c) => c.enrolledStudentIds.includes(loggedUser.id)).map((c) => c.id) : void 0;
+				const [remoteProfiles, remoteCourses, remotePosts, remoteAttendance, remoteNotifications] = await Promise.all([
+					shouldFetchCatalog ? SupabaseService.getRemoteProfiles() : Promise.resolve(null),
+					shouldFetchCatalog ? SupabaseService.getRemoteCourses() : Promise.resolve(null),
+					SupabaseService.getRemotePosts(studentScopedCourseIds),
+					SupabaseService.getRemoteAttendanceSessions(studentScopedCourseIds),
+					loggedUser ? SupabaseService.getRemoteNotifications(loggedUser.id) : Promise.resolve(null)
 				]);
-				let updated = false;
+				let updated = purgedLocalNotifs;
 				if (remoteProfiles && remoteProfiles.length > 0) {
 					const localUsers = this.getAllUsers().filter((u) => !deletedSet.has(u.id));
 					const prevJson = JSON.stringify(localUsers);
@@ -35404,6 +35653,7 @@ var ClassroomDB = class {
 					const prevJson = JSON.stringify(localPosts);
 					const postMap = /* @__PURE__ */ new Map();
 					localPosts.forEach((p) => postMap.set(p.id, p));
+					const newlyPublishedRemotePosts = [];
 					remotePosts.forEach((rp) => {
 						if (deletedSet.has(rp.id) || deletedSet.has(rp.courseId)) {
 							if (!this.purgedRemoteIds.has(rp.id)) {
@@ -35413,10 +35663,19 @@ var ClassroomDB = class {
 							return;
 						}
 						const existing = postMap.get(rp.id);
+						const isNowPublished = !rp.status || rp.status === "published";
+						const wasPreviouslyUnpublished = !existing || existing.status === "scheduled";
+						const postTimestampMs = rp.createdAtMs || existing?.createdAtMs || this.extractTimestampFromId(rp.id);
+						const isWithin30Mins = postTimestampMs !== void 0 ? Date.now() - postTimestampMs < NOTIFICATION_TTL_MS : false;
+						if (isNowPublished && wasPreviouslyUnpublished && isWithin30Mins && (rp.authorRole === "admin" || rp.authorRole === "co_admin")) newlyPublishedRemotePosts.push({
+							...rp,
+							createdAtMs: postTimestampMs
+						});
 						postMap.set(rp.id, {
 							...existing,
 							...rp,
 							createdAt: existing?.createdAt || rp.createdAt,
+							createdAtMs: postTimestampMs,
 							attachments: rp.attachments && rp.attachments.length > 0 ? rp.attachments.map((att, idx) => {
 								const localAtt = existing?.attachments?.[idx];
 								if (att.url === "#attachment" && localAtt?.url) return localAtt;
@@ -35429,7 +35688,39 @@ var ClassroomDB = class {
 						this.setItem(STORAGE_KEYS.POSTS, merged);
 						updated = true;
 					}
+					if (newlyPublishedRemotePosts.length > 0) {
+						const allCourses = this.getItem(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+						newlyPublishedRemotePosts.forEach((np) => {
+							const targetCourse = allCourses.find((c) => c.id === np.courseId);
+							if (targetCourse) {
+								this.notifyEnrolledStudentsOfCoursePost(targetCourse, np, np.authorName, np.authorRole);
+								updated = true;
+							}
+						});
+					}
 				}
+				if (remoteNotifications && remoteNotifications.length > 0) {
+					const localNotifs = this.getItem(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
+					const prevJson = JSON.stringify(localNotifs);
+					const notifMap = /* @__PURE__ */ new Map();
+					localNotifs.forEach((n) => notifMap.set(n.id, n));
+					remoteNotifications.forEach((rn) => {
+						const createdMs = rn.createdAtMs || this.extractTimestampFromId(rn.id) || Date.now();
+						if (Date.now() - createdMs >= 18e5) return;
+						const existing = notifMap.get(rn.id);
+						notifMap.set(rn.id, {
+							...existing,
+							...rn,
+							isRead: Boolean(existing?.isRead || rn.isRead)
+						});
+					});
+					const mergedNotifs = Array.from(notifMap.values());
+					if (JSON.stringify(mergedNotifs) !== prevJson) {
+						this.setItem(STORAGE_KEYS.NOTIFICATIONS, mergedNotifs);
+						updated = true;
+					}
+				}
+				if (this.purgeExpiredNotifications()) updated = true;
 				if (remoteAttendance && remoteAttendance.length > 0) {
 					const localAttendance = this.getItem(STORAGE_KEYS.ATTENDANCE, INITIAL_ATTENDANCE_SESSIONS).filter((att) => !deletedSet.has(att.id));
 					const prevJson = JSON.stringify(localAttendance);
@@ -35461,7 +35752,7 @@ var ClassroomDB = class {
 				}
 				return updated;
 			} catch {
-				return false;
+				return purgedLocalNotifs;
 			} finally {
 				this.activePullPromise = null;
 			}
@@ -35473,20 +35764,31 @@ var ClassroomDB = class {
 		const allPosts = this.getItem(STORAGE_KEYS.POSTS, INITIAL_POSTS);
 		const now = Date.now();
 		let hasAutoPublished = false;
+		const autoPublishedList = [];
 		const processedPosts = allPosts.map((post) => {
 			if (post.status === "scheduled" && post.scheduledFor) {
 				if (new Date(post.scheduledFor).getTime() <= now) {
 					hasAutoPublished = true;
-					return {
+					const released = {
 						...post,
 						status: "published",
-						createdAt: "Just now"
+						createdAt: "Just now",
+						createdAtMs: now
 					};
+					autoPublishedList.push(released);
+					return released;
 				}
 			}
 			return post;
 		});
-		if (hasAutoPublished) this.setItem(STORAGE_KEYS.POSTS, processedPosts);
+		if (hasAutoPublished) {
+			this.setItem(STORAGE_KEYS.POSTS, processedPosts);
+			const allCourses = this.getItem(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+			autoPublishedList.forEach((ap) => {
+				const targetCourse = allCourses.find((c) => c.id === ap.courseId);
+				if (targetCourse && (ap.authorRole === "admin" || ap.authorRole === "co_admin")) this.notifyEnrolledStudentsOfCoursePost(targetCourse, ap, ap.authorName, ap.authorRole);
+			});
+		}
 		const coursePosts = processedPosts.filter((post) => post.courseId === courseId);
 		return (currentUser.role === "admin" || currentUser.role === "co_admin" ? coursePosts : coursePosts.filter((post) => {
 			if (!post.status || post.status === "published") return true;
@@ -35517,12 +35819,14 @@ var ClassroomDB = class {
 		const posts = this.getItem(STORAGE_KEYS.POSTS, INITIAL_POSTS);
 		const isScheduled = isInstructor && postData.status === "scheduled";
 		const isPinned = isInstructor && Boolean(postData.isPinned);
+		const nowMs = Date.now();
 		const newPost = {
 			...postData,
 			isPinned,
 			status: isScheduled ? "scheduled" : "published",
-			id: `post-${Date.now()}`,
+			id: `post-${nowMs}`,
 			createdAt: isScheduled ? `Scheduled for ${postData.scheduledForDisplay || "upcoming"}` : "Just now",
+			createdAtMs: nowMs,
 			likes: [],
 			comments: []
 		};
@@ -35530,20 +35834,15 @@ var ClassroomDB = class {
 		try {
 			SupabaseService.upsertPost(newPost).catch(() => {});
 		} catch {}
+		let notifiedCount = 0;
 		if (!isScheduled) {
 			const course = this.getItem(STORAGE_KEYS.COURSES, INITIAL_COURSES).find((c) => c.id === postData.courseId);
-			if (course) course.enrolledStudentIds.forEach((studentId) => {
-				this.addNotification({
-					userId: studentId,
-					courseId: course.id,
-					courseTitle: course.title,
-					title: `New ${postData.postType === "lesson" ? "Lesson" : "Post"}: ${postData.title}`,
-					message: `${currentUser.name} posted in ${course.code}`,
-					type: "post"
-				});
-			});
+			if (course) notifiedCount = this.notifyEnrolledStudentsOfCoursePost(course, newPost, currentUser.name, currentUser.role);
 		}
-		return { post: newPost };
+		return {
+			post: newPost,
+			notifiedCount
+		};
 	}
 	static updatePost(postId, updates, currentUser) {
 		const posts = this.getItem(STORAGE_KEYS.POSTS, INITIAL_POSTS);
@@ -35654,12 +35953,14 @@ var ClassroomDB = class {
 			error: "Post not found."
 		};
 		let publishedPost = null;
+		const nowMs = Date.now();
 		const updated = posts.map((p) => {
 			if (p.id === postId) {
 				publishedPost = {
 					...p,
 					status: "published",
 					createdAt: "Just now",
+					createdAtMs: nowMs,
 					scheduledFor: void 0,
 					scheduledForDisplay: void 0
 				};
@@ -35671,18 +35972,13 @@ var ClassroomDB = class {
 		if (publishedPost) try {
 			SupabaseService.upsertPost(publishedPost).catch(() => {});
 		} catch {}
+		let notifiedCount = 0;
 		const course = this.getItem(STORAGE_KEYS.COURSES, INITIAL_COURSES).find((c) => c.id === target.courseId);
-		if (course) course.enrolledStudentIds.forEach((studentId) => {
-			this.addNotification({
-				userId: studentId,
-				courseId: course.id,
-				courseTitle: course.title,
-				title: `Published: ${target.title}`,
-				message: `${currentUser.name} published a scheduled post in ${course.code}`,
-				type: "post"
-			});
-		});
-		return { success: true };
+		if (course && publishedPost) notifiedCount = this.notifyEnrolledStudentsOfCoursePost(course, publishedPost, currentUser.name, currentUser.role);
+		return {
+			success: true,
+			notifiedCount
+		};
 	}
 	static deletePost(postId, currentUser) {
 		const posts = this.getItem(STORAGE_KEYS.POSTS, INITIAL_POSTS);
@@ -35690,7 +35986,10 @@ var ClassroomDB = class {
 		if (!(currentUser.role === "admin" || currentUser.role === "co_admin")) return false;
 		const updated = posts.filter((p) => p.id !== postId);
 		this.setItem(STORAGE_KEYS.POSTS, updated);
-		this.recordDeletedIds([postId]);
+		const notifs = this.getItem(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
+		const removedNotifIds = notifs.filter((n) => n.postId === postId).map((n) => n.id);
+		if (removedNotifIds.length > 0) this.setItem(STORAGE_KEYS.NOTIFICATIONS, notifs.filter((n) => n.postId !== postId));
+		this.recordDeletedIds([postId, ...removedNotifIds]);
 		try {
 			SupabaseService.deletePost(postId).catch(() => {});
 		} catch {}
@@ -36056,7 +36355,7 @@ var ClassroomDB = class {
 			}),
 			gradeAverage: 95,
 			attendancePercentage: attStats.percentage,
-			verificationUrl: `https://classroomos.edu/verify/${certId}`,
+			verificationUrl: `https://www.swanarhclassroom.online/verify/${certId}`,
 			instructorSignature: `${course.instructorName} (Lead Faculty)`
 		};
 		const allProgress = this.getItem(STORAGE_KEYS.PROGRESS, INITIAL_PROGRESS);
@@ -36518,25 +36817,158 @@ var ClassroomDB = class {
 			totalStudents: allStudents.length
 		};
 	}
+	static purgeExpiredNotifications(forceCloudCleanup = false) {
+		const notifs = this.getItem(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
+		const now = Date.now();
+		const expiredIds = [];
+		let mutated = false;
+		const activeNotifs = [];
+		for (const n of notifs) {
+			let createdMs = n.createdAtMs;
+			if (!createdMs) {
+				createdMs = this.extractTimestampFromId(n.id) || this.extractTimestampFromId(n.postId) || now;
+				mutated = true;
+			}
+			const expiresMs = n.expiresAtMs || createdMs + 18e5;
+			if (now >= expiresMs || now - createdMs >= 18e5) {
+				expiredIds.push(n.id);
+				mutated = true;
+			} else activeNotifs.push(n.createdAtMs === createdMs && n.expiresAtMs === expiresMs ? n : {
+				...n,
+				createdAtMs: createdMs,
+				expiresAtMs: expiresMs
+			});
+		}
+		if (mutated) this.setItem(STORAGE_KEYS.NOTIFICATIONS, activeNotifs);
+		if (expiredIds.length > 0 || forceCloudCleanup) try {
+			SupabaseService.purgeExpiredNotifications(expiredIds, forceCloudCleanup).catch(() => {});
+		} catch {}
+		return expiredIds.length > 0;
+	}
 	static getNotifications(userId) {
+		this.purgeExpiredNotifications();
 		return this.getItem(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS).filter((n) => n.userId === userId);
 	}
-	static markAllNotificationsRead(userId) {
-		const updated = this.getItem(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS).map((n) => n.userId === userId ? {
-			...n,
-			isRead: true
-		} : n);
+	static markNotificationRead(notificationId) {
+		const notifs = this.getItem(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
+		let targetNotif = null;
+		const updated = notifs.map((n) => {
+			if (n.id === notificationId) {
+				targetNotif = {
+					...n,
+					isRead: true
+				};
+				return targetNotif;
+			}
+			return n;
+		});
 		this.setItem(STORAGE_KEYS.NOTIFICATIONS, updated);
+		if (targetNotif) try {
+			SupabaseService.upsertNotifications([targetNotif]).catch(() => {});
+		} catch {}
+	}
+	static markAllNotificationsRead(userId) {
+		const notifs = this.getItem(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
+		const updatedForUser = [];
+		const updated = notifs.map((n) => {
+			if (n.userId === userId && !n.isRead) {
+				const readItem = {
+					...n,
+					isRead: true
+				};
+				updatedForUser.push(readItem);
+				return readItem;
+			}
+			return n;
+		});
+		this.setItem(STORAGE_KEYS.NOTIFICATIONS, updated);
+		if (updatedForUser.length > 0) try {
+			SupabaseService.upsertNotifications(updatedForUser).catch(() => {});
+		} catch {}
 	}
 	static addNotification(item) {
+		this.purgeExpiredNotifications();
 		const notifs = this.getItem(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
+		const nowMs = Date.now();
+		const timeLabel = new Date(nowMs).toLocaleString("en-US", {
+			month: "short",
+			day: "numeric",
+			hour: "2-digit",
+			minute: "2-digit"
+		});
 		const newNotif = {
 			...item,
-			id: `notif-${Date.now()}`,
-			createdAt: "Just now",
+			id: `notif-${nowMs}-${Math.random().toString(36).slice(2, 7)}`,
+			createdAt: timeLabel,
+			createdAtMs: nowMs,
+			expiresAtMs: nowMs + NOTIFICATION_TTL_MS,
 			isRead: false
 		};
 		this.setItem(STORAGE_KEYS.NOTIFICATIONS, [newNotif, ...notifs]);
+		try {
+			SupabaseService.upsertNotifications([newNotif]).catch(() => {});
+		} catch {}
+		return newNotif;
+	}
+	/**
+	* Dispatches a classroom post notification to every student enrolled in `course.enrolledStudentIds`.
+	* Each notification is stamped with a 30-minute expiration window (`expiresAtMs`) and synced to Supabase,
+	* after which it is automatically deleted from both local storage and Supabase.
+	*/
+	static notifyEnrolledStudentsOfCoursePost(course, post, authorName, authorRole) {
+		if (!course.enrolledStudentIds || course.enrolledStudentIds.length === 0) return 0;
+		this.purgeExpiredNotifications();
+		const nowMs = Date.now();
+		const postCreatedMs = post.createdAtMs || this.extractTimestampFromId(post.id) || nowMs;
+		if (nowMs - postCreatedMs >= 18e5) return 0;
+		const expiresMs = postCreatedMs + NOTIFICATION_TTL_MS;
+		const notifs = this.getItem(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
+		const existingKeys = new Set(notifs.filter((n) => n.postId).map((n) => `${n.userId}:${n.postId}`));
+		const roleLabel = authorRole === "admin" ? "Admin (ဆရာ)" : authorRole === "co_admin" ? "Co-Admin (တွဲဖက်ဆရာ)" : "Instructor";
+		const typeLabel = post.postType === "lesson" ? "သင်ခန်းစာအသစ် (New Lesson)" : post.postType === "resource" ? "သင်ထောက်ကူဖိုင် (New Resource)" : "ကြေညာချက်အသစ် (New Announcement)";
+		const timeLabel = new Date(postCreatedMs).toLocaleString("en-US", {
+			month: "short",
+			day: "numeric",
+			hour: "2-digit",
+			minute: "2-digit"
+		});
+		const createdList = [];
+		course.enrolledStudentIds.forEach((studentId) => {
+			const dedupeKey = `${studentId}:${post.id}`;
+			if (existingKeys.has(dedupeKey)) return;
+			existingKeys.add(dedupeKey);
+			createdList.push({
+				id: `notif-${postCreatedMs}-${studentId}-${Math.random().toString(36).slice(2, 6)}`,
+				userId: studentId,
+				courseId: course.id,
+				courseCode: course.code,
+				courseTitle: course.title,
+				postId: post.id,
+				authorName,
+				authorRole,
+				title: `📢 [${course.code}] ${typeLabel}: ${post.title}`,
+				message: `${authorName} (${roleLabel}) မှ "${course.title}" အတန်းတွင် ပို့စ်အသစ် တင်ထားပါသည်။`,
+				type: "post",
+				isRead: false,
+				createdAt: timeLabel,
+				createdAtMs: postCreatedMs,
+				expiresAtMs: expiresMs
+			});
+		});
+		if (createdList.length > 0) {
+			this.setItem(STORAGE_KEYS.NOTIFICATIONS, [...createdList, ...notifs]);
+			try {
+				SupabaseService.upsertNotifications(createdList).catch(() => {});
+			} catch {}
+			try {
+				const loggedUser = this.getCurrentUser();
+				if (loggedUser && loggedUser.role === "student" && course.enrolledStudentIds.includes(loggedUser.id) && typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") new Notification(`📢 ${course.code} — ${post.title}`, {
+					body: `${authorName} (${roleLabel}) မှ "${course.title}" အတန်းတွင် ပို့စ်အသစ် တင်ထားပါသည်။`,
+					icon: "./pwa-192x192.png"
+				});
+			} catch {}
+		}
+		return course.enrolledStudentIds.length;
 	}
 };
 //#endregion
@@ -40148,7 +40580,7 @@ var ProfilePictureModal = ({ user, isOpen, onClose, onSuccess }) => {
 };
 //#endregion
 //#region src/components/Navbar.tsx
-var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, onLogout, onOpenArchitecture, onOpenSecurity, onOpenStudentDirectory, onOpenRules, onResetData: _onResetData, onNavigateHome, notifications, onRefreshNotifications, theme, onToggleTheme, onUpdateCurrentUser }) => {
+var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, onLogout, onOpenArchitecture, onOpenSecurity, onOpenStudentDirectory, onOpenRules, onResetData: _onResetData, onNavigateHome, notifications, onRefreshNotifications, onSelectNotificationCourse, theme, onToggleTheme, onUpdateCurrentUser }) => {
 	const [showUserDropdown, setShowUserDropdown] = (0, import_react.useState)(false);
 	const [showNotifications, setShowNotifications] = (0, import_react.useState)(false);
 	const [isMobileMenuOpen, setIsMobileMenuOpen] = (0, import_react.useState)(false);
@@ -40273,46 +40705,101 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 									},
 									className: "neu-btn p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl relative cursor-pointer",
 									"aria-label": "View notifications",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bell, { className: "w-4 h-4 sm:w-4.5 sm:h-4.5" }), unreadCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500 animate-pulse" })]
-								}), showNotifications && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "neu-card absolute right-0 mt-3 w-76 sm:w-80 rounded-2xl p-4 z-50",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "flex items-center justify-between pb-2.5 border-b border-slate-200/60 dark:border-slate-800",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-											className: "text-xs font-extrabold text-slate-900 dark:text-slate-100",
-											children: [
-												"Notifications (",
-												unreadCount,
-												" new)"
-											]
-										}), unreadCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-											onClick: handleMarkNotificationsRead,
-											className: "text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer",
-											children: "Mark all read"
-										})]
-									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-										className: "space-y-2 max-h-72 overflow-y-auto mt-2.5",
-										children: notifications.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-											className: "neu-inset-sm p-4 rounded-xl text-center text-xs text-slate-500 dark:text-slate-400",
-											children: "No notifications at this time"
-										}) : notifications.map((notif) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-											className: `p-2.5 rounded-xl text-xs ${!notif.isRead ? "neu-inset-sm" : ""}`,
-											children: [
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-													className: "font-bold text-slate-900 dark:text-slate-100",
-													children: notif.title
-												}),
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-													className: "text-slate-600 dark:text-slate-300 text-[11px] mt-0.5",
-													children: notif.message
-												}),
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-													className: "text-[10px] text-slate-400 font-mono mt-1 block",
-													children: notif.createdAt
-												})
-											]
-										}, notif.id))
+									title: "အတန်းတွင်း အသိပေးချက်များ (Classroom Notifications)",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bell, { className: `w-4 h-4 sm:w-4.5 sm:h-4.5 ${unreadCount > 0 ? "text-indigo-600 dark:text-indigo-400" : ""}` }), unreadCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-600 text-white text-[10px] font-extrabold flex items-center justify-center shadow-xs animate-pulse",
+										children: unreadCount > 9 ? "9+" : unreadCount
 									})]
+								}), showNotifications && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "neu-card absolute right-0 mt-3 w-80 sm:w-96 rounded-2xl p-4 z-50",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+											className: "flex items-center justify-between pb-3 border-b border-slate-200/60 dark:border-slate-800",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+												className: "flex items-center gap-2",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bell, { className: "w-4 h-4 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+													className: "text-xs sm:text-sm font-extrabold text-slate-900 dark:text-slate-100",
+													children: [
+														"အသိပေးချက်များ (",
+														unreadCount,
+														" အသစ်)"
+													]
+												})]
+											}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+												className: "flex items-center gap-2",
+												children: [typeof window !== "undefined" && "Notification" in window && Notification.permission === "default" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+													type: "button",
+													onClick: () => {
+														Notification.requestPermission().catch(() => {});
+													},
+													className: "text-[10px] font-semibold px-2 py-0.5 rounded-lg bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 cursor-pointer",
+													title: "Browser Push Notification ဖွင့်ရန်",
+													children: "🔔 Alert ဖွင့်မည်"
+												}), unreadCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+													onClick: handleMarkNotificationsRead,
+													className: "text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer",
+													children: "အားလုံးဖတ်ပြီး"
+												})]
+											})]
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+											className: "mt-2 px-2.5 py-1.5 rounded-lg bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[10px] text-amber-800 dark:text-amber-300 font-medium flex items-center justify-between",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "⏱ ပို့စ်တင်ပြီး ၃၀ မိနစ်ကြာလျှင် အလိုအလျောက် ပျက်ပါမည်" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "font-mono font-bold",
+												children: "30m Auto-Delete"
+											})]
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+											className: "space-y-2.5 max-h-80 overflow-y-auto mt-2.5 pr-0.5",
+											children: notifications.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+												className: "neu-inset-sm p-5 rounded-xl text-center text-xs text-slate-500 dark:text-slate-400",
+												children: "လက်ရှိတွင် အသိပေးချက် အသစ် မရှိသေးပါ။"
+											}) : notifications.map((notif) => {
+												const remainingMins = notif.expiresAtMs ? Math.max(1, Math.ceil((notif.expiresAtMs - Date.now()) / 6e4)) : null;
+												return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+													onClick: () => {
+														ClassroomDB.markNotificationRead(notif.id);
+														onRefreshNotifications();
+														if (notif.courseId && onSelectNotificationCourse) {
+															onSelectNotificationCourse(notif.courseId);
+															setShowNotifications(false);
+														}
+													},
+													className: `p-3 rounded-xl text-xs transition-all cursor-pointer ${!notif.isRead ? "neu-inset-sm ring-1 ring-indigo-500/30" : "opacity-80 hover:opacity-100 hover:bg-white/40 dark:hover:bg-slate-800/40"}`,
+													children: [
+														/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+															className: "flex items-start justify-between gap-2",
+															children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+																className: "font-bold text-slate-900 dark:text-slate-100 leading-snug",
+																children: notif.title
+															}), !notif.isRead && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "w-2 h-2 rounded-full bg-indigo-600 dark:bg-indigo-400 shrink-0 mt-1" })]
+														}),
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+															className: "text-slate-600 dark:text-slate-300 text-[11px] mt-1 leading-relaxed",
+															children: notif.message
+														}),
+														/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+															className: "flex items-center justify-between mt-2 pt-1.5 border-t border-slate-200/40 dark:border-slate-700/40 text-[10px]",
+															children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+																className: "text-slate-400 font-mono",
+																children: [notif.createdAt, remainingMins !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+																	className: "ml-1.5 text-amber-600 dark:text-amber-400 font-semibold",
+																	children: [
+																		"· ⏱ ",
+																		remainingMins,
+																		"m ကျန်"
+																	]
+																})]
+															}), notif.courseId && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+																className: "font-bold text-indigo-600 dark:text-indigo-400",
+																children: "အတန်းသို့ ဝင်ကြည့်မည် →"
+															})]
+														})
+													]
+												}, notif.id);
+											})
+										})
+									]
 								})]
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -42354,8 +42841,9 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 		setScheduledDateTime("");
 		setPinUponPublish(false);
 		setIsComposing(false);
-		setSuccessToast(publishMode === "schedule" ? `Post အား ${scheduledForDisplay} တွင် တင်ရန် အချိန်သတ်မှတ်ပြီးပါပြီ!` : "Post အား Stream ထဲသို့ ချက်ချင်းတင်ပြီးပါပြီ!");
-		setTimeout(() => setSuccessToast(null), 3500);
+		const notifiedCount = res.notifiedCount ?? course.enrolledStudentIds.length;
+		setSuccessToast(publishMode === "schedule" ? `Post အား ${scheduledForDisplay} တွင် တင်ရန် အချိန်သတ်မှတ်ပြီးပါပြီ! (သတ်မှတ်ချိန်ရောက်ပါက ကျောင်းသား ${course.enrolledStudentIds.length} ဦးထံ Notification ပို့ပေးပါမည်)` : `🔔 Post အား Stream ထဲသို့ တင်ပြီး "${course.code}" အတန်းရှိ ကျောင်းသား (${notifiedCount}) ဦးအားလုံးထံ Notification ပေးပို့ပြီးပါပြီ!`);
+		setTimeout(() => setSuccessToast(null), 4200);
 		onRefresh();
 	};
 	const handleTogglePin = (postId) => {
@@ -42389,8 +42877,9 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 			setTimeout(() => setRateLimitError(null), 4e3);
 			return;
 		}
-		setSuccessToast("Scheduled Post အား ချက်ချင်းထုတ်ပြန်ပြီးပါပြီ!");
-		setTimeout(() => setSuccessToast(null), 3e3);
+		const notifiedCount = res.notifiedCount ?? course.enrolledStudentIds.length;
+		setSuccessToast(`🔔 Scheduled Post အား ချက်ချင်းထုတ်ပြန်ပြီး ကျောင်းသား (${notifiedCount}) ဦးအားလုံးထံ Notification ပေးပို့ပြီးပါပြီ!`);
+		setTimeout(() => setSuccessToast(null), 3800);
 		onRefresh();
 	};
 	const handleDeletePost = (postId) => {
@@ -42803,16 +43292,26 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 										children: currentUser.role === "admin" ? "Lead Instructor (Admin)" : currentUser.role === "co_admin" ? "Co-Admin (တွဲဖက်ဆရာ)" : "Student (ကျောင်းသား)"
 									})]
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "flex items-center gap-1.5 mt-0.5 text-[11px] text-slate-500 dark:text-slate-400",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Users, { className: "w-3.5 h-3.5 text-slate-400 dark:text-slate-500 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-										"For: ",
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "All members" }),
-										" in ",
-										course.code,
-										" (",
-										course.enrolledStudentIds.length,
-										" enrolled)"
-									] })]
+									className: "flex items-center gap-2 flex-wrap mt-0.5 text-[11px] text-slate-500 dark:text-slate-400",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "inline-flex items-center gap-1",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Users, { className: "w-3.5 h-3.5 text-slate-400 dark:text-slate-500 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+											"For: ",
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "All members" }),
+											" in ",
+											course.code,
+											" (",
+											course.enrolledStudentIds.length,
+											" enrolled)"
+										] })]
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800",
+										children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+											"🔔 ကျောင်းသား ",
+											course.enrolledStudentIds.length,
+											" ဦးလုံးထံ Auto-Notification ပို့ပေးမည်"
+										] })
+									})]
 								})] })]
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "flex items-center gap-1 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl text-xs self-start sm:self-auto",
@@ -43752,7 +44251,7 @@ var AddStudentModal = ({ course, isOpen, onClose, onStudentEnrolled }) => {
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 										type: "button",
 										onClick: () => {
-											navigator.clipboard.writeText(`SwanArh Classroom Login:\nURL: ${window.location.origin}${window.location.pathname}\nUsername: ${createdDetails.username}\nPassword: ${createdDetails.password}\nClass: ${createdDetails.coursesLabel || course.code}`);
+											navigator.clipboard.writeText(`SwanArh Classroom Login:\nURL: https://www.swanarhclassroom.online/\nUsername: ${createdDetails.username}\nPassword: ${createdDetails.password}\nClass: ${createdDetails.coursesLabel || course.code}`);
 											setCopied(true);
 											setTimeout(() => setCopied(false), 2500);
 										},
@@ -46484,8 +46983,7 @@ var AdminStudentDirectoryModal = ({ isOpen, onClose, courses, onRefresh }) => {
 	};
 	const handleCopyCredentials = (creds) => {
 		const roleTitle = creds.role === "admin" ? "Administrator (ဆရာ)" : creds.role === "co_admin" ? "Co-Admin (တွဲဖက်ဆရာ)" : "Student (ကျောင်းသား)";
-		const loginUrl = window.location.origin + window.location.pathname;
-		const text = `🎓 Classroom OS Login Credentials\n👤 Name: ${creds.name}\n🛡️ Role: ${roleTitle}${creds.gender ? `\n⚧ Gender: ${creds.gender}` : ""}${creds.address ? `\n📍 Address: ${creds.address}` : ""}\n🔑 Username: ${creds.username}\n🔒 Password: ${creds.password}${creds.courseName ? `\n📚 Assigned Classes: ${creds.courseName}` : ""}\n🌐 Login URL: ${loginUrl}`;
+		const text = `🎓 SwanArh Classroom Login Credentials\n👤 Name: ${creds.name}\n🛡️ Role: ${roleTitle}${creds.gender ? `\n⚧ Gender: ${creds.gender}` : ""}${creds.address ? `\n📍 Address: ${creds.address}` : ""}\n🔑 Username: ${creds.username}\n🔒 Password: ${creds.password}${creds.courseName ? `\n📚 Assigned Classes: ${creds.courseName}` : ""}\n🌐 Login URL: https://www.swanarhclassroom.online/`;
 		navigator.clipboard.writeText(text);
 		setCopiedSuccess(true);
 		setTimeout(() => setCopiedSuccess(false), 2500);
@@ -47225,9 +47723,13 @@ var AdminStudentDirectoryModal = ({ isOpen, onClose, courses, onRefresh }) => {
 												/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 													className: "flex items-center gap-2 flex-wrap",
 													children: [
-														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-															className: "text-sm font-bold text-slate-900 dark:text-white",
-															children: user.name
+														/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+															className: "text-sm font-bold text-slate-900 dark:text-white inline-flex items-center gap-1.5",
+															children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: user.name }), user.role === "student" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+																className: "inline-flex items-center",
+																title: user.rulesAccepted ? `Rule Accepted: သိရှိ လိုက်နာပါမည်${user.rulesAcceptedAt ? ` (${user.rulesAcceptedAt})` : ""}` : "Rule Pending: စည်းကမ်းချက် လက်ခံရန်ကျန်",
+																children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Shield, { className: `w-4 h-4 shrink-0 transition-colors ${user.rulesAccepted ? "text-emerald-500 fill-emerald-500/25 dark:text-emerald-400 dark:fill-emerald-400/25" : "text-slate-300 dark:text-slate-600"}` })
+															})]
 														}),
 														/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 															className: "text-[11px] font-mono text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded border border-indigo-200/50 dark:border-indigo-800/40",
@@ -47870,31 +48372,52 @@ var SupabaseModal = ({ isOpen, onClose }) => {
 									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 										className: "p-3 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 											className: "flex items-center justify-between",
-											children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 												className: "flex items-center gap-2 font-bold text-slate-900 dark:text-slate-100",
 												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 													className: "w-5 h-5 rounded-full bg-blue-600 text-white text-[11px] flex items-center justify-center font-bold",
 													children: "4"
-												}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "App အတွင်းမှ အကောင့်များ စိတ်ကြိုက် ဖန်တီးခြင်းနှင့် Login ဝင်ခြင်း" })]
-											})
+												}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Custom Domain (www.swanarhclassroom.online) ချိတ်ဆက်ခြင်း" })]
+											}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
+												href: "https://supabase.com/dashboard/project/wxfassadxuxfvywvnlxs/auth/url-configuration",
+												target: "_blank",
+												rel: "noreferrer",
+												className: "inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-950/80 hover:bg-blue-200 px-2.5 py-1 rounded-lg transition-colors cursor-pointer border border-blue-300 dark:border-blue-800",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Open URL Config" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExternalLink, { className: "w-3 h-3" })]
+											})]
 										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 											className: "text-slate-600 dark:text-slate-400 leading-relaxed pl-7",
 											children: [
-												"1. App ပေါ်ရှိ ",
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Test Connection" }),
-												" ခလုတ်ကို နှိပ်ပြီး စိမ်းသွားပါက အားလုံး ချိတ်ဆက်မှု အောင်မြင်ပါပြီ။",
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
-												"2. Admin ဖြင့် Login ဝင်၍ ",
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Student Directory" }),
+												"1. ",
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Authentication" }),
 												" > ",
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "+ Add New Account" }),
-												" ကို နှိပ်ပြီး မိမိစိတ်ကြိုက် Admin, Co-Admin, Student အကောင့်များကို အကန့်အသတ်မရှိ ဖန်တီးနိုင်ပါသည်။",
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "URL Configuration" }),
+												" သို့ သွားပါ။",
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
+												"2. ",
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Site URL" }),
+												" တွင် ",
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+													className: "bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-emerald-600 font-mono",
+													children: "https://www.swanarhclassroom.online"
+												}),
+												" ကို ထည့်ပြီး Save နှိပ်ပါ။",
 												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
 												"3. ",
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Copy Credentials" }),
-												" ခလုတ်ဖြင့် Username / Password များကို ကာယကံရှင်ထံသို့ ချက်ချင်း ပေးပို့နိုင်ပါသည်။"
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Redirect URLs" }),
+												" တွင် ",
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+													className: "bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-indigo-600 font-mono",
+													children: "https://www.swanarhclassroom.online/**"
+												}),
+												" နှင့် ",
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+													className: "bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-indigo-600 font-mono",
+													children: "http://www.swanarhclassroom.online/**"
+												}),
+												" တို့ကို ထည့်သွင်းထားပါ။"
 											]
 										})]
 									})
@@ -48213,6 +48736,8 @@ function App() {
 	useBackHandler(showResetConfirmModal, () => setShowResetConfirmModal(false));
 	useBackHandler(showRulesModal, () => setShowRulesModal(false));
 	const [isLowBandwidth, setIsLowBandwidth] = (0, import_react.useState)(false);
+	const isLowBandwidthRef = (0, import_react.useRef)(false);
+	isLowBandwidthRef.current = isLowBandwidth;
 	const [securitySettings, setSecuritySettings] = (0, import_react.useState)(() => ClassroomDB.getSecuritySettings());
 	const [theme, setTheme] = (0, import_react.useState)(() => ClassroomDB.getTheme());
 	const handleToggleTheme = () => {
@@ -48271,20 +48796,24 @@ function App() {
 		};
 		document.addEventListener("visibilitychange", handleWakeUp);
 		window.addEventListener("pageshow", handleWakeUp);
-		const jitteredIntervalMs = 55e3 + Math.floor(Math.random() * 1e4);
+		const jitteredIntervalMs = 85e3 + Math.floor(Math.random() * 1e4);
 		const syncInterval = setInterval(() => {
-			if (document.visibilityState === "visible" && navigator.onLine !== false) {
-				if (ClassroomDB.getCurrentUser()) ClassroomDB.pullFromSupabase().then((updated) => {
+			if (document.visibilityState === "visible" && navigator.onLine !== false && !isLowBandwidthRef.current) {
+				if (ClassroomDB.getCurrentUser()) ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
 					if (updated) refreshData();
 				});
 			}
 		}, jitteredIntervalMs);
+		const notifCleanupInterval = setInterval(() => {
+			if (ClassroomDB.purgeExpiredNotifications()) refreshData();
+		}, 2e4);
 		return () => {
 			clearTimeout(initTimer);
 			window.removeEventListener("storage", handleStorageChange);
 			document.removeEventListener("visibilitychange", handleWakeUp);
 			window.removeEventListener("pageshow", handleWakeUp);
 			clearInterval(syncInterval);
+			clearInterval(notifCleanupInterval);
 		};
 	}, []);
 	const handleSelectUser = (user) => {
@@ -48322,6 +48851,11 @@ function App() {
 		setAssignments(ClassroomDB.getAssignments(check.course.id));
 		setQuizzes(ClassroomDB.getQuizzes(check.course.id));
 		setProgress(ClassroomDB.getStudentProgress(currentUser.id, check.course.id));
+	};
+	const handleOpenCourseById = (courseId) => {
+		if (!currentUser) return;
+		const target = courses.find((c) => c.id === courseId);
+		if (target) handleOpenCourse(target);
 	};
 	const handleResetData = () => {
 		setShowResetConfirmModal(true);
@@ -48362,6 +48896,7 @@ function App() {
 					onNavigateHome: () => setSelectedCourse(null),
 					notifications,
 					onRefreshNotifications: refreshData,
+					onSelectNotificationCourse: handleOpenCourseById,
 					theme,
 					onToggleTheme: handleToggleTheme,
 					onUpdateCurrentUser: (updated) => {
@@ -48372,193 +48907,255 @@ function App() {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
 				className: "flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-5 sm:py-8",
-				children: [appBannerError && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "mb-5 p-4 rounded-2xl neu-inset text-rose-800 dark:text-rose-200 text-xs flex items-center justify-between gap-3",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex items-center gap-2.5",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TriangleAlert, { className: "w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: appBannerError })]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						onClick: () => setAppBannerError(null),
-						className: "text-xs font-semibold underline cursor-pointer shrink-0",
-						children: "Dismiss"
-					})]
-				}), selectedCourse ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.Suspense, {
-					fallback: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "py-16 text-center text-xs font-semibold text-emerald-700 dark:text-emerald-400",
-						children: "သင်ခန်းစာအခန်းကို ဖွင့်နေပါသည်..."
-					}),
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CourseDetail, {
-						course: selectedCourse,
-						currentUser,
-						posts,
-						onBack: () => setSelectedCourse(null),
-						onRefresh: refreshData,
-						onOpenCertificate: (cert) => setActiveCertificate(cert),
-						textProtectionEnabled: securitySettings.textProtectionEnabled
-					})
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "space-y-7 sm:space-y-9",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "neu-card rounded-3xl p-5 sm:p-7 md:p-8 flex flex-col md:flex-row md:items-center justify-between gap-5 sm:gap-6",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "space-y-2",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "flex flex-wrap items-center gap-2 text-xs font-mono text-slate-600 dark:text-slate-400",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-											"Logged in as:",
-											" ",
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
-												className: "text-slate-900 dark:text-white",
-												children: currentUser.name
-											})
-										] }),
-										currentUser.role === "student" && currentUser.rulesAccepted && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											"aria-hidden": "true",
-											children: "·"
-										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-											type: "button",
-											onClick: () => setShowRulesModal(true),
-											className: "neu-inset-sm inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-emerald-800 dark:text-emerald-300 font-sans font-bold text-[11px] cursor-pointer hover:text-emerald-600 transition-colors",
-											title: "သင်တန်းစည်းကမ်းချက်များကို သိရှိလိုက်နာပါမည်ဟု အတည်ပြုပြီး",
-											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleCheck, { className: "w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "သိရှိ လိုက်နာပါမည်" })]
-										})] }),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											"aria-hidden": "true",
-											children: "·"
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-											className: "capitalize font-semibold text-indigo-600 dark:text-indigo-400",
-											children: [
-												"Role:",
-												" ",
-												currentUser.role === "admin" ? "Faculty / Admin (ဆရာ)" : currentUser.role === "co_admin" ? "Co-Admin (တွဲဖက် အက်ဒမင်)" : "Student (ကျောင်းသား)"
-											]
-										})
-									]
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", {
-									className: "text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100",
-									children: currentUser.role === "admin" || currentUser.role === "co_admin" ? "Faculty & Classroom Management" : "My Enrolled Classes"
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "flex items-center gap-2 text-[11px] sm:text-xs text-slate-600 dark:text-slate-400 pt-0.5",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldCheck, { className: "w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Strict Visibility Active: Unenrolled courses are physically excluded from dashboard queries." })]
-								})
-							]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "flex flex-wrap items-center gap-2.5 sm:gap-3 shrink-0",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-									onClick: () => setShowRulesModal(true),
-									className: "neu-btn flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2.5 text-emerald-800 dark:text-emerald-300 text-xs font-bold rounded-2xl cursor-pointer",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollText, { className: "w-4 h-4 text-emerald-600 dark:text-emerald-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "စည်းကမ်းချက်များ" })]
-								}),
-								(currentUser.role === "admin" || currentUser.role === "co_admin") && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-										onClick: () => setShowStudentDirectoryModal(true),
-										className: "neu-btn flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2.5 text-slate-800 dark:text-slate-100 text-xs font-bold rounded-2xl cursor-pointer",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Users, { className: "w-4 h-4 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Manage Users (အကောင့်များ စီမံရန်)" })]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-										onClick: () => setShowCreateCourseModal(true),
-										className: "neu-btn-indigo flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2.5 text-white text-xs font-bold rounded-2xl cursor-pointer",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Plus, { className: "w-4 h-4" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Create Class / Batch" })]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-										onClick: () => setShowSupabaseModal(true),
-										className: "neu-btn flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-emerald-800 dark:text-emerald-300 text-xs font-bold rounded-2xl cursor-pointer",
-										title: "View Supabase configuration, connection test and SQL schema",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Database, { className: "w-4 h-4 text-emerald-600 dark:text-emerald-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Supabase SQL" })]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-										onClick: () => setShowArchitectureModal(true),
-										className: "neu-btn flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-slate-700 dark:text-slate-200 text-xs font-semibold rounded-2xl cursor-pointer",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Layers, { className: "w-4 h-4 text-slate-500 dark:text-slate-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "DB Spec" })]
-									})
-								] }),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-									onClick: handleLogout,
-									className: "neu-btn flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-rose-700 dark:text-rose-300 text-xs font-bold rounded-2xl cursor-pointer",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LogOut, { className: "w-4 h-4 text-rose-600 dark:text-rose-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Sign Out" })]
-								})
-							]
-						})]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "space-y-5",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "flex flex-col sm:flex-row sm:items-center justify-between gap-3.5",
+				children: [
+					currentUser.role === "student" && notifications.some((n) => !n.isRead && n.type === "post") && (() => {
+						const latestPostNotif = notifications.find((n) => !n.isRead && n.type === "post");
+						if (!latestPostNotif) return null;
+						return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "mb-5 p-4 rounded-2xl neu-card ring-2 ring-indigo-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fade-in",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "flex items-center gap-3",
+								className: "flex items-start sm:items-center gap-3 min-w-0",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-									className: "neu-inset-sm p-2.5 rounded-2xl text-indigo-600 dark:text-indigo-400",
-									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BookOpen, { className: "w-5 h-5" })
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "flex items-center gap-2",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-										className: "text-base sm:text-lg font-extrabold text-slate-900 dark:text-slate-100",
-										children: currentUser.role === "admin" || currentUser.role === "co_admin" ? "All Managed Classes" : "Authorized Courses"
-									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400",
+									className: "p-2.5 rounded-xl bg-indigo-600 text-white shrink-0 shadow-xs",
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bell, { className: "w-4 h-4 animate-bounce" })
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "min-w-0",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+										className: "text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white truncate",
+										children: latestPostNotif.title
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+										className: "text-[11px] sm:text-xs text-slate-600 dark:text-slate-300 mt-0.5",
 										children: [
-											"(",
-											courses.length,
-											")"
+											latestPostNotif.message,
+											" ·",
+											" ",
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "font-mono text-indigo-600 dark:text-indigo-400",
+												children: latestPostNotif.createdAt
+											}),
+											latestPostNotif.expiresAtMs && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+												className: "ml-1.5 font-mono text-amber-600 dark:text-amber-400 font-semibold",
+												children: [
+													"(⏱ ",
+													Math.max(1, Math.ceil((latestPostNotif.expiresAtMs - Date.now()) / 6e4)),
+													" မိနစ်အတွင်း Auto ပျက်မည်)"
+												]
+											})
 										]
 									})]
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-									className: "text-xs text-slate-500 dark:text-slate-400",
-									children: "သင်တက်ရောက်ခွင့်ရရှိထားသော အတန်းများသို့ ဝင်ရောက်၍ သင်ခန်းစာများ လေ့လာနိုင်ပါသည်"
-								})] })]
+								})]
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "relative w-full sm:w-72",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Search, { className: "w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-									type: "text",
-									placeholder: "Search courses or batches...",
-									value: courseSearch,
-									onChange: (e) => setCourseSearch(e.target.value),
-									className: "neu-input w-full pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 rounded-2xl"
+								className: "flex items-center gap-2 self-end sm:self-center shrink-0",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									onClick: () => {
+										ClassroomDB.markNotificationRead(latestPostNotif.id);
+										refreshData();
+										if (latestPostNotif.courseId) handleOpenCourseById(latestPostNotif.courseId);
+									},
+									className: "px-3.5 py-2 rounded-xl neu-btn-indigo text-xs font-bold cursor-pointer",
+									children: "အတန်းသို့ ဝင်ရောက်ဖတ်ရှုမည် →"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									onClick: () => {
+										ClassroomDB.markNotificationRead(latestPostNotif.id);
+										refreshData();
+									},
+									className: "px-2.5 py-2 rounded-xl neu-btn text-xs font-semibold text-slate-600 dark:text-slate-300 cursor-pointer",
+									children: "ဖတ်ပြီး"
 								})]
 							})]
-						}), courses.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "neu-card p-8 sm:p-12 text-center rounded-3xl text-slate-500 dark:text-slate-400",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-									className: "neu-inset-sm w-14 h-14 rounded-2xl mx-auto flex items-center justify-center mb-3 text-slate-400 dark:text-slate-500",
-									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Lock, { className: "w-6 h-6" })
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-									className: "text-sm font-bold text-slate-800 dark:text-slate-200",
-									children: "No Authorized Courses Found"
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-									className: "text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto",
-									children: "You are not currently enrolled in any active class cohorts. Please contact the Academy Faculty to obtain batch authorization."
-								})
-							]
-						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.Suspense, {
-							fallback: null,
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-7",
-								children: courses.filter((c) => {
-									if (!courseSearch.trim()) return true;
-									const q = courseSearch.toLowerCase();
-									return c.title.toLowerCase().includes(q) || c.code.toLowerCase().includes(q) || c.batch.toLowerCase().includes(q);
-								}).map((course) => {
-									const studentProg = ClassroomDB.getStudentProgress(currentUser.id, course.id);
-									return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CourseCard, {
-										course,
-										currentUser,
-										progress: studentProg,
-										onSelectCourse: handleOpenCourse,
-										onRefresh: refreshData
-									}, course.id);
-								})
-							})
+						});
+					})(),
+					appBannerError && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "mb-5 p-4 rounded-2xl neu-inset text-rose-800 dark:text-rose-200 text-xs flex items-center justify-between gap-3",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex items-center gap-2.5",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TriangleAlert, { className: "w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: appBannerError })]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							onClick: () => setAppBannerError(null),
+							className: "text-xs font-semibold underline cursor-pointer shrink-0",
+							children: "Dismiss"
 						})]
-					})]
-				})]
+					}),
+					selectedCourse ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.Suspense, {
+						fallback: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "py-16 text-center text-xs font-semibold text-emerald-700 dark:text-emerald-400",
+							children: "သင်ခန်းစာအခန်းကို ဖွင့်နေပါသည်..."
+						}),
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CourseDetail, {
+							course: selectedCourse,
+							currentUser,
+							posts,
+							onBack: () => setSelectedCourse(null),
+							onRefresh: refreshData,
+							onOpenCertificate: (cert) => setActiveCertificate(cert),
+							textProtectionEnabled: securitySettings.textProtectionEnabled
+						})
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "space-y-7 sm:space-y-9",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "neu-card rounded-3xl p-5 sm:p-7 md:p-8 flex flex-col md:flex-row md:items-center justify-between gap-5 sm:gap-6",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "space-y-2",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "flex flex-wrap items-center gap-2 text-xs font-mono text-slate-600 dark:text-slate-400",
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+												"Logged in as:",
+												" ",
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
+													className: "text-slate-900 dark:text-white",
+													children: currentUser.name
+												})
+											] }),
+											currentUser.role === "student" && currentUser.rulesAccepted && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												"aria-hidden": "true",
+												children: "·"
+											}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+												type: "button",
+												onClick: () => setShowRulesModal(true),
+												className: "neu-inset-sm inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-emerald-800 dark:text-emerald-300 font-sans font-bold text-[11px] cursor-pointer hover:text-emerald-600 transition-colors",
+												title: "သင်တန်းစည်းကမ်းချက်များကို သိရှိလိုက်နာပါမည်ဟု အတည်ပြုပြီး",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleCheck, { className: "w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "သိရှိ လိုက်နာပါမည်" })]
+											})] }),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												"aria-hidden": "true",
+												children: "·"
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+												className: "capitalize font-semibold text-indigo-600 dark:text-indigo-400",
+												children: [
+													"Role:",
+													" ",
+													currentUser.role === "admin" ? "Faculty / Admin (ဆရာ)" : currentUser.role === "co_admin" ? "Co-Admin (တွဲဖက် အက်ဒမင်)" : "Student (ကျောင်းသား)"
+												]
+											})
+										]
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", {
+										className: "text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100",
+										children: currentUser.role === "admin" || currentUser.role === "co_admin" ? "Faculty & Classroom Management" : "My Enrolled Classes"
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "flex items-center gap-2 text-[11px] sm:text-xs text-slate-600 dark:text-slate-400 pt-0.5",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldCheck, { className: "w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Strict Visibility Active: Unenrolled courses are physically excluded from dashboard queries." })]
+									})
+								]
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "flex flex-wrap items-center gap-2.5 sm:gap-3 shrink-0",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+										onClick: () => setShowRulesModal(true),
+										className: "neu-btn flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2.5 text-emerald-800 dark:text-emerald-300 text-xs font-bold rounded-2xl cursor-pointer",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollText, { className: "w-4 h-4 text-emerald-600 dark:text-emerald-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "စည်းကမ်းချက်များ" })]
+									}),
+									(currentUser.role === "admin" || currentUser.role === "co_admin") && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+											onClick: () => setShowStudentDirectoryModal(true),
+											className: "neu-btn flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2.5 text-slate-800 dark:text-slate-100 text-xs font-bold rounded-2xl cursor-pointer",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Users, { className: "w-4 h-4 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Manage Users (အကောင့်များ စီမံရန်)" })]
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+											onClick: () => setShowCreateCourseModal(true),
+											className: "neu-btn-indigo flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2.5 text-white text-xs font-bold rounded-2xl cursor-pointer",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Plus, { className: "w-4 h-4" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Create Class / Batch" })]
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+											onClick: () => setShowSupabaseModal(true),
+											className: "neu-btn flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-emerald-800 dark:text-emerald-300 text-xs font-bold rounded-2xl cursor-pointer",
+											title: "View Supabase configuration, connection test and SQL schema",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Database, { className: "w-4 h-4 text-emerald-600 dark:text-emerald-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Supabase SQL" })]
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+											onClick: () => setShowArchitectureModal(true),
+											className: "neu-btn flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-slate-700 dark:text-slate-200 text-xs font-semibold rounded-2xl cursor-pointer",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Layers, { className: "w-4 h-4 text-slate-500 dark:text-slate-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "DB Spec" })]
+										})
+									] }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+										onClick: handleLogout,
+										className: "neu-btn flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-rose-700 dark:text-rose-300 text-xs font-bold rounded-2xl cursor-pointer",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LogOut, { className: "w-4 h-4 text-rose-600 dark:text-rose-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Sign Out" })]
+									})
+								]
+							})]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "space-y-5",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "flex flex-col sm:flex-row sm:items-center justify-between gap-3.5",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "flex items-center gap-3",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+										className: "neu-inset-sm p-2.5 rounded-2xl text-indigo-600 dark:text-indigo-400",
+										children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BookOpen, { className: "w-5 h-5" })
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "flex items-center gap-2",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+											className: "text-base sm:text-lg font-extrabold text-slate-900 dark:text-slate-100",
+											children: currentUser.role === "admin" || currentUser.role === "co_admin" ? "All Managed Classes" : "Authorized Courses"
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+											className: "text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400",
+											children: [
+												"(",
+												courses.length,
+												")"
+											]
+										})]
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+										className: "text-xs text-slate-500 dark:text-slate-400",
+										children: "သင်တက်ရောက်ခွင့်ရရှိထားသော အတန်းများသို့ ဝင်ရောက်၍ သင်ခန်းစာများ လေ့လာနိုင်ပါသည်"
+									})] })]
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "relative w-full sm:w-72",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Search, { className: "w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+										type: "text",
+										placeholder: "Search courses or batches...",
+										value: courseSearch,
+										onChange: (e) => setCourseSearch(e.target.value),
+										className: "neu-input w-full pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 rounded-2xl"
+									})]
+								})]
+							}), courses.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "neu-card p-8 sm:p-12 text-center rounded-3xl text-slate-500 dark:text-slate-400",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+										className: "neu-inset-sm w-14 h-14 rounded-2xl mx-auto flex items-center justify-center mb-3 text-slate-400 dark:text-slate-500",
+										children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Lock, { className: "w-6 h-6" })
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+										className: "text-sm font-bold text-slate-800 dark:text-slate-200",
+										children: "No Authorized Courses Found"
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+										className: "text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto",
+										children: "You are not currently enrolled in any active class cohorts. Please contact the Academy Faculty to obtain batch authorization."
+									})
+								]
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.Suspense, {
+								fallback: null,
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-7",
+									children: courses.filter((c) => {
+										if (!courseSearch.trim()) return true;
+										const q = courseSearch.toLowerCase();
+										return c.title.toLowerCase().includes(q) || c.code.toLowerCase().includes(q) || c.batch.toLowerCase().includes(q);
+									}).map((course) => {
+										const studentProg = ClassroomDB.getStudentProgress(currentUser.id, course.id);
+										return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CourseCard, {
+											course,
+											currentUser,
+											progress: studentProg,
+											onSelectCourse: handleOpenCourse,
+											onRefresh: refreshData
+										}, course.id);
+									})
+								})
+							})]
+						})]
+					})
+				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_react.Suspense, {
 				fallback: null,
@@ -48681,3 +49278,4 @@ try {
 } catch {}
 (0, import_client.createRoot)(document.getElementById("root")).render(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RootErrorBoundary, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(App, {}) }));
 //#endregion
+

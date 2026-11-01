@@ -42,7 +42,7 @@
           if ('caches' in window) {
             caches.keys().then(function (keys) {
               keys.forEach(function (key) {
-                if (key !== 'swanarh-classroom-v11') {
+                if (key !== 'swanarh-classroom-v14') {
                   caches.delete(key).catch(function () {});
                 }
               });
@@ -97,7 +97,7 @@
         if (window.__swanarhMounted || window.__staticBundleLoaded) return;
         window.__staticBundleLoaded = true;
         try {
-          var bust = 'v11_' + Math.floor(Date.now() / 60000);
+          var bust = 'v14_' + Math.floor(Date.now() / 60000);
           var link = document.createElement('link');
           link.rel = 'stylesheet';
           link.href = './gh-pages/app.css?v=' + bust;
@@ -133,10 +133,12 @@
       });
     </script>
     <title>SwanArh Classroom - Dr. Si Thu Aung · Swanarh Academy</title>
+    <link rel="canonical" href="https://www.swanarhclassroom.online/" />
     <meta name="description" content="Secure online classroom platform with role-based access control, course isolation, anti-piracy watermarked video delivery, interactive classwork feeds, quizzes, and automated certificate generation." />
     <meta property="og:title" content="SwanArh Classroom - Dr. Si Thu Aung · Swanarh Academy" />
     <meta property="og:description" content="Secure online classroom platform with role-based access control, course isolation, anti-piracy watermarked video delivery, interactive classwork feeds, quizzes, and automated certificate generation." />
-    <meta property="og:image" content="./pwa-512x512.png" />
+    <meta property="og:url" content="https://www.swanarhclassroom.online/" />
+    <meta property="og:image" content="https://www.swanarhclassroom.online/pwa-512x512.png" />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -186,11 +188,18 @@
           var entry = document.getElementById('vite-entry');
           var rawTsx = entry && entry.getAttribute('src') && entry.getAttribute('src').indexOf('.tsx') !== -1;
           var host = window.location.hostname || '';
+          var isDevServer =
+            host === 'localhost' ||
+            host === '127.0.0.1' ||
+            host.indexOf('.run.app') !== -1 ||
+            host.indexOf('.googleusercontent.com') !== -1;
           var isStaticPagesHost =
+            host.indexOf('swanarhclassroom') !== -1 ||
             host.indexOf('github.io') !== -1 ||
             host.indexOf('pages.dev') !== -1 ||
             host.indexOf('netlify.app') !== -1 ||
-            host.indexOf('vercel.app') !== -1;
+            host.indexOf('vercel.app') !== -1 ||
+            !isDevServer;
           if (rawTsx && isStaticPagesHost) {
             window.__loadStaticBundle();
           }

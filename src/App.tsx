@@ -27,6 +27,7 @@ import {
   Database,
   ScrollText,
   CheckCircle2,
+  Bell,
 } from 'lucide-react';
 
 export default function App() {
@@ -81,6 +82,8 @@ export default function App() {
 
   // Performance & Security Settings
   const [isLowBandwidth, setIsLowBandwidth] = useState(false);
+  const isLowBandwidthRef = useRef(false);
+  isLowBandwidthRef.current = isLowBandwidth;
   const [securitySettings, setSecuritySettings] = useState(() => ClassroomDB.getSecuritySettings());
   const [theme, setTheme] = useState<'light' | 'dark'>(() => ClassroomDB.getTheme());
 
@@ -165,14 +168,18 @@ export default function App() {
     document.addEventListener('visibilitychange', handleWakeUp);
     window.addEventListener('pageshow', handleWakeUp);
 
-    // Adaptive background sync with randomized jitter (55s–65s) so 200+ concurrent students
-    // never hit Supabase Free Plan at the exact same millisecond
-    const jitteredIntervalMs = 55000 + Math.floor(Math.random() * 10000);
+    // Adaptive background sync with randomized jitter (85s–95s) & tiered catalog caching
+    // so 200+ concurrent students use minimal Supabase Free Plan Egress Bandwidth
+    const jitteredIntervalMs = 85000 + Math.floor(Math.random() * 10000);
     const syncInterval = setInterval(() => {
-      if (document.visibilityState === 'visible' && navigator.onLine !== false) {
+      if (
+        document.visibilityState === 'visible' &&
+        navigator.onLine !== false &&
+        !isLowBandwidthRef.current
+      ) {
         const loggedUser = ClassroomDB.getCurrentUser();
         if (loggedUser) {
-          ClassroomDB.pullFromSupabase().then((updated) => {
+          ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
             if (updated) {
               refreshData();
             }
@@ -181,12 +188,20 @@ export default function App() {
       }
     }, jitteredIntervalMs);
 
+    // 20-second timer to auto-delete notifications older than 30 minutes locally & in Supabase
+    const notifCleanupInterval = setInterval(() => {
+      if (ClassroomDB.purgeExpiredNotifications()) {
+        refreshData();
+      }
+    }, 20000);
+
     return () => {
       clearTimeout(initTimer);
       window.removeEventListener('storage', handleStorageChange);
       document.removeEventListener('visibilitychange', handleWakeUp);
       window.removeEventListener('pageshow', handleWakeUp);
       clearInterval(syncInterval);
+      clearInterval(notifCleanupInterval);
     };
   }, []);
 
@@ -234,6 +249,14 @@ export default function App() {
     setAssignments(ClassroomDB.getAssignments(check.course.id));
     setQuizzes(ClassroomDB.getQuizzes(check.course.id));
     setProgress(ClassroomDB.getStudentProgress(currentUser.id, check.course.id));
+  };
+
+  const handleOpenCourseById = (courseId: string) => {
+    if (!currentUser) return;
+    const target = courses.find((c) => c.id === courseId);
+    if (target) {
+      handleOpenCourse(target);
+    }
   };
 
   const handleResetData = () => {
@@ -299,6 +322,7 @@ export default function App() {
           onNavigateHome={() => setSelectedCourse(null)}
           notifications={notifications}
           onRefreshNotifications={refreshData}
+          onSelectNotificationCourse={handleOpenCourseById}
           theme={theme}
           onToggleTheme={handleToggleTheme}
           onUpdateCurrentUser={(updated) => {
@@ -310,6 +334,63 @@ export default function App() {
 
       {/* Main Container - Responsive padding for mobile & desktop screens */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-5 sm:py-8">
+        {/* Student Unread Classroom Post Notification Alert Banner */}
+        {currentUser.role === 'student' &&
+          notifications.some((n) => !n.isRead && n.type === 'post') && (() => {
+            const latestPostNotif = notifications.find((n) => !n.isRead && n.type === 'post');
+            if (!latestPostNotif) return null;
+            return (
+              <div className="mb-5 p-4 rounded-2xl neu-card ring-2 ring-indigo-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fade-in">
+                <div className="flex items-start sm:items-center gap-3 min-w-0">
+                  <div className="p-2.5 rounded-xl bg-indigo-600 text-white shrink-0 shadow-xs">
+                    <Bell className="w-4 h-4 animate-bounce" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white truncate">
+                      {latestPostNotif.title}
+                    </div>
+                    <p className="text-[11px] sm:text-xs text-slate-600 dark:text-slate-300 mt-0.5">
+                      {latestPostNotif.message} ·{' '}
+                      <span className="font-mono text-indigo-600 dark:text-indigo-400">
+                        {latestPostNotif.createdAt}
+                      </span>
+                      {latestPostNotif.expiresAtMs && (
+                        <span className="ml-1.5 font-mono text-amber-600 dark:text-amber-400 font-semibold">
+                          (⏱ {Math.max(1, Math.ceil((latestPostNotif.expiresAtMs - Date.now()) / 60000))} မိနစ်အတွင်း Auto ပျက်မည်)
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      ClassroomDB.markNotificationRead(latestPostNotif.id);
+                      refreshData();
+                      if (latestPostNotif.courseId) {
+                        handleOpenCourseById(latestPostNotif.courseId);
+                      }
+                    }}
+                    className="px-3.5 py-2 rounded-xl neu-btn-indigo text-xs font-bold cursor-pointer"
+                  >
+                    အတန်းသို့ ဝင်ရောက်ဖတ်ရှုမည် →
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      ClassroomDB.markNotificationRead(latestPostNotif.id);
+                      refreshData();
+                    }}
+                    className="px-2.5 py-2 rounded-xl neu-btn text-xs font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"
+                  >
+                    ဖတ်ပြီး
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+
         {appBannerError && (
           <div className="mb-5 p-4 rounded-2xl neu-inset text-rose-800 dark:text-rose-200 text-xs flex items-center justify-between gap-3">
             <div className="flex items-center gap-2.5">

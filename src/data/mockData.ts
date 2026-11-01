@@ -507,7 +507,7 @@ export const INITIAL_PROGRESS: StudentProgress[] = [
       issuedAt: 'October 15, 2026',
       gradeAverage: 98,
       attendancePercentage: 100,
-      verificationUrl: 'https://classroomos.edu/verify/CERT-EDU-2026-8819',
+      verificationUrl: 'https://www.swanarhclassroom.online/verify/CERT-EDU-2026-8819',
       instructorSignature: 'Dr. Kyaw Swar (Dean)',
     },
   },

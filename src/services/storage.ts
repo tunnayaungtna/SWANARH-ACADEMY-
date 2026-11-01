@@ -15,7 +15,7 @@ import {
   AttendanceStatus,
   AttendanceRecord,
 } from '../types/classroom';
-import { SupabaseService } from './supabase';
+import { SupabaseService, NOTIFICATION_TTL_MS } from './supabase';
 import {
   INITIAL_USERS,
   INITIAL_COURSES,
@@ -957,35 +957,55 @@ export class ClassroomDB {
 
   private static activePullPromise: Promise<boolean> | null = null;
   private static lastFullPullAt = 0;
+  private static lastCatalogPullAt = 0;
   private static lastProfilePullAt = 0;
   private static purgedRemoteIds = new Set<string>();
 
+  private static extractTimestampFromId(id?: string): number | undefined {
+    if (!id) return undefined;
+    const match = id.match(/(\d{13})/);
+    if (match) {
+      const parsed = Number(match[1]);
+      if (Number.isFinite(parsed) && parsed > 1_600_000_000_000) {
+        return parsed;
+      }
+    }
+    return undefined;
+  }
+
   /**
-   * Supabase Free Plan Optimized Pull:
+   * Supabase Free Plan Ultra-Optimized Pull:
    * - Coalesces concurrent requests
-   * - Enforces a 40-second cooldown on background polls (unless `force: true`)
-   * - Supports `onlyProfiles: true` when on the Login screen (cuts queries by 85%)
-   * - Performs diff checking before writing to localStorage so React only re-renders when data actually changes.
+   * - Enforces a 75-second cooldown on background polls (unless `force: true`)
+   * - Caches heavy catalog tables (`profiles`, `courses`) for 5 minutes on background ticks
+   * - Scopes `posts`, `attendance_sessions`, and `notifications` to the student's enrolled courses
+   * - Automatically purges notifications older than 30 minutes from both local storage & Supabase
    */
   static async pullFromSupabase(options?: {
     force?: boolean;
     onlyProfiles?: boolean;
+    background?: boolean;
   }): Promise<boolean> {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       return false;
     }
 
+    // Always run 30-minute notification cleanup first
+    const purgedLocalNotifs = this.purgeExpiredNotifications();
+
     const force = Boolean(options?.force);
     const onlyProfiles = Boolean(options?.onlyProfiles);
+    const isBackground = Boolean(options?.background);
     const now = Date.now();
-    const COOLDOWN_MS = 40_000;
+    const COOLDOWN_MS = 75_000; // 75s cooldown saves ~50% background queries
+    const CATALOG_TTL_MS = 300_000; // 5m TTL for profiles & courses during background sync
 
     if (!force) {
       if (onlyProfiles && now - this.lastProfilePullAt < COOLDOWN_MS) {
-        return false;
+        return purgedLocalNotifs;
       }
       if (!onlyProfiles && now - this.lastFullPullAt < COOLDOWN_MS) {
-        return false;
+        return purgedLocalNotifs;
       }
     }
 
@@ -1001,7 +1021,7 @@ export class ClassroomDB {
           this.lastProfilePullAt = Date.now();
           const remoteProfiles = await SupabaseService.getRemoteProfiles();
           if (!remoteProfiles || remoteProfiles.length === 0) {
-            return false;
+            return purgedLocalNotifs;
           }
           const localUsers = this.getAllUsers().filter((u) => !deletedSet.has(u.id));
           const prevJson = JSON.stringify(localUsers);
@@ -1030,25 +1050,43 @@ export class ClassroomDB {
             this.setItem(STORAGE_KEYS.USERS, mergedUsers);
             return true;
           }
-          return false;
+          return purgedLocalNotifs;
         }
 
-        this.lastFullPullAt = Date.now();
-        this.lastProfilePullAt = Date.now();
+        this.lastFullPullAt = now;
+        const shouldFetchCatalog = !isBackground || force || now - this.lastCatalogPullAt >= CATALOG_TTL_MS;
+        if (shouldFetchCatalog) {
+          this.lastCatalogPullAt = now;
+          this.lastProfilePullAt = now;
+        }
+
+        const loggedUser = this.getCurrentUser();
+        const currentCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter(
+          (c) => !deletedSet.has(c.id)
+        );
+        // Scope student queries only to their enrolled courses to drastically reduce Supabase egress
+        const studentScopedCourseIds =
+          loggedUser && loggedUser.role === 'student'
+            ? currentCourses
+                .filter((c) => c.enrolledStudentIds.includes(loggedUser.id))
+                .map((c) => c.id)
+            : undefined;
 
         const [
           remoteProfiles,
           remoteCourses,
           remotePosts,
           remoteAttendance,
+          remoteNotifications,
         ] = await Promise.all([
-          SupabaseService.getRemoteProfiles(),
-          SupabaseService.getRemoteCourses(),
-          SupabaseService.getRemotePosts(),
-          SupabaseService.getRemoteAttendanceSessions(),
+          shouldFetchCatalog ? SupabaseService.getRemoteProfiles() : Promise.resolve(null),
+          shouldFetchCatalog ? SupabaseService.getRemoteCourses() : Promise.resolve(null),
+          SupabaseService.getRemotePosts(studentScopedCourseIds),
+          SupabaseService.getRemoteAttendanceSessions(studentScopedCourseIds),
+          loggedUser ? SupabaseService.getRemoteNotifications(loggedUser.id) : Promise.resolve(null),
         ]);
 
-        let updated = false;
+        let updated = purgedLocalNotifs;
 
         if (remoteProfiles && remoteProfiles.length > 0) {
           const localUsers = this.getAllUsers().filter((u) => !deletedSet.has(u.id));
@@ -1125,6 +1163,8 @@ export class ClassroomDB {
           const prevJson = JSON.stringify(localPosts);
           const postMap = new Map<string, CoursePost>();
           localPosts.forEach((p) => postMap.set(p.id, p));
+          const newlyPublishedRemotePosts: CoursePost[] = [];
+
           remotePosts.forEach((rp) => {
             if (deletedSet.has(rp.id) || deletedSet.has(rp.courseId)) {
               if (!this.purgedRemoteIds.has(rp.id)) {
@@ -1134,10 +1174,32 @@ export class ClassroomDB {
               return;
             }
             const existing = postMap.get(rp.id);
+            const isNowPublished = !rp.status || rp.status === 'published';
+            const wasPreviouslyUnpublished = !existing || existing.status === 'scheduled';
+            const postTimestampMs =
+              rp.createdAtMs ||
+              existing?.createdAtMs ||
+              this.extractTimestampFromId(rp.id);
+            const isWithin30Mins =
+              postTimestampMs !== undefined ? Date.now() - postTimestampMs < NOTIFICATION_TTL_MS : false;
+
+            if (
+              isNowPublished &&
+              wasPreviouslyUnpublished &&
+              isWithin30Mins &&
+              (rp.authorRole === 'admin' || rp.authorRole === 'co_admin')
+            ) {
+              newlyPublishedRemotePosts.push({
+                ...rp,
+                createdAtMs: postTimestampMs,
+              });
+            }
+
             postMap.set(rp.id, {
               ...existing,
               ...rp,
               createdAt: existing?.createdAt || rp.createdAt,
+              createdAtMs: postTimestampMs,
               attachments:
                 rp.attachments && rp.attachments.length > 0
                   ? rp.attachments.map((att, idx) => {
@@ -1155,6 +1217,53 @@ export class ClassroomDB {
             this.setItem(STORAGE_KEYS.POSTS, merged);
             updated = true;
           }
+
+          if (newlyPublishedRemotePosts.length > 0) {
+            const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+            newlyPublishedRemotePosts.forEach((np) => {
+              const targetCourse = allCourses.find((c) => c.id === np.courseId);
+              if (targetCourse) {
+                this.notifyEnrolledStudentsOfCoursePost(
+                  targetCourse,
+                  np,
+                  np.authorName,
+                  np.authorRole
+                );
+                updated = true;
+              }
+            });
+          }
+        }
+
+        if (remoteNotifications && remoteNotifications.length > 0) {
+          const localNotifs = this.getItem<NotificationItem[]>(
+            STORAGE_KEYS.NOTIFICATIONS,
+            INITIAL_NOTIFICATIONS
+          );
+          const prevJson = JSON.stringify(localNotifs);
+          const notifMap = new Map<string, NotificationItem>();
+          localNotifs.forEach((n) => notifMap.set(n.id, n));
+          remoteNotifications.forEach((rn) => {
+            const createdMs = rn.createdAtMs || this.extractTimestampFromId(rn.id) || Date.now();
+            if (Date.now() - createdMs >= NOTIFICATION_TTL_MS) {
+              return;
+            }
+            const existing = notifMap.get(rn.id);
+            notifMap.set(rn.id, {
+              ...existing,
+              ...rn,
+              isRead: Boolean(existing?.isRead || rn.isRead),
+            });
+          });
+          const mergedNotifs = Array.from(notifMap.values());
+          if (JSON.stringify(mergedNotifs) !== prevJson) {
+            this.setItem(STORAGE_KEYS.NOTIFICATIONS, mergedNotifs);
+            updated = true;
+          }
+        }
+
+        if (this.purgeExpiredNotifications()) {
+          updated = true;
         }
 
         if (remoteAttendance && remoteAttendance.length > 0) {
@@ -1192,7 +1301,7 @@ export class ClassroomDB {
 
         return updated;
       } catch {
-        return false;
+        return purgedLocalNotifs;
       } finally {
         this.activePullPromise = null;
       }
@@ -1212,16 +1321,20 @@ export class ClassroomDB {
 
     // Check if any scheduled posts have reached their release date/time and auto-publish them
     let hasAutoPublished = false;
+    const autoPublishedList: CoursePost[] = [];
     const processedPosts = allPosts.map((post) => {
       if (post.status === 'scheduled' && post.scheduledFor) {
         const scheduledTime = new Date(post.scheduledFor).getTime();
         if (scheduledTime <= now) {
           hasAutoPublished = true;
-          return {
+          const released: CoursePost = {
             ...post,
             status: 'published' as const,
             createdAt: 'Just now',
+            createdAtMs: now,
           };
+          autoPublishedList.push(released);
+          return released;
         }
       }
       return post;
@@ -1229,6 +1342,18 @@ export class ClassroomDB {
 
     if (hasAutoPublished) {
       this.setItem(STORAGE_KEYS.POSTS, processedPosts);
+      const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+      autoPublishedList.forEach((ap) => {
+        const targetCourse = allCourses.find((c) => c.id === ap.courseId);
+        if (targetCourse && (ap.authorRole === 'admin' || ap.authorRole === 'co_admin')) {
+          this.notifyEnrolledStudentsOfCoursePost(
+            targetCourse,
+            ap,
+            ap.authorName,
+            ap.authorRole
+          );
+        }
+      });
     }
 
     // Filter by course
@@ -1272,7 +1397,7 @@ export class ClassroomDB {
       scheduledForDisplay?: string;
     },
     currentUser: User
-  ): { post: CoursePost | null; error?: string } {
+  ): { post: CoursePost | null; notifiedCount?: number; error?: string } {
     const isInstructor = currentUser.role === 'admin' || currentUser.role === 'co_admin';
     if (!isInstructor) {
       return {
@@ -1290,14 +1415,16 @@ export class ClassroomDB {
     const isScheduled = isInstructor && postData.status === 'scheduled';
     const isPinned = isInstructor && Boolean(postData.isPinned);
 
+    const nowMs = Date.now();
     const newPost: CoursePost = {
       ...postData,
       isPinned,
       status: isScheduled ? 'scheduled' : 'published',
-      id: `post-${Date.now()}`,
+      id: `post-${nowMs}`,
       createdAt: isScheduled
         ? `Scheduled for ${postData.scheduledForDisplay || 'upcoming'}`
         : 'Just now',
+      createdAtMs: nowMs,
       likes: [],
       comments: [],
     };
@@ -1309,25 +1436,22 @@ export class ClassroomDB {
       // ignore
     }
 
-    // Send notifications to enrolled students only if published immediately
+    // Send notifications to all enrolled students in this classroom if published immediately
+    let notifiedCount = 0;
     if (!isScheduled) {
       const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
       const course = allCourses.find((c) => c.id === postData.courseId);
       if (course) {
-        course.enrolledStudentIds.forEach((studentId) => {
-          this.addNotification({
-            userId: studentId,
-            courseId: course.id,
-            courseTitle: course.title,
-            title: `New ${postData.postType === 'lesson' ? 'Lesson' : 'Post'}: ${postData.title}`,
-            message: `${currentUser.name} posted in ${course.code}`,
-            type: 'post',
-          });
-        });
+        notifiedCount = this.notifyEnrolledStudentsOfCoursePost(
+          course,
+          newPost,
+          currentUser.name,
+          currentUser.role
+        );
       }
     }
 
-    return { post: newPost };
+    return { post: newPost, notifiedCount };
   }
 
   static updatePost(
@@ -1452,7 +1576,7 @@ export class ClassroomDB {
   static publishScheduledPostNow(
     postId: string,
     currentUser: User
-  ): { success: boolean; error?: string } {
+  ): { success: boolean; notifiedCount?: number; error?: string } {
     if (currentUser.role !== 'admin' && currentUser.role !== 'co_admin') {
       return { success: false, error: 'Unauthorized: Only instructors/admins/co-admins can publish scheduled posts.' };
     }
@@ -1464,12 +1588,14 @@ export class ClassroomDB {
     }
 
     let publishedPost: CoursePost | null = null;
+    const nowMs = Date.now();
     const updated = posts.map((p) => {
       if (p.id === postId) {
         publishedPost = {
           ...p,
           status: 'published' as const,
           createdAt: 'Just now',
+          createdAtMs: nowMs,
           scheduledFor: undefined,
           scheduledForDisplay: undefined,
         };
@@ -1487,23 +1613,20 @@ export class ClassroomDB {
       }
     }
 
-    // Send notifications to enrolled students
+    // Send notifications to all enrolled students in this classroom
+    let notifiedCount = 0;
     const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
     const course = allCourses.find((c) => c.id === target.courseId);
-    if (course) {
-      course.enrolledStudentIds.forEach((studentId) => {
-        this.addNotification({
-          userId: studentId,
-          courseId: course.id,
-          courseTitle: course.title,
-          title: `Published: ${target.title}`,
-          message: `${currentUser.name} published a scheduled post in ${course.code}`,
-          type: 'post',
-        });
-      });
+    if (course && publishedPost) {
+      notifiedCount = this.notifyEnrolledStudentsOfCoursePost(
+        course,
+        publishedPost,
+        currentUser.name,
+        currentUser.role
+      );
     }
 
-    return { success: true };
+    return { success: true, notifiedCount };
   }
 
   static deletePost(postId: string, currentUser: User): boolean {
@@ -1518,9 +1641,20 @@ export class ClassroomDB {
 
     const updated = posts.filter((p) => p.id !== postId);
     this.setItem(STORAGE_KEYS.POSTS, updated);
-    this.recordDeletedIds([postId]);
 
-    // Auto-delete from Supabase SQL database
+    // Also remove any notifications linked to this post locally
+    const notifs = this.getItem<NotificationItem[]>(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
+    const removedNotifIds = notifs.filter((n) => n.postId === postId).map((n) => n.id);
+    if (removedNotifIds.length > 0) {
+      this.setItem(
+        STORAGE_KEYS.NOTIFICATIONS,
+        notifs.filter((n) => n.postId !== postId)
+      );
+    }
+
+    this.recordDeletedIds([postId, ...removedNotifIds]);
+
+    // Auto-delete post and its notifications from Supabase SQL database
     try {
       SupabaseService.deletePost(postId).catch(() => {});
     } catch {
@@ -2036,7 +2170,7 @@ export class ClassroomDB {
       }),
       gradeAverage: 95,
       attendancePercentage: attStats.percentage,
-      verificationUrl: `https://classroomos.edu/verify/${certId}`,
+      verificationUrl: `https://www.swanarhclassroom.online/verify/${certId}`,
       instructorSignature: `${course.instructorName} (Lead Faculty)`,
     };
 
@@ -2685,27 +2819,242 @@ export class ClassroomDB {
     };
   }
 
-  // Notifications
+  // Notifications (with 30-Minute Auto-Deletion locally & in Supabase)
+  static purgeExpiredNotifications(forceCloudCleanup: boolean = false): boolean {
+    const notifs = this.getItem<NotificationItem[]>(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
+    const now = Date.now();
+    const expiredIds: string[] = [];
+    let mutated = false;
+
+    const activeNotifs: NotificationItem[] = [];
+
+    for (const n of notifs) {
+      let createdMs = n.createdAtMs;
+      if (!createdMs) {
+        createdMs =
+          this.extractTimestampFromId(n.id) ||
+          this.extractTimestampFromId(n.postId) ||
+          now;
+        mutated = true;
+      }
+      const expiresMs = n.expiresAtMs || createdMs + NOTIFICATION_TTL_MS;
+
+      if (now >= expiresMs || now - createdMs >= NOTIFICATION_TTL_MS) {
+        expiredIds.push(n.id);
+        mutated = true;
+      } else {
+        activeNotifs.push(
+          n.createdAtMs === createdMs && n.expiresAtMs === expiresMs
+            ? n
+            : { ...n, createdAtMs: createdMs, expiresAtMs: expiresMs }
+        );
+      }
+    }
+
+    if (mutated) {
+      this.setItem(STORAGE_KEYS.NOTIFICATIONS, activeNotifs);
+    }
+
+    if (expiredIds.length > 0 || forceCloudCleanup) {
+      try {
+        SupabaseService.purgeExpiredNotifications(expiredIds, forceCloudCleanup).catch(() => {});
+      } catch {
+        // ignore
+      }
+    }
+
+    return expiredIds.length > 0;
+  }
+
   static getNotifications(userId: string): NotificationItem[] {
+    this.purgeExpiredNotifications();
     const notifs = this.getItem<NotificationItem[]>(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
     return notifs.filter((n) => n.userId === userId);
   }
 
-  static markAllNotificationsRead(userId: string): void {
+  static markNotificationRead(notificationId: string): void {
     const notifs = this.getItem<NotificationItem[]>(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
-    const updated = notifs.map((n) => (n.userId === userId ? { ...n, isRead: true } : n));
+    let targetNotif: NotificationItem | null = null;
+    const updated = notifs.map((n) => {
+      if (n.id === notificationId) {
+        targetNotif = { ...n, isRead: true };
+        return targetNotif;
+      }
+      return n;
+    });
     this.setItem(STORAGE_KEYS.NOTIFICATIONS, updated);
+    if (targetNotif) {
+      try {
+        SupabaseService.upsertNotifications([targetNotif]).catch(() => {});
+      } catch {
+        // ignore
+      }
+    }
   }
 
-  static addNotification(item: Omit<NotificationItem, 'id' | 'createdAt' | 'isRead'>): void {
+  static markAllNotificationsRead(userId: string): void {
     const notifs = this.getItem<NotificationItem[]>(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
+    const updatedForUser: NotificationItem[] = [];
+    const updated = notifs.map((n) => {
+      if (n.userId === userId && !n.isRead) {
+        const readItem = { ...n, isRead: true };
+        updatedForUser.push(readItem);
+        return readItem;
+      }
+      return n;
+    });
+    this.setItem(STORAGE_KEYS.NOTIFICATIONS, updated);
+    if (updatedForUser.length > 0) {
+      try {
+        SupabaseService.upsertNotifications(updatedForUser).catch(() => {});
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  static addNotification(item: Omit<NotificationItem, 'id' | 'createdAt' | 'isRead'>): NotificationItem {
+    this.purgeExpiredNotifications();
+    const notifs = this.getItem<NotificationItem[]>(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
+    const nowMs = Date.now();
+    const timeLabel = new Date(nowMs).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
     const newNotif: NotificationItem = {
       ...item,
-      id: `notif-${Date.now()}`,
-      createdAt: 'Just now',
+      id: `notif-${nowMs}-${Math.random().toString(36).slice(2, 7)}`,
+      createdAt: timeLabel,
+      createdAtMs: nowMs,
+      expiresAtMs: nowMs + NOTIFICATION_TTL_MS,
       isRead: false,
     };
     this.setItem(STORAGE_KEYS.NOTIFICATIONS, [newNotif, ...notifs]);
+    try {
+      SupabaseService.upsertNotifications([newNotif]).catch(() => {});
+    } catch {
+      // ignore
+    }
+    return newNotif;
+  }
+
+  /**
+   * Dispatches a classroom post notification to every student enrolled in `course.enrolledStudentIds`.
+   * Each notification is stamped with a 30-minute expiration window (`expiresAtMs`) and synced to Supabase,
+   * after which it is automatically deleted from both local storage and Supabase.
+   */
+  static notifyEnrolledStudentsOfCoursePost(
+    course: Course,
+    post: CoursePost,
+    authorName: string,
+    authorRole: UserRole
+  ): number {
+    if (!course.enrolledStudentIds || course.enrolledStudentIds.length === 0) {
+      return 0;
+    }
+
+    this.purgeExpiredNotifications();
+
+    const nowMs = Date.now();
+    const postCreatedMs =
+      post.createdAtMs ||
+      this.extractTimestampFromId(post.id) ||
+      nowMs;
+
+    // Do not create notifications if the post is already older than 30 minutes
+    if (nowMs - postCreatedMs >= NOTIFICATION_TTL_MS) {
+      return 0;
+    }
+
+    const expiresMs = postCreatedMs + NOTIFICATION_TTL_MS;
+    const notifs = this.getItem<NotificationItem[]>(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
+    const existingKeys = new Set(
+      notifs
+        .filter((n) => n.postId)
+        .map((n) => `${n.userId}:${n.postId}`)
+    );
+
+    const roleLabel =
+      authorRole === 'admin'
+        ? 'Admin (ဆရာ)'
+        : authorRole === 'co_admin'
+        ? 'Co-Admin (တွဲဖက်ဆရာ)'
+        : 'Instructor';
+
+    const typeLabel =
+      post.postType === 'lesson'
+        ? 'သင်ခန်းစာအသစ် (New Lesson)'
+        : post.postType === 'resource'
+        ? 'သင်ထောက်ကူဖိုင် (New Resource)'
+        : 'ကြေညာချက်အသစ် (New Announcement)';
+
+    const timeLabel = new Date(postCreatedMs).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    const createdList: NotificationItem[] = [];
+
+    course.enrolledStudentIds.forEach((studentId) => {
+      const dedupeKey = `${studentId}:${post.id}`;
+      if (existingKeys.has(dedupeKey)) return;
+      existingKeys.add(dedupeKey);
+
+      createdList.push({
+        id: `notif-${postCreatedMs}-${studentId}-${Math.random().toString(36).slice(2, 6)}`,
+        userId: studentId,
+        courseId: course.id,
+        courseCode: course.code,
+        courseTitle: course.title,
+        postId: post.id,
+        authorName,
+        authorRole,
+        title: `📢 [${course.code}] ${typeLabel}: ${post.title}`,
+        message: `${authorName} (${roleLabel}) မှ "${course.title}" အတန်းတွင် ပို့စ်အသစ် တင်ထားပါသည်။`,
+        type: 'post',
+        isRead: false,
+        createdAt: timeLabel,
+        createdAtMs: postCreatedMs,
+        expiresAtMs: expiresMs,
+      });
+    });
+
+    if (createdList.length > 0) {
+      this.setItem(STORAGE_KEYS.NOTIFICATIONS, [...createdList, ...notifs]);
+
+      // Sync new notifications to Supabase (where they will also auto-expire after 30 minutes)
+      try {
+        SupabaseService.upsertNotifications(createdList).catch(() => {});
+      } catch {
+        // ignore
+      }
+
+      // Trigger Browser Notification if the active user on this device is one of the notified students
+      try {
+        const loggedUser = this.getCurrentUser();
+        if (
+          loggedUser &&
+          loggedUser.role === 'student' &&
+          course.enrolledStudentIds.includes(loggedUser.id) &&
+          typeof window !== 'undefined' &&
+          'Notification' in window &&
+          Notification.permission === 'granted'
+        ) {
+          new Notification(`📢 ${course.code} — ${post.title}`, {
+            body: `${authorName} (${roleLabel}) မှ "${course.title}" အတန်းတွင် ပို့စ်အသစ် တင်ထားပါသည်။`,
+            icon: './pwa-192x192.png',
+          });
+        }
+      } catch {
+        // ignore browser notification errors
+      }
+    }
+
+    return course.enrolledStudentIds.length;
   }
 }
 

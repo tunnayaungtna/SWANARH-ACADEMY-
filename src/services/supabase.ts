@@ -8,7 +8,10 @@ import {
   AssignmentSubmission,
   Quiz,
   AttendanceSession,
+  NotificationItem,
 } from '../types/classroom';
+
+export const NOTIFICATION_TTL_MS = 30 * 60 * 1000; // 30 minutes auto-delete window
 
 // Supabase Project Credentials provided by user
 export const SUPABASE_CONFIG = {
@@ -296,6 +299,32 @@ CREATE INDEX IF NOT EXISTS idx_submissions_student_id ON public.assignment_submi
 CREATE INDEX IF NOT EXISTS idx_quizzes_course_id ON public.quizzes (course_id);
 CREATE INDEX IF NOT EXISTS idx_quiz_submissions_quiz_id ON public.quiz_submissions (quiz_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_course_id ON public.attendance_sessions (course_id);
+
+-- 10. Classroom Notifications Table (Auto-expires 30 minutes after post creation)
+CREATE TABLE IF NOT EXISTS public.notifications (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  course_id TEXT NOT NULL,
+  course_code TEXT,
+  course_title TEXT NOT NULL,
+  post_id TEXT,
+  author_name TEXT,
+  author_role TEXT,
+  title TEXT NOT NULL,
+  message TEXT NOT NULL,
+  type TEXT DEFAULT 'post',
+  is_read BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '30 minutes')
+);
+
+ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Notifications full access" ON public.notifications;
+CREATE POLICY "Notifications full access" ON public.notifications FOR ALL USING (true);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON public.notifications (user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_expires_at ON public.notifications (expires_at);
+CREATE INDEX IF NOT EXISTS idx_notifications_post_id ON public.notifications (post_id);
 `;
 
 const DEFAULT_FALLBACK_AVATAR =
@@ -304,18 +333,19 @@ const DEFAULT_FALLBACK_BANNER =
   'https://images.unsplash.com/photo-1517694712202-14dd9538aa97?w=1200&auto=format&fit=crop&q=80';
 
 /**
- * Strips oversized base64 strings (> 8KB) before sending to Supabase SQL
- * so the 500MB Free Plan database and 5GB monthly Egress Bandwidth never fill up.
+ * Strips base64 images & oversized strings (> 2.5KB) before sending to Supabase SQL
+ * so the 500MB Free Plan database and 5GB monthly Egress Bandwidth stay ultra-lean.
+ * Local storage retains high-res data:image/ URLs on the user's device.
  */
 function compactAvatarForCloud(avatar?: string): string {
   if (!avatar) return DEFAULT_FALLBACK_AVATAR;
-  if (avatar.length > 8000) return DEFAULT_FALLBACK_AVATAR;
+  if (avatar.startsWith('data:') || avatar.length > 2500) return DEFAULT_FALLBACK_AVATAR;
   return avatar;
 }
 
 function compactBannerForCloud(banner?: string): string {
   if (!banner) return DEFAULT_FALLBACK_BANNER;
-  if (banner.length > 12000) return DEFAULT_FALLBACK_BANNER;
+  if (banner.startsWith('data:') || banner.length > 3500) return DEFAULT_FALLBACK_BANNER;
   return banner;
 }
 
@@ -354,6 +384,31 @@ function decodeTitleAndRules(
 export class SupabaseService {
   // Caches detected profile schema columns so we never repeat fallback roundtrips
   private static profileSchemaMode: 'full' | 'no_password' | 'core' = 'full';
+  // Caches whether public.notifications table exists in Supabase to avoid wasted 404/42P01 calls
+  private static notificationsTableStatus: 'unknown' | 'available' | 'missing' = 'unknown';
+  // In-memory payload signature cache so identical records are never re-uploaded to Supabase
+  private static lastUpsertSignatures = new Map<string, string>();
+  private static lastExpiredCleanupAt = 0;
+
+  private static hasChangedSignature(key: string, payload: unknown): boolean {
+    try {
+      const sig = JSON.stringify(payload);
+      if (this.lastUpsertSignatures.get(key) === sig) {
+        return false;
+      }
+      return true;
+    } catch {
+      return true;
+    }
+  }
+
+  private static recordSignature(key: string, payload: unknown): void {
+    try {
+      this.lastUpsertSignatures.set(key, JSON.stringify(payload));
+    } catch {
+      // ignore
+    }
+  }
 
   /**
    * Check connection status to Supabase
@@ -461,43 +516,59 @@ export class SupabaseService {
   }
 
   /**
-   * Fetch all posts (stream lessons, announcements, videos, comments, likes) from Supabase
+   * Fetch posts from Supabase (optionally scoped to enrolled courseIds to save Egress bandwidth)
    */
-  static async getRemotePosts(): Promise<CoursePost[] | null> {
+  static async getRemotePosts(courseIds?: string[]): Promise<CoursePost[] | null> {
     try {
-      const { data, error } = await supabase
+      if (courseIds && courseIds.length === 0) {
+        return [];
+      }
+      let query = supabase
         .from('posts')
-        .select('*')
-        .limit(400);
+        .select(
+          'id,course_id,author_id,author_name,author_role,author_avatar,title,content,post_type,status,scheduled_for,scheduled_for_display,is_pinned,pinned_at,pin_order,attachments,likes,comments,created_at'
+        )
+        .order('created_at', { ascending: false })
+        .limit(150);
+
+      if (courseIds && courseIds.length > 0 && courseIds.length <= 25) {
+        query = query.in('course_id', courseIds);
+      }
+
+      const { data, error } = await query;
       if (error || !data) return null;
 
-      return data.map((row) => ({
-        id: row.id,
-        courseId: row.course_id,
-        authorId: row.author_id || 'user-admin-1',
-        authorName: row.author_name || 'Instructor',
-        authorRole: (row.author_role as UserRole) || 'admin',
-        authorAvatar: row.author_avatar || '',
-        title: row.title || '',
-        content: row.content || '',
-        createdAt: row.created_at
-          ? new Date(row.created_at).toLocaleDateString('en-US', {
-              month: 'short',
-              day: 'numeric',
-              year: 'numeric',
-            })
-          : 'Recently',
-        postType: (row.post_type as CoursePost['postType']) || 'announcement',
-        status: (row.status as CoursePost['status']) || 'published',
-        scheduledFor: row.scheduled_for || undefined,
-        scheduledForDisplay: row.scheduled_for_display || undefined,
-        isPinned: Boolean(row.is_pinned),
-        pinnedAt: row.pinned_at || undefined,
-        pinOrder: row.pin_order ?? undefined,
-        attachments: Array.isArray(row.attachments) ? row.attachments : [],
-        likes: Array.isArray(row.likes) ? row.likes : [],
-        comments: Array.isArray(row.comments) ? row.comments : [],
-      }));
+      return data.map((row) => {
+        const parsedMs = row.created_at ? new Date(row.created_at).getTime() : undefined;
+        return {
+          id: row.id,
+          courseId: row.course_id,
+          authorId: row.author_id || 'user-admin-1',
+          authorName: row.author_name || 'Instructor',
+          authorRole: (row.author_role as UserRole) || 'admin',
+          authorAvatar: row.author_avatar || '',
+          title: row.title || '',
+          content: row.content || '',
+          createdAt: row.created_at
+            ? new Date(row.created_at).toLocaleDateString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+              })
+            : 'Recently',
+          createdAtMs: parsedMs && !isNaN(parsedMs) ? parsedMs : undefined,
+          postType: (row.post_type as CoursePost['postType']) || 'announcement',
+          status: (row.status as CoursePost['status']) || 'published',
+          scheduledFor: row.scheduled_for || undefined,
+          scheduledForDisplay: row.scheduled_for_display || undefined,
+          isPinned: Boolean(row.is_pinned),
+          pinnedAt: row.pinned_at || undefined,
+          pinOrder: row.pin_order ?? undefined,
+          attachments: Array.isArray(row.attachments) ? row.attachments : [],
+          likes: Array.isArray(row.likes) ? row.likes : [],
+          comments: Array.isArray(row.comments) ? row.comments : [],
+        };
+      });
     } catch {
       return null;
     }
@@ -595,14 +666,23 @@ export class SupabaseService {
   }
 
   /**
-   * Fetch all attendance sessions from Supabase
+   * Fetch attendance sessions from Supabase (optionally scoped to enrolled courseIds)
    */
-  static async getRemoteAttendanceSessions(): Promise<AttendanceSession[] | null> {
+  static async getRemoteAttendanceSessions(courseIds?: string[]): Promise<AttendanceSession[] | null> {
     try {
-      const { data, error } = await supabase
+      if (courseIds && courseIds.length === 0) {
+        return [];
+      }
+      let query = supabase
         .from('attendance_sessions')
-        .select('*')
-        .limit(400);
+        .select('id,course_id,date,display_date,title,is_open,opened_by,records,created_at')
+        .limit(150);
+
+      if (courseIds && courseIds.length > 0 && courseIds.length <= 25) {
+        query = query.in('course_id', courseIds);
+      }
+
+      const { data, error } = await query;
       if (error || !data) return null;
 
       return data.map((row) => ({
@@ -618,6 +698,184 @@ export class SupabaseService {
       }));
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Fetch active (non-expired) notifications for a user from Supabase and auto-purge expired (>30 mins) rows
+   */
+  static async getRemoteNotifications(userId?: string): Promise<NotificationItem[] | null> {
+    if (this.notificationsTableStatus === 'missing') {
+      return null;
+    }
+    try {
+      // Piggyback periodic cleanup of expired (>30 mins) notifications in Supabase (at most once per 60s)
+      await this.purgeExpiredNotifications();
+
+      const cutoffIso = new Date(Date.now() - NOTIFICATION_TTL_MS).toISOString();
+      let query = supabase
+        .from('notifications')
+        .select(
+          'id,user_id,course_id,course_code,course_title,post_id,author_name,author_role,title,message,type,is_read,created_at,expires_at'
+        )
+        .gt('created_at', cutoffIso)
+        .order('created_at', { ascending: false })
+        .limit(60);
+
+      if (userId) {
+        query = query.eq('user_id', userId);
+      }
+
+      const { data, error } = await query;
+      if (error) {
+        if (error.code === '42P01' || error.message?.includes('notifications')) {
+          this.notificationsTableStatus = 'missing';
+        }
+        return null;
+      }
+      this.notificationsTableStatus = 'available';
+      if (!data) return [];
+
+      return data.map((row) => {
+        const createdMs = row.created_at ? new Date(row.created_at).getTime() : Date.now();
+        const expiresMs = row.expires_at
+          ? new Date(row.expires_at).getTime()
+          : createdMs + NOTIFICATION_TTL_MS;
+        return {
+          id: row.id,
+          userId: row.user_id,
+          courseId: row.course_id,
+          courseCode: row.course_code || undefined,
+          courseTitle: row.course_title || '',
+          postId: row.post_id || undefined,
+          authorName: row.author_name || undefined,
+          authorRole: (row.author_role as UserRole) || undefined,
+          title: row.title || '',
+          message: row.message || '',
+          type: (row.type as NotificationItem['type']) || 'post',
+          isRead: Boolean(row.is_read),
+          createdAt: row.created_at
+            ? new Date(row.created_at).toLocaleString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            : 'Just now',
+          createdAtMs: createdMs,
+          expiresAtMs: expiresMs,
+        };
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Batch upsert notifications to Supabase (with 30-minute expiration timestamp)
+   */
+  static async upsertNotifications(notifs: NotificationItem[]): Promise<boolean> {
+    if (this.notificationsTableStatus === 'missing' || notifs.length === 0) {
+      return false;
+    }
+    try {
+      const now = Date.now();
+      const validNotifs = notifs.filter((n) => {
+        const created = n.createdAtMs || now;
+        return now - created < NOTIFICATION_TTL_MS;
+      });
+      if (validNotifs.length === 0) return true;
+
+      const rows = validNotifs.map((n) => {
+        const createdMs = n.createdAtMs || now;
+        const expiresMs = n.expiresAtMs || createdMs + NOTIFICATION_TTL_MS;
+        return {
+          id: n.id,
+          user_id: n.userId,
+          course_id: n.courseId,
+          course_code: n.courseCode || null,
+          course_title: n.courseTitle,
+          post_id: n.postId || null,
+          author_name: n.authorName || null,
+          author_role: n.authorRole || null,
+          title: n.title,
+          message: n.message,
+          type: n.type || 'post',
+          is_read: Boolean(n.isRead),
+          created_at: new Date(createdMs).toISOString(),
+          expires_at: new Date(expiresMs).toISOString(),
+        };
+      });
+
+      const { error } = await supabase.from('notifications').upsert(rows, { onConflict: 'id' });
+      if (error) {
+        if (error.code === '42P01' || error.message?.includes('notifications')) {
+          this.notificationsTableStatus = 'missing';
+        }
+        return false;
+      }
+      this.notificationsTableStatus = 'available';
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Auto-delete notifications older than 30 minutes (or specific expired IDs) from Supabase SQL database
+   */
+  static async purgeExpiredNotifications(expiredIds: string[] = [], force: boolean = false): Promise<boolean> {
+    if (this.notificationsTableStatus === 'missing') {
+      return false;
+    }
+    const now = Date.now();
+    const shouldRunTimeSweep = force || now - this.lastExpiredCleanupAt >= 45_000;
+    if (!shouldRunTimeSweep && expiredIds.length === 0) {
+      return true;
+    }
+
+    try {
+      if (shouldRunTimeSweep) {
+        this.lastExpiredCleanupAt = now;
+        const cutoffIso = new Date(now - NOTIFICATION_TTL_MS).toISOString();
+        const nowIso = new Date(now).toISOString();
+        const { error } = await supabase
+          .from('notifications')
+          .delete()
+          .or(`created_at.lt.${cutoffIso},expires_at.lte.${nowIso}`);
+
+        if (error) {
+          if (error.code === '42P01' || error.message?.includes('notifications')) {
+            this.notificationsTableStatus = 'missing';
+            return false;
+          }
+        } else {
+          this.notificationsTableStatus = 'available';
+        }
+      }
+
+      if (expiredIds.length > 0) {
+        await supabase.from('notifications').delete().in('id', expiredIds.slice(0, 100));
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Delete notifications associated with a deleted post or course in Supabase
+   */
+  static async deleteNotificationsByPostId(postId: string): Promise<boolean> {
+    if (this.notificationsTableStatus === 'missing') return false;
+    try {
+      const { error } = await supabase.from('notifications').delete().eq('post_id', postId);
+      if (error && (error.code === '42P01' || error.message?.includes('notifications'))) {
+        this.notificationsTableStatus = 'missing';
+      }
+      return !error;
+    } catch {
+      return false;
     }
   }
 
@@ -678,15 +936,23 @@ export class SupabaseService {
   }
 
   /**
-   * Create or update a profile in Supabase with cached schema mode
-   * so Free Plan never wastes extra fallback HTTP calls.
+   * Create or update a profile in Supabase with cached schema mode & signature deduplication
+   * so Free Plan never wastes extra HTTP calls.
    */
   static async upsertProfile(user: User): Promise<{ success: boolean; error?: string }> {
     try {
       const payload = this.buildProfilePayload(user, this.profileSchemaMode);
+      const sigKey = `profile:${user.id}`;
+      // Compare without updated_at timestamp so identical profiles aren't re-uploaded
+      const { updated_at: _ignoreTs, ...comparablePayload } = payload;
+      if (!this.hasChangedSignature(sigKey, comparablePayload)) {
+        return { success: true };
+      }
+
       const { error } = await supabase.from('profiles').upsert(payload, { onConflict: 'id' });
 
       if (!error) {
+        this.recordSignature(sigKey, comparablePayload);
         return { success: true };
       }
 
@@ -698,6 +964,7 @@ export class SupabaseService {
           .upsert(noPwdPayload, { onConflict: 'id' });
         if (!errNoPwd) {
           this.profileSchemaMode = 'no_password';
+          this.recordSignature(sigKey, comparablePayload);
           return { success: true };
         }
       }
@@ -710,6 +977,7 @@ export class SupabaseService {
 
       if (!fallbackError) {
         this.profileSchemaMode = 'core';
+        this.recordSignature(sigKey, comparablePayload);
         return { success: true };
       }
 
@@ -725,6 +993,7 @@ export class SupabaseService {
    */
   static async deleteProfile(userId: string): Promise<boolean> {
     try {
+      this.lastUpsertSignatures.delete(`profile:${userId}`);
       await Promise.allSettled([
         supabase.from('assignment_submissions').delete().eq('student_id', userId),
         supabase.from('quiz_submissions').delete().eq('student_id', userId),
@@ -741,28 +1010,31 @@ export class SupabaseService {
    */
   static async upsertCourse(course: Course): Promise<{ success: boolean; error?: string }> {
     try {
-      const { error } = await supabase.from('courses').upsert(
-        {
-          id: course.id,
-          code: course.code,
-          title: course.title,
-          section: course.section,
-          batch: course.batch,
-          description: course.description,
-          instructor_name: course.instructorName,
-          instructor_email: course.instructorEmail,
-          banner_image: compactBannerForCloud(course.bannerImage),
-          theme_color: course.themeColor || 'indigo',
-          enrolled_student_ids: course.enrolledStudentIds || [],
-          total_lessons: course.totalLessons || 0,
-          total_assignments: course.totalAssignments || 0,
-          total_quizzes: course.totalQuizzes || 0,
-        },
-        { onConflict: 'id' }
-      );
+      const row = {
+        id: course.id,
+        code: course.code,
+        title: course.title,
+        section: course.section,
+        batch: course.batch,
+        description: course.description,
+        instructor_name: course.instructorName,
+        instructor_email: course.instructorEmail,
+        banner_image: compactBannerForCloud(course.bannerImage),
+        theme_color: course.themeColor || 'indigo',
+        enrolled_student_ids: course.enrolledStudentIds || [],
+        total_lessons: course.totalLessons || 0,
+        total_assignments: course.totalAssignments || 0,
+        total_quizzes: course.totalQuizzes || 0,
+      };
+      const sigKey = `course:${course.id}`;
+      if (!this.hasChangedSignature(sigKey, row)) {
+        return { success: true };
+      }
+      const { error } = await supabase.from('courses').upsert(row, { onConflict: 'id' });
       if (error) {
         return { success: false, error: error.message };
       }
+      this.recordSignature(sigKey, row);
       return { success: true };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -775,11 +1047,15 @@ export class SupabaseService {
    */
   static async deleteCourse(courseId: string): Promise<boolean> {
     try {
+      this.lastUpsertSignatures.delete(`course:${courseId}`);
       await Promise.allSettled([
         supabase.from('posts').delete().eq('course_id', courseId),
         supabase.from('assignments').delete().eq('course_id', courseId),
         supabase.from('quizzes').delete().eq('course_id', courseId),
         supabase.from('attendance_sessions').delete().eq('course_id', courseId),
+        this.notificationsTableStatus !== 'missing'
+          ? supabase.from('notifications').delete().eq('course_id', courseId)
+          : Promise.resolve(),
       ]);
       const { error } = await supabase.from('courses').delete().eq('id', courseId);
       return !error;
@@ -789,15 +1065,28 @@ export class SupabaseService {
   }
 
   private static formatPostRow(post: CoursePost) {
+    // Strip heavy base64 fileData & oversized data URLs from attachments before storing in Supabase
     const safeAttachments = (post.attachments || []).map((att) => ({
-      ...att,
-      // Keep Supabase Free Plan DB & egress ultra-lean (< 8KB per attachment URL)
-      url: att.url && att.url.length > 8000 ? '#attachment' : att.url,
+      id: att.id,
+      name: att.name,
+      size: att.size,
+      type: att.type,
+      url:
+        att.url && (att.url.startsWith('data:') || att.url.length > 2000)
+          ? '#attachment'
+          : att.url,
     }));
 
-    const safeComments = (post.comments || []).map((c) => ({
-      ...c,
+    // Keep latest 50 comments max in Supabase row and strip base64 avatars
+    const safeComments = (post.comments || []).slice(-50).map((c) => ({
+      id: c.id,
+      postId: c.postId,
+      authorId: c.authorId,
+      authorName: c.authorName,
+      authorRole: c.authorRole,
       authorAvatar: compactAvatarForCloud(c.authorAvatar),
+      content: (c.content || '').slice(0, 1000),
+      createdAt: c.createdAt,
     }));
 
     return {
@@ -827,9 +1116,15 @@ export class SupabaseService {
    */
   static async upsertPost(post: CoursePost): Promise<boolean> {
     try {
-      const { error } = await supabase
-        .from('posts')
-        .upsert(this.formatPostRow(post), { onConflict: 'id' });
+      const row = this.formatPostRow(post);
+      const sigKey = `post:${post.id}`;
+      if (!this.hasChangedSignature(sigKey, row)) {
+        return true;
+      }
+      const { error } = await supabase.from('posts').upsert(row, { onConflict: 'id' });
+      if (!error) {
+        this.recordSignature(sigKey, row);
+      }
       return !error;
     } catch {
       return false;
@@ -837,10 +1132,12 @@ export class SupabaseService {
   }
 
   /**
-   * Auto-delete a post from Supabase SQL database
+   * Auto-delete a post and its associated student notifications from Supabase SQL database
    */
   static async deletePost(postId: string): Promise<boolean> {
     try {
+      this.lastUpsertSignatures.delete(`post:${postId}`);
+      await this.deleteNotificationsByPostId(postId);
       const { error } = await supabase.from('posts').delete().eq('id', postId);
       return !error;
     } catch {
@@ -1003,19 +1300,26 @@ export class SupabaseService {
    */
   static async upsertAttendanceSession(session: AttendanceSession): Promise<boolean> {
     try {
-      const { error } = await supabase.from('attendance_sessions').upsert(
-        {
-          id: session.id,
-          course_id: session.courseId,
-          date: session.date,
-          display_date: session.displayDate,
-          title: session.title,
-          is_open: session.isOpen,
-          opened_by: session.openedBy,
-          records: session.records || {},
-        },
-        { onConflict: 'id' }
-      );
+      const row = {
+        id: session.id,
+        course_id: session.courseId,
+        date: session.date,
+        display_date: session.displayDate,
+        title: session.title,
+        is_open: session.isOpen,
+        opened_by: session.openedBy,
+        records: session.records || {},
+      };
+      const sigKey = `att:${session.id}`;
+      if (!this.hasChangedSignature(sigKey, row)) {
+        return true;
+      }
+      const { error } = await supabase
+        .from('attendance_sessions')
+        .upsert(row, { onConflict: 'id' });
+      if (!error) {
+        this.recordSignature(sigKey, row);
+      }
       return !error;
     } catch {
       return false;
@@ -1027,6 +1331,7 @@ export class SupabaseService {
    */
   static async deleteAttendanceSession(sessionId: string): Promise<boolean> {
     try {
+      this.lastUpsertSignatures.delete(`att:${sessionId}`);
       const { error } = await supabase.from('attendance_sessions').delete().eq('id', sessionId);
       return !error;
     } catch {
@@ -1050,7 +1355,10 @@ export class SupabaseService {
   ): Promise<{ success: boolean; syncedUsers: number; syncedCourses: number; error?: string }> {
     let lastError: string | undefined;
 
-    // 1. Purge any deleted IDs from Supabase SQL tables first
+    // 0. Always purge expired (>30 mins) notifications in Supabase first
+    await this.purgeExpiredNotifications(deletedIds, true);
+
+    // 1. Purge any deleted IDs from Supabase SQL tables
     if (deletedIds.length > 0) {
       await Promise.allSettled([
         supabase.from('courses').delete().in('id', deletedIds),

@@ -259,12 +259,13 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
     setPinUponPublish(false);
     setIsComposing(false);
 
+    const notifiedCount = res.notifiedCount ?? course.enrolledStudentIds.length;
     setSuccessToast(
       publishMode === 'schedule'
-        ? `Post အား ${scheduledForDisplay} တွင် တင်ရန် အချိန်သတ်မှတ်ပြီးပါပြီ!`
-        : 'Post အား Stream ထဲသို့ ချက်ချင်းတင်ပြီးပါပြီ!'
+        ? `Post အား ${scheduledForDisplay} တွင် တင်ရန် အချိန်သတ်မှတ်ပြီးပါပြီ! (သတ်မှတ်ချိန်ရောက်ပါက ကျောင်းသား ${course.enrolledStudentIds.length} ဦးထံ Notification ပို့ပေးပါမည်)`
+        : `🔔 Post အား Stream ထဲသို့ တင်ပြီး "${course.code}" အတန်းရှိ ကျောင်းသား (${notifiedCount}) ဦးအားလုံးထံ Notification ပေးပို့ပြီးပါပြီ!`
     );
-    setTimeout(() => setSuccessToast(null), 3500);
+    setTimeout(() => setSuccessToast(null), 4200);
 
     onRefresh();
   };
@@ -305,8 +306,11 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
       setTimeout(() => setRateLimitError(null), 4000);
       return;
     }
-    setSuccessToast('Scheduled Post အား ချက်ချင်းထုတ်ပြန်ပြီးပါပြီ!');
-    setTimeout(() => setSuccessToast(null), 3000);
+    const notifiedCount = res.notifiedCount ?? course.enrolledStudentIds.length;
+    setSuccessToast(
+      `🔔 Scheduled Post အား ချက်ချင်းထုတ်ပြန်ပြီး ကျောင်းသား (${notifiedCount}) ဦးအားလုံးထံ Notification ပေးပို့ပြီးပါပြီ!`
+    );
+    setTimeout(() => setSuccessToast(null), 3800);
     onRefresh();
   };
 
@@ -744,10 +748,15 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                         : 'Student (ကျောင်းသား)'}
                     </span>
                   </div>
-                  {/* Google Classroom Audience Badge */}
-                  <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
-                    <Users className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 shrink-0" />
-                    <span>For: <strong>All members</strong> in {course.code} ({course.enrolledStudentIds.length} enrolled)</span>
+                  {/* Google Classroom Audience & Auto-Notification Badge */}
+                  <div className="flex items-center gap-2 flex-wrap mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+                    <span className="inline-flex items-center gap-1">
+                      <Users className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 shrink-0" />
+                      <span>For: <strong>All members</strong> in {course.code} ({course.enrolledStudentIds.length} enrolled)</span>
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                      <span>🔔 ကျောင်းသား {course.enrolledStudentIds.length} ဦးလုံးထံ Auto-Notification ပို့ပေးမည်</span>
+                    </span>
                   </div>
                 </div>
               </div>

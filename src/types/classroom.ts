@@ -74,6 +74,7 @@ export interface CoursePost {
   likes: string[]; // userIds
   comments: PostComment[];
   createdAt: string;
+  createdAtMs?: number; // Epoch ms when post was created/published
   isPinned?: boolean;
   pinnedAt?: string; // ISO string when post was pinned
   pinOrder?: number; // 1, 2, or 3
@@ -212,11 +213,18 @@ export interface NotificationItem {
   id: string;
   userId: string;
   courseId: string;
+  courseCode?: string;
   courseTitle: string;
+  postId?: string;
+  authorName?: string;
+  authorRole?: UserRole;
   title: string;
   message: string;
   type: 'post' | 'grade' | 'quiz' | 'certificate';
   isRead: boolean;
   createdAt: string;
+  createdAtMs?: number; // Epoch ms when notification was created
+  expiresAtMs?: number; // Epoch ms when notification auto-deletes (createdAtMs + 30 mins)
 }
+
 

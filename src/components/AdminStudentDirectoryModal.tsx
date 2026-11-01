@@ -18,6 +18,7 @@ import {
   Sparkles,
   Camera,
   Upload,
+  Shield,
   ShieldCheck,
   UserCheck,
   GraduationCap,
@@ -317,8 +318,8 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     courseName?: string;
   }) => {
     const roleTitle = creds.role === 'admin' ? 'Administrator (ဆရာ)' : creds.role === 'co_admin' ? 'Co-Admin (တွဲဖက်ဆရာ)' : 'Student (ကျောင်းသား)';
-    const loginUrl = window.location.origin + window.location.pathname;
-    const text = `🎓 Classroom OS Login Credentials\n👤 Name: ${creds.name}\n🛡️ Role: ${roleTitle}${
+    const loginUrl = 'https://www.swanarhclassroom.online/';
+    const text = `🎓 SwanArh Classroom Login Credentials\n👤 Name: ${creds.name}\n🛡️ Role: ${roleTitle}${
       creds.gender ? `\n⚧ Gender: ${creds.gender}` : ''
     }${creds.address ? `\n📍 Address: ${creds.address}` : ''}\n🔑 Username: ${creds.username}\n🔒 Password: ${creds.password}${
       creds.courseName ? `\n📚 Assigned Classes: ${creds.courseName}` : ''
@@ -1189,8 +1190,26 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
 
                         <div className="min-w-0 space-y-1">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-sm font-bold text-slate-900 dark:text-white">
-                              {user.name}
+                            <span className="text-sm font-bold text-slate-900 dark:text-white inline-flex items-center gap-1.5">
+                              <span>{user.name}</span>
+                              {user.role === 'student' && (
+                                <span
+                                  className="inline-flex items-center"
+                                  title={
+                                    user.rulesAccepted
+                                      ? `Rule Accepted: သိရှိ လိုက်နာပါမည်${user.rulesAcceptedAt ? ` (${user.rulesAcceptedAt})` : ''}`
+                                      : 'Rule Pending: စည်းကမ်းချက် လက်ခံရန်ကျန်'
+                                  }
+                                >
+                                  <Shield
+                                    className={`w-4 h-4 shrink-0 transition-colors ${
+                                      user.rulesAccepted
+                                        ? 'text-emerald-500 fill-emerald-500/25 dark:text-emerald-400 dark:fill-emerald-400/25'
+                                        : 'text-slate-300 dark:text-slate-600'
+                                    }`}
+                                  />
+                                </span>
+                              )}
                             </span>
                             <span className="text-[11px] font-mono text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded border border-indigo-200/50 dark:border-indigo-800/40">
                               @{user.username}

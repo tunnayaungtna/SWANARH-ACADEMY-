@@ -310,7 +310,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
                       type="button"
                       onClick={() => {
                         navigator.clipboard.writeText(
-                          `SwanArh Classroom Login:\nURL: ${window.location.origin}${window.location.pathname}\nUsername: ${createdDetails.username}\nPassword: ${createdDetails.password}\nClass: ${createdDetails.coursesLabel || course.code}`
+                          `SwanArh Classroom Login:\nURL: https://www.swanarhclassroom.online/\nUsername: ${createdDetails.username}\nPassword: ${createdDetails.password}\nClass: ${createdDetails.coursesLabel || course.code}`
                         );
                         setCopied(true);
                         setTimeout(() => setCopied(false), 2500);

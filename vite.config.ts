@@ -38,6 +38,12 @@ function syncGhPagesBundlePlugin(): Plugin {
         if (cssFile && cssFile !== 'app.css') {
           fs.copyFileSync(path.join(assetsDir, cssFile), path.join(assetsDir, 'app.css'));
         }
+
+        // Ensure GitHub Pages CNAME is always present in dist, root, and public
+        const cnameDomain = 'www.swanarhclassroom.online\n';
+        fs.writeFileSync(path.resolve(__dirname, 'dist/CNAME'), cnameDomain);
+        fs.writeFileSync(path.resolve(__dirname, 'CNAME'), cnameDomain);
+        fs.writeFileSync(path.resolve(__dirname, 'public/CNAME'), cnameDomain);
       } catch {
         // ignore
       }

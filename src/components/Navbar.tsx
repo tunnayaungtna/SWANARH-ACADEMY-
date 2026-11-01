@@ -42,6 +42,7 @@ interface NavbarProps {
   onNavigateHome: () => void;
   notifications: NotificationItem[];
   onRefreshNotifications: () => void;
+  onSelectNotificationCourse?: (courseId: string) => void;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
   onUpdateCurrentUser: (user: User) => void;
@@ -60,6 +61,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onNavigateHome,
   notifications,
   onRefreshNotifications,
+  onSelectNotificationCourse,
   theme,
   onToggleTheme,
   onUpdateCurrentUser,
@@ -221,50 +223,113 @@ export const Navbar: React.FC<NavbarProps> = ({
               }}
               className="neu-btn p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl relative cursor-pointer"
               aria-label="View notifications"
+              title="အတန်းတွင်း အသိပေးချက်များ (Classroom Notifications)"
             >
-              <Bell className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+              <Bell className={`w-4 h-4 sm:w-4.5 sm:h-4.5 ${unreadCount > 0 ? 'text-indigo-600 dark:text-indigo-400' : ''}`} />
               {unreadCount > 0 && (
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-600 text-white text-[10px] font-extrabold flex items-center justify-center shadow-xs animate-pulse">
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </span>
               )}
             </button>
 
             {/* Notifications Popover */}
             {showNotifications && (
-              <div className="neu-card absolute right-0 mt-3 w-76 sm:w-80 rounded-2xl p-4 z-50">
-                <div className="flex items-center justify-between pb-2.5 border-b border-slate-200/60 dark:border-slate-800">
-                  <span className="text-xs font-extrabold text-slate-900 dark:text-slate-100">
-                    Notifications ({unreadCount} new)
-                  </span>
-                  {unreadCount > 0 && (
-                    <button
-                      onClick={handleMarkNotificationsRead}
-                      className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
-                    >
-                      Mark all read
-                    </button>
-                  )}
+              <div className="neu-card absolute right-0 mt-3 w-80 sm:w-96 rounded-2xl p-4 z-50">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-200/60 dark:border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <Bell className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                    <span className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-slate-100">
+                      အသိပေးချက်များ ({unreadCount} အသစ်)
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {typeof window !== 'undefined' &&
+                      'Notification' in window &&
+                      Notification.permission === 'default' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            Notification.requestPermission().catch(() => {});
+                          }}
+                          className="text-[10px] font-semibold px-2 py-0.5 rounded-lg bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 cursor-pointer"
+                          title="Browser Push Notification ဖွင့်ရန်"
+                        >
+                          🔔 Alert ဖွင့်မည်
+                        </button>
+                      )}
+                    {unreadCount > 0 && (
+                      <button
+                        onClick={handleMarkNotificationsRead}
+                        className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                      >
+                        အားလုံးဖတ်ပြီး
+                      </button>
+                    )}
+                  </div>
                 </div>
 
-                <div className="space-y-2 max-h-72 overflow-y-auto mt-2.5">
+                <div className="mt-2 px-2.5 py-1.5 rounded-lg bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[10px] text-amber-800 dark:text-amber-300 font-medium flex items-center justify-between">
+                  <span>⏱ ပို့စ်တင်ပြီး ၃၀ မိနစ်ကြာလျှင် အလိုအလျောက် ပျက်ပါမည်</span>
+                  <span className="font-mono font-bold">30m Auto-Delete</span>
+                </div>
+
+                <div className="space-y-2.5 max-h-80 overflow-y-auto mt-2.5 pr-0.5">
                   {notifications.length === 0 ? (
-                    <div className="neu-inset-sm p-4 rounded-xl text-center text-xs text-slate-500 dark:text-slate-400">
-                      No notifications at this time
+                    <div className="neu-inset-sm p-5 rounded-xl text-center text-xs text-slate-500 dark:text-slate-400">
+                      လက်ရှိတွင် အသိပေးချက် အသစ် မရှိသေးပါ။
                     </div>
                   ) : (
-                    notifications.map((notif) => (
-                      <div
-                        key={notif.id}
-                        className={`p-2.5 rounded-xl text-xs ${
-                          !notif.isRead ? 'neu-inset-sm' : ''
-                        }`}
-                      >
-                        <div className="font-bold text-slate-900 dark:text-slate-100">{notif.title}</div>
-                        <p className="text-slate-600 dark:text-slate-300 text-[11px] mt-0.5">{notif.message}</p>
-                        <span className="text-[10px] text-slate-400 font-mono mt-1 block">
-                          {notif.createdAt}
-                        </span>
-                      </div>
-                    ))
+                    notifications.map((notif) => {
+                      const remainingMins = notif.expiresAtMs
+                        ? Math.max(1, Math.ceil((notif.expiresAtMs - Date.now()) / 60000))
+                        : null;
+                      return (
+                        <div
+                          key={notif.id}
+                          onClick={() => {
+                            ClassroomDB.markNotificationRead(notif.id);
+                            onRefreshNotifications();
+                            if (notif.courseId && onSelectNotificationCourse) {
+                              onSelectNotificationCourse(notif.courseId);
+                              setShowNotifications(false);
+                            }
+                          }}
+                          className={`p-3 rounded-xl text-xs transition-all cursor-pointer ${
+                            !notif.isRead
+                              ? 'neu-inset-sm ring-1 ring-indigo-500/30'
+                              : 'opacity-80 hover:opacity-100 hover:bg-white/40 dark:hover:bg-slate-800/40'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="font-bold text-slate-900 dark:text-slate-100 leading-snug">
+                              {notif.title}
+                            </div>
+                            {!notif.isRead && (
+                              <span className="w-2 h-2 rounded-full bg-indigo-600 dark:bg-indigo-400 shrink-0 mt-1" />
+                            )}
+                          </div>
+                          <p className="text-slate-600 dark:text-slate-300 text-[11px] mt-1 leading-relaxed">
+                            {notif.message}
+                          </p>
+                          <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-slate-200/40 dark:border-slate-700/40 text-[10px]">
+                            <span className="text-slate-400 font-mono">
+                              {notif.createdAt}
+                              {remainingMins !== null && (
+                                <span className="ml-1.5 text-amber-600 dark:text-amber-400 font-semibold">
+                                  · ⏱ {remainingMins}m ကျန်
+                                </span>
+                              )}
+                            </span>
+                            {notif.courseId && (
+                              <span className="font-bold text-indigo-600 dark:text-indigo-400">
+                                အတန်းသို့ ဝင်ကြည့်မည် →
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
                   )}
                 </div>
               </div>
