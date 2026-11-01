@@ -325,6 +325,19 @@ CREATE POLICY "Notifications full access" ON public.notifications FOR ALL USING 
 CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON public.notifications (user_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_expires_at ON public.notifications (expires_at);
 CREATE INDEX IF NOT EXISTS idx_notifications_post_id ON public.notifications (post_id);
+CREATE INDEX IF NOT EXISTS idx_profiles_username_lower ON public.profiles (lower(username));
+CREATE INDEX IF NOT EXISTS idx_profiles_email_lower ON public.profiles (lower(email));
+CREATE INDEX IF NOT EXISTS idx_posts_course_id ON public.posts (course_id);
+CREATE INDEX IF NOT EXISTS idx_attendance_course_id ON public.attendance_sessions (course_id);
+
+-- Automatic Orphaned Data Cleanup (Safe to run anytime)
+DELETE FROM public.posts WHERE course_id NOT IN (SELECT id FROM public.courses);
+DELETE FROM public.assignments WHERE course_id NOT IN (SELECT id FROM public.courses);
+DELETE FROM public.assignment_submissions WHERE assignment_id NOT IN (SELECT id FROM public.assignments) OR student_id NOT IN (SELECT id FROM public.profiles);
+DELETE FROM public.quizzes WHERE course_id NOT IN (SELECT id FROM public.courses);
+DELETE FROM public.quiz_submissions WHERE quiz_id NOT IN (SELECT id FROM public.quizzes) OR student_id NOT IN (SELECT id FROM public.profiles);
+DELETE FROM public.attendance_sessions WHERE course_id NOT IN (SELECT id FROM public.courses);
+DELETE FROM public.notifications WHERE course_id NOT IN (SELECT id FROM public.courses) OR user_id NOT IN (SELECT id FROM public.profiles) OR expires_at <= now();
 `;
 
 const DEFAULT_FALLBACK_AVATAR =
@@ -389,6 +402,30 @@ export class SupabaseService {
   // In-memory payload signature cache so identical records are never re-uploaded to Supabase
   private static lastUpsertSignatures = new Map<string, string>();
   private static lastExpiredCleanupAt = 0;
+  private static lastOrphanCleanupAt = 0;
+  // In-flight GET request deduplication map for 2,000+ concurrent user scalability
+  private static inflightGetRequests = new Map<string, Promise<unknown>>();
+
+  private static chunkArray<T>(items: T[], chunkSize: number = 250): T[][] {
+    if (items.length <= chunkSize) return items.length ? [items] : [];
+    const chunks: T[][] = [];
+    for (let i = 0; i < items.length; i += chunkSize) {
+      chunks.push(items.slice(i, i + chunkSize));
+    }
+    return chunks;
+  }
+
+  private static dedupeGet<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
+    const existing = this.inflightGetRequests.get(key) as Promise<T> | undefined;
+    if (existing) {
+      return existing;
+    }
+    const promise = fetcher().finally(() => {
+      this.inflightGetRequests.delete(key);
+    });
+    this.inflightGetRequests.set(key, promise);
+    return promise;
+  }
 
   private static hasChangedSignature(key: string, payload: unknown): boolean {
     try {
@@ -430,7 +467,7 @@ export class SupabaseService {
       }
       return {
         connected: true,
-        message: 'Supabase Database (Free Plan Optimized) နှင့် အောင်မြင်စွာ ချိတ်ဆက်ပြီး အသင့်အနေအထား ရှိပါသည်!',
+        message: 'Supabase Database (2,000+ Users High-Concurrency & Auto-Clean Ready) နှင့် အောင်မြင်စွာ ချိတ်ဆက်ပြီး အသင့်အနေအထား ရှိပါသည်!',
         tableCount: data ? 1 : 0,
       };
     } catch (err: unknown) {
@@ -439,45 +476,78 @@ export class SupabaseService {
     }
   }
 
-  /**
-   * Fetch all profiles from Supabase if table exists (bounded for Free Plan efficiency)
-   */
-  static async getRemoteProfiles(): Promise<User[] | null> {
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .limit(600);
+  private static mapProfileRowToUser(row: Record<string, unknown>): User {
+    const decoded = decodeTitleAndRules(
+      row.title as string | null,
+      row.rules_accepted as boolean | null,
+      row.rules_accepted_at as string | null
+    );
+    return {
+      id: String(row.id || ''),
+      name: String(row.name || 'User'),
+      username: String(row.username || 'user'),
+      email: String(row.email || ''),
+      password: row.password ? String(row.password) : undefined,
+      role: (row.role as UserRole) || 'student',
+      phone: String(row.phone || ''),
+      avatar: String(row.avatar || ''),
+      title: decoded.title,
+      gender: (row.gender as User['gender']) || undefined,
+      address: row.address ? String(row.address) : undefined,
+      rulesAccepted: decoded.rulesAccepted,
+      rulesAcceptedAt: decoded.rulesAcceptedAt,
+    };
+  }
 
-      if (error || !data) {
+  /**
+   * Fast single-row lookup by username or email for Login (0.3KB egress instead of pulling 2,000 profiles on Login view)
+   */
+  static async getRemoteProfileByIdentifier(identifier: string): Promise<User | null> {
+    const cleanId = (identifier || '').trim().toLowerCase();
+    if (!cleanId) return null;
+    // Sanitize against PostgREST filter syntax characters
+    const safeId = cleanId.replace(/[,()"'\\]/g, '');
+    if (!safeId) return null;
+
+    return this.dedupeGet(`profile_login:${safeId}`, async () => {
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .or(`username.ilike.${safeId},email.ilike.${safeId}`)
+          .limit(1)
+          .maybeSingle();
+
+        if (error || !data) {
+          return null;
+        }
+        return this.mapProfileRowToUser(data as Record<string, unknown>);
+      } catch {
         return null;
       }
+    });
+  }
 
-      return data.map((row) => {
-        const decoded = decodeTitleAndRules(
-          row.title,
-          row.rules_accepted,
-          row.rules_accepted_at
-        );
-        return {
-          id: row.id,
-          name: row.name,
-          username: row.username,
-          email: row.email,
-          password: row.password || undefined,
-          role: row.role as UserRole,
-          phone: row.phone || '',
-          avatar: row.avatar || '',
-          title: decoded.title,
-          gender: row.gender || undefined,
-          address: row.address || undefined,
-          rulesAccepted: decoded.rulesAccepted,
-          rulesAcceptedAt: decoded.rulesAcceptedAt,
-        };
-      });
-    } catch {
-      return null;
-    }
+  /**
+   * Fetch all profiles from Supabase if table exists (supports up to 3,000 concurrent classroom users)
+   */
+  static async getRemoteProfiles(): Promise<User[] | null> {
+    return this.dedupeGet('profiles:all', async () => {
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .limit(3000);
+
+        if (error || !data) {
+          return null;
+        }
+
+        return data.map((row) => this.mapProfileRowToUser(row as Record<string, unknown>));
+      } catch {
+        return null;
+      }
+    });
   }
 
   /**
@@ -807,12 +877,15 @@ export class SupabaseService {
         };
       });
 
-      const { error } = await supabase.from('notifications').upsert(rows, { onConflict: 'id' });
-      if (error) {
-        if (error.code === '42P01' || error.message?.includes('notifications')) {
-          this.notificationsTableStatus = 'missing';
+      const chunks = this.chunkArray(rows, 250);
+      for (const batch of chunks) {
+        const { error } = await supabase.from('notifications').upsert(batch, { onConflict: 'id' });
+        if (error) {
+          if (error.code === '42P01' || error.message?.includes('notifications')) {
+            this.notificationsTableStatus = 'missing';
+          }
+          return false;
         }
-        return false;
       }
       this.notificationsTableStatus = 'available';
       return true;
@@ -989,7 +1062,7 @@ export class SupabaseService {
   }
 
   /**
-   * Delete a profile and all associated student submissions from Supabase SQL database
+   * Delete a profile and all associated student submissions & notifications from Supabase SQL database
    */
   static async deleteProfile(userId: string): Promise<boolean> {
     try {
@@ -997,6 +1070,9 @@ export class SupabaseService {
       await Promise.allSettled([
         supabase.from('assignment_submissions').delete().eq('student_id', userId),
         supabase.from('quiz_submissions').delete().eq('student_id', userId),
+        this.notificationsTableStatus !== 'missing'
+          ? supabase.from('notifications').delete().eq('user_id', userId)
+          : Promise.resolve(),
       ]);
       const { error } = await supabase.from('profiles').delete().eq('id', userId);
       return !error;
@@ -1043,11 +1119,41 @@ export class SupabaseService {
   }
 
   /**
-   * Delete a classroom/course and all its child records from Supabase SQL database
+   * Delete a classroom/course and ALL its child records (including assignment_submissions and quiz_submissions) from Supabase SQL database
    */
   static async deleteCourse(courseId: string): Promise<boolean> {
     try {
       this.lastUpsertSignatures.delete(`course:${courseId}`);
+      // First lookup assignment IDs and quiz IDs belonging to this course so their submissions don't become orphans
+      const [assRes, quizRes] = await Promise.allSettled([
+        supabase.from('assignments').select('id').eq('course_id', courseId),
+        supabase.from('quizzes').select('id').eq('course_id', courseId),
+      ]);
+
+      const assIds =
+        assRes.status === 'fulfilled' && Array.isArray(assRes.value.data)
+          ? assRes.value.data.map((r) => String(r.id))
+          : [];
+      const quizIds =
+        quizRes.status === 'fulfilled' && Array.isArray(quizRes.value.data)
+          ? quizRes.value.data.map((r) => String(r.id))
+          : [];
+
+      const subCleanupTasks: PromiseLike<unknown>[] = [];
+      if (assIds.length > 0) {
+        subCleanupTasks.push(
+          supabase.from('assignment_submissions').delete().in('assignment_id', assIds)
+        );
+      }
+      if (quizIds.length > 0) {
+        subCleanupTasks.push(
+          supabase.from('quiz_submissions').delete().in('quiz_id', quizIds)
+        );
+      }
+      if (subCleanupTasks.length > 0) {
+        await Promise.allSettled(subCleanupTasks);
+      }
+
       await Promise.allSettled([
         supabase.from('posts').delete().eq('course_id', courseId),
         supabase.from('assignments').delete().eq('course_id', courseId),
@@ -1340,8 +1446,241 @@ export class SupabaseService {
   }
 
   /**
+   * Automatically scans Supabase tables for orphaned records (e.g., posts, assignments, submissions,
+   * quizzes, quiz_submissions, attendance_sessions, notifications whose parent course, user, post,
+   * assignment, or quiz no longer exists in the classroom) and permanently deletes them from Supabase.
+   */
+  static async cleanOrphanedCloudData(
+    validCourseIds?: string[],
+    validUserIds?: string[],
+    deletedIds: string[] = [],
+    force: boolean = false
+  ): Promise<{ success: boolean; totalCleaned: number; details: string }> {
+    const now = Date.now();
+    // Throttle automatic cloud orphan sweeps to once every 5 minutes unless forced
+    if (!force && now - this.lastOrphanCleanupAt < 300_000) {
+      return { success: true, totalCleaned: 0, details: 'Skipped (within 5m throttle window)' };
+    }
+    this.lastOrphanCleanupAt = now;
+
+    let totalCleaned = 0;
+    const deletedSet = new Set(deletedIds);
+
+    try {
+      // 1. Always purge expired (>30 mins) notifications first
+      await this.purgeExpiredNotifications(deletedIds, true);
+
+      // 2. Delete any explicitly tracked deletedIds across tables in safe chunks
+      if (deletedIds.length > 0) {
+        for (const chunk of this.chunkArray(deletedIds, 200)) {
+          await Promise.allSettled([
+            supabase.from('courses').delete().in('id', chunk),
+            supabase.from('profiles').delete().in('id', chunk),
+            supabase.from('posts').delete().in('id', chunk),
+            supabase.from('assignments').delete().in('id', chunk),
+            supabase.from('assignment_submissions').delete().in('id', chunk),
+            supabase.from('quizzes').delete().in('id', chunk),
+            supabase.from('quiz_submissions').delete().in('id', chunk),
+            supabase.from('attendance_sessions').delete().in('id', chunk),
+          ]);
+        }
+      }
+
+      // 3. Determine active course IDs and user IDs in Supabase
+      let courseIdSet: Set<string>;
+      if (validCourseIds && validCourseIds.length > 0) {
+        courseIdSet = new Set(validCourseIds.filter((id) => !deletedSet.has(id)));
+      } else {
+        const { data: cRows } = await supabase.from('courses').select('id').limit(500);
+        courseIdSet = new Set((cRows || []).map((r) => String(r.id)).filter((id) => !deletedSet.has(id)));
+      }
+
+      let userIdSet: Set<string>;
+      if (validUserIds && validUserIds.length > 0) {
+        userIdSet = new Set(validUserIds.filter((id) => !deletedSet.has(id)));
+      } else {
+        const { data: uRows } = await supabase.from('profiles').select('id').limit(3000);
+        userIdSet = new Set((uRows || []).map((r) => String(r.id)).filter((id) => !deletedSet.has(id)));
+      }
+
+      // If both sets are empty (e.g. offline or empty DB), skip referential sweep to avoid accidental deletion
+      if (courseIdSet.size === 0 || userIdSet.size === 0) {
+        return { success: true, totalCleaned, details: 'No active parent catalog to compare' };
+      }
+
+      // 4. Fetch lightweight foreign-key metadata from child tables in parallel
+      const [
+        postsMeta,
+        assMeta,
+        subMeta,
+        quizMeta,
+        quizSubMeta,
+        attMeta,
+        notifMeta,
+      ] = await Promise.allSettled([
+        supabase.from('posts').select('id,course_id').limit(1000),
+        supabase.from('assignments').select('id,course_id').limit(1000),
+        supabase.from('assignment_submissions').select('id,assignment_id,student_id').limit(2000),
+        supabase.from('quizzes').select('id,course_id').limit(1000),
+        supabase.from('quiz_submissions').select('id,quiz_id,student_id').limit(2000),
+        supabase.from('attendance_sessions').select('id,course_id').limit(1000),
+        this.notificationsTableStatus !== 'missing'
+          ? supabase.from('notifications').select('id,course_id,user_id,post_id').limit(2000)
+          : Promise.resolve({ data: [] }),
+      ]);
+
+      const validPostIds = new Set<string>();
+      const orphanPostIds: string[] = [];
+      if (postsMeta.status === 'fulfilled' && Array.isArray(postsMeta.value.data)) {
+        postsMeta.value.data.forEach((row) => {
+          const id = String(row.id);
+          const cId = String(row.course_id || '');
+          if (deletedSet.has(id) || !courseIdSet.has(cId)) {
+            orphanPostIds.push(id);
+          } else {
+            validPostIds.add(id);
+          }
+        });
+      }
+
+      const validAssIds = new Set<string>();
+      const orphanAssIds: string[] = [];
+      if (assMeta.status === 'fulfilled' && Array.isArray(assMeta.value.data)) {
+        assMeta.value.data.forEach((row) => {
+          const id = String(row.id);
+          const cId = String(row.course_id || '');
+          if (deletedSet.has(id) || !courseIdSet.has(cId)) {
+            orphanAssIds.push(id);
+          } else {
+            validAssIds.add(id);
+          }
+        });
+      }
+
+      const orphanSubIds: string[] = [];
+      if (subMeta.status === 'fulfilled' && Array.isArray(subMeta.value.data)) {
+        subMeta.value.data.forEach((row) => {
+          const id = String(row.id);
+          const aId = String(row.assignment_id || '');
+          const sId = String(row.student_id || '');
+          if (deletedSet.has(id) || !validAssIds.has(aId) || !userIdSet.has(sId)) {
+            orphanSubIds.push(id);
+          }
+        });
+      }
+
+      const validQuizIds = new Set<string>();
+      const orphanQuizIds: string[] = [];
+      if (quizMeta.status === 'fulfilled' && Array.isArray(quizMeta.value.data)) {
+        quizMeta.value.data.forEach((row) => {
+          const id = String(row.id);
+          const cId = String(row.course_id || '');
+          if (deletedSet.has(id) || !courseIdSet.has(cId)) {
+            orphanQuizIds.push(id);
+          } else {
+            validQuizIds.add(id);
+          }
+        });
+      }
+
+      const orphanQuizSubIds: string[] = [];
+      if (quizSubMeta.status === 'fulfilled' && Array.isArray(quizSubMeta.value.data)) {
+        quizSubMeta.value.data.forEach((row) => {
+          const id = String(row.id);
+          const qId = String(row.quiz_id || '');
+          const sId = String(row.student_id || '');
+          if (deletedSet.has(id) || !validQuizIds.has(qId) || !userIdSet.has(sId)) {
+            orphanQuizSubIds.push(id);
+          }
+        });
+      }
+
+      const orphanAttIds: string[] = [];
+      if (attMeta.status === 'fulfilled' && Array.isArray(attMeta.value.data)) {
+        attMeta.value.data.forEach((row) => {
+          const id = String(row.id);
+          const cId = String(row.course_id || '');
+          if (deletedSet.has(id) || !courseIdSet.has(cId)) {
+            orphanAttIds.push(id);
+          }
+        });
+      }
+
+      const orphanNotifIds: string[] = [];
+      if (notifMeta.status === 'fulfilled' && Array.isArray(notifMeta.value.data)) {
+        notifMeta.value.data.forEach((row) => {
+          const r = row as Record<string, unknown>;
+          const id = String(r.id || '');
+          const cId = String(r.course_id || '');
+          const uId = String(r.user_id || '');
+          const pId = r.post_id ? String(r.post_id) : '';
+          if (
+            deletedSet.has(id) ||
+            (cId && !courseIdSet.has(cId)) ||
+            (uId && !userIdSet.has(uId)) ||
+            (pId && validPostIds.size > 0 && !validPostIds.has(pId))
+          ) {
+            orphanNotifIds.push(id);
+          }
+        });
+      }
+
+      // 5. Execute chunked deletes for all discovered orphans
+      const deleteByIdChunks = async (table: string, ids: string[]) => {
+        for (const chunk of this.chunkArray(ids, 200)) {
+          await supabase.from(table).delete().in('id', chunk);
+        }
+      };
+
+      const cleanupPromises: Promise<unknown>[] = [];
+      if (orphanSubIds.length > 0) {
+        totalCleaned += orphanSubIds.length;
+        cleanupPromises.push(deleteByIdChunks('assignment_submissions', orphanSubIds));
+      }
+      if (orphanQuizSubIds.length > 0) {
+        totalCleaned += orphanQuizSubIds.length;
+        cleanupPromises.push(deleteByIdChunks('quiz_submissions', orphanQuizSubIds));
+      }
+      if (orphanNotifIds.length > 0 && this.notificationsTableStatus !== 'missing') {
+        totalCleaned += orphanNotifIds.length;
+        cleanupPromises.push(deleteByIdChunks('notifications', orphanNotifIds));
+      }
+      if (orphanPostIds.length > 0) {
+        totalCleaned += orphanPostIds.length;
+        cleanupPromises.push(deleteByIdChunks('posts', orphanPostIds));
+      }
+      if (orphanAssIds.length > 0) {
+        totalCleaned += orphanAssIds.length;
+        cleanupPromises.push(deleteByIdChunks('assignments', orphanAssIds));
+      }
+      if (orphanQuizIds.length > 0) {
+        totalCleaned += orphanQuizIds.length;
+        cleanupPromises.push(deleteByIdChunks('quizzes', orphanQuizIds));
+      }
+      if (orphanAttIds.length > 0) {
+        totalCleaned += orphanAttIds.length;
+        cleanupPromises.push(deleteByIdChunks('attendance_sessions', orphanAttIds));
+      }
+
+      if (cleanupPromises.length > 0) {
+        await Promise.allSettled(cleanupPromises);
+      }
+
+      return {
+        success: true,
+        totalCleaned,
+        details: `Cleaned ${totalCleaned} orphaned cloud records (posts: ${orphanPostIds.length}, assignments: ${orphanAssIds.length}, submissions: ${orphanSubIds.length + orphanQuizSubIds.length}, attendance: ${orphanAttIds.length}, notifications: ${orphanNotifIds.length}).`,
+      };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, totalCleaned, details: msg };
+    }
+  }
+
+  /**
    * High-Speed Batch Sync: Syncs all local users, courses, posts, assignments, submissions, quizzes, and attendance
-   * using single-table batch upserts (reduces 200+ requests down to 7 parallel batch requests for Supabase Free Plan).
+   * using chunked batch upserts (supports 2,000+ users without hitting PostgREST payload size limits)
+   * and automatically cleans orphaned records in Supabase.
    */
   static async syncAllData(
     users: User[],
@@ -1352,47 +1691,36 @@ export class SupabaseService {
     attendanceSessions: AttendanceSession[] = [],
     deletedIds: string[] = [],
     submissions: AssignmentSubmission[] = []
-  ): Promise<{ success: boolean; syncedUsers: number; syncedCourses: number; error?: string }> {
+  ): Promise<{ success: boolean; syncedUsers: number; syncedCourses: number; cleanedOrphans?: number; error?: string }> {
     let lastError: string | undefined;
 
     // 0. Always purge expired (>30 mins) notifications in Supabase first
     await this.purgeExpiredNotifications(deletedIds, true);
 
-    // 1. Purge any deleted IDs from Supabase SQL tables
-    if (deletedIds.length > 0) {
-      await Promise.allSettled([
-        supabase.from('courses').delete().in('id', deletedIds),
-        supabase.from('profiles').delete().in('id', deletedIds),
-        supabase.from('posts').delete().in('id', deletedIds),
-        supabase.from('assignments').delete().in('id', deletedIds),
-        supabase.from('assignment_submissions').delete().in('id', deletedIds),
-        supabase.from('quizzes').delete().in('id', deletedIds),
-        supabase.from('quiz_submissions').delete().in('id', deletedIds),
-        supabase.from('attendance_sessions').delete().in('id', deletedIds),
-      ]);
-    }
-
-    // 2. Batch upsert profiles (with automatic schema fallback if needed)
+    // 1. Batch upsert profiles in chunks of 250 (supports 2,000+ users smoothly)
     let syncedUsers = 0;
     if (users.length > 0) {
-      const profilePayloads = users.map((u) => this.buildProfilePayload(u, this.profileSchemaMode));
-      const { error: profErr } = await supabase
-        .from('profiles')
-        .upsert(profilePayloads, { onConflict: 'id' });
+      const userChunks = this.chunkArray(users, 250);
+      for (const chunk of userChunks) {
+        const profilePayloads = chunk.map((u) => this.buildProfilePayload(u, this.profileSchemaMode));
+        const { error: profErr } = await supabase
+          .from('profiles')
+          .upsert(profilePayloads, { onConflict: 'id' });
 
-      if (!profErr) {
-        syncedUsers = users.length;
-      } else {
-        // Fallback to individual upserts to detect schema mode
-        for (const u of users) {
-          const res = await this.upsertProfile(u);
-          if (res.success) syncedUsers++;
-          else lastError = res.error;
+        if (!profErr) {
+          syncedUsers += chunk.length;
+        } else {
+          // Fallback to individual upserts to detect schema mode
+          for (const u of chunk) {
+            const res = await this.upsertProfile(u);
+            if (res.success) syncedUsers++;
+            else lastError = res.error;
+          }
         }
       }
     }
 
-    // 3. Batch upsert courses
+    // 2. Batch upsert courses in chunks
     let syncedCourses = 0;
     if (courses.length > 0) {
       const coursePayloads = courses.map((course) => ({
@@ -1411,95 +1739,96 @@ export class SupabaseService {
         total_assignments: course.totalAssignments || 0,
         total_quizzes: course.totalQuizzes || 0,
       }));
-      const { error: courseErr } = await supabase
-        .from('courses')
-        .upsert(coursePayloads, { onConflict: 'id' });
-      if (!courseErr) {
-        syncedCourses = courses.length;
-      } else if (!lastError) {
-        lastError = courseErr.message;
+      for (const batch of this.chunkArray(coursePayloads, 100)) {
+        const { error: courseErr } = await supabase
+          .from('courses')
+          .upsert(batch, { onConflict: 'id' });
+        if (!courseErr) {
+          syncedCourses += batch.length;
+        } else if (!lastError) {
+          lastError = courseErr.message;
+        }
       }
     }
 
-    // 4. Parallel batch upserts for child tables (1 request per table)
+    // 3. Parallel chunked batch upserts for child tables
     const batchTasks: PromiseLike<unknown>[] = [];
 
     if (posts.length > 0) {
-      batchTasks.push(
-        supabase.from('posts').upsert(
-          posts.map((p) => this.formatPostRow(p)),
-          { onConflict: 'id' }
-        )
-      );
+      const formattedPosts = posts.map((p) => this.formatPostRow(p));
+      for (const batch of this.chunkArray(formattedPosts, 150)) {
+        batchTasks.push(supabase.from('posts').upsert(batch, { onConflict: 'id' }));
+      }
     }
 
     if (assignments.length > 0) {
-      batchTasks.push(
-        supabase.from('assignments').upsert(
-          assignments.map((a) => ({
-            id: a.id,
-            course_id: a.courseId,
-            title: a.title,
-            description: a.description,
-            due_date: a.dueDate,
-            total_points: a.maxPoints || 100,
-          })),
-          { onConflict: 'id' }
-        )
-      );
+      const formattedAssignments = assignments.map((a) => ({
+        id: a.id,
+        course_id: a.courseId,
+        title: a.title,
+        description: a.description,
+        due_date: a.dueDate,
+        total_points: a.maxPoints || 100,
+      }));
+      for (const batch of this.chunkArray(formattedAssignments, 200)) {
+        batchTasks.push(supabase.from('assignments').upsert(batch, { onConflict: 'id' }));
+      }
     }
 
     if (submissions.length > 0) {
-      batchTasks.push(
-        supabase.from('assignment_submissions').upsert(
-          submissions.map((sub) => this.formatSubmissionRow(sub)),
-          { onConflict: 'id' }
-        )
-      );
+      const formattedSubmissions = submissions.map((sub) => this.formatSubmissionRow(sub));
+      for (const batch of this.chunkArray(formattedSubmissions, 200)) {
+        batchTasks.push(supabase.from('assignment_submissions').upsert(batch, { onConflict: 'id' }));
+      }
     }
 
     if (quizzes.length > 0) {
-      batchTasks.push(
-        supabase.from('quizzes').upsert(
-          quizzes.map((q) => ({
-            id: q.id,
-            course_id: q.courseId,
-            title: q.title,
-            time_limit_minutes: q.durationMinutes || 30,
-            passing_score: q.passingScore || 70,
-            questions: q.questions || [],
-          })),
-          { onConflict: 'id' }
-        )
-      );
+      const formattedQuizzes = quizzes.map((q) => ({
+        id: q.id,
+        course_id: q.courseId,
+        title: q.title,
+        time_limit_minutes: q.durationMinutes || 30,
+        passing_score: q.passingScore || 70,
+        questions: q.questions || [],
+      }));
+      for (const batch of this.chunkArray(formattedQuizzes, 150)) {
+        batchTasks.push(supabase.from('quizzes').upsert(batch, { onConflict: 'id' }));
+      }
     }
 
     if (attendanceSessions.length > 0) {
-      batchTasks.push(
-        supabase.from('attendance_sessions').upsert(
-          attendanceSessions.map((session) => ({
-            id: session.id,
-            course_id: session.courseId,
-            date: session.date,
-            display_date: session.displayDate,
-            title: session.title,
-            is_open: session.isOpen,
-            opened_by: session.openedBy,
-            records: session.records || {},
-          })),
-          { onConflict: 'id' }
-        )
-      );
+      const formattedAtt = attendanceSessions.map((session) => ({
+        id: session.id,
+        course_id: session.courseId,
+        date: session.date,
+        display_date: session.displayDate,
+        title: session.title,
+        is_open: session.isOpen,
+        opened_by: session.openedBy,
+        records: session.records || {},
+      }));
+      for (const batch of this.chunkArray(formattedAtt, 150)) {
+        batchTasks.push(supabase.from('attendance_sessions').upsert(batch, { onConflict: 'id' }));
+      }
     }
 
     if (batchTasks.length > 0) {
       await Promise.allSettled(batchTasks);
     }
 
+    // 4. Run Orphaned Data Auto-Cleanup in Supabase so any rows no longer in the classroom are purged
+    const orphanSweep = await this.cleanOrphanedCloudData(
+      courses.map((c) => c.id),
+      users.map((u) => u.id),
+      deletedIds,
+      true
+    );
+
     return {
       success: syncedUsers > 0 && !lastError,
       syncedUsers,
       syncedCourses,
+      cleanedOrphans: orphanSweep.totalCleaned,
       error: lastError,
     };
   }

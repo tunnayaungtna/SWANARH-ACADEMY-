@@ -27,20 +27,26 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
   const [studentToUnenroll, setStudentToUnenroll] = useState<User | null>(null);
   const [enrollmentStatusMessage, setEnrollmentStatusMessage] = useState<string | null>(null);
   const [searchFilter, setSearchFilter] = useState('');
+  const [visibleStudentLimit, setVisibleStudentLimit] = useState<number>(60);
 
   // Step-by-step mobile Back button handlers for PeopleView modals
   useBackHandler(showAddModal, () => setShowAddModal(false));
   useBackHandler(!!studentToUnenroll, () => setStudentToUnenroll(null));
 
+  // Fast O(1) lookup Map so 2,000 enrolled students resolve in <1ms instead of O(N^2)
+  const userByIdMap = new Map<string, User>(allUsers.map((u) => [u.id, u]));
+  const cleanSearch = searchFilter.toLowerCase().trim();
+
   // Get enrolled students objects
   const enrolledStudents = course.enrolledStudentIds
-    .map((id) => allUsers.find((u) => u.id === id))
+    .map((id) => userByIdMap.get(id))
     .filter((u): u is User => !!u)
     .filter(
       (u) =>
-        u.name.toLowerCase().includes(searchFilter.toLowerCase()) ||
-        u.username.toLowerCase().includes(searchFilter.toLowerCase()) ||
-        u.email.toLowerCase().includes(searchFilter.toLowerCase())
+        !cleanSearch ||
+        u.name.toLowerCase().includes(cleanSearch) ||
+        u.username.toLowerCase().includes(cleanSearch) ||
+        u.email.toLowerCase().includes(cleanSearch)
     );
 
   const handleConfirmUnenroll = () => {
@@ -144,7 +150,10 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
             <input
               type="text"
               value={searchFilter}
-              onChange={(e) => setSearchFilter(e.target.value)}
+              onChange={(e) => {
+                setSearchFilter(e.target.value);
+                setVisibleStudentLimit(60);
+              }}
               placeholder="အတန်းတွင်း ကျောင်းသားအမည် သို့မဟုတ် Username ဖြင့် ရှာဖွေပါ..."
               className="w-full pl-10 pr-4 py-2.5 text-xs neu-input rounded-2xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 transition-all"
             />
@@ -167,7 +176,7 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
               )}
             </div>
           ) : (
-            enrolledStudents.map((student) => {
+            enrolledStudents.slice(0, visibleStudentLimit).map((student) => {
               const isSelf = student.id === currentUser.id;
 
               return (
@@ -267,6 +276,31 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
             })
           )}
         </div>
+
+        {/* Progressive Load More Bar for 2,000+ Classmates */}
+        {enrolledStudents.length > visibleStudentLimit && (
+          <div className="mt-4 p-3.5 rounded-2xl neu-inset-sm flex flex-col sm:flex-row items-center justify-between gap-2.5 text-xs">
+            <span className="text-slate-600 dark:text-slate-300 font-medium">
+              ပြသထားသည်: <strong>{visibleStudentLimit}</strong> / စုစုပေါင်း <strong>{enrolledStudents.length}</strong> ဦး
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setVisibleStudentLimit((prev) => prev + 100)}
+                className="px-3.5 py-1.5 rounded-xl neu-btn-indigo font-bold cursor-pointer"
+              >
+                + နောက်ထပ် ၁၀၀ ဦး ပြမည်
+              </button>
+              <button
+                type="button"
+                onClick={() => setVisibleStudentLimit(enrolledStudents.length)}
+                className="px-3 py-1.5 rounded-xl neu-btn text-slate-700 dark:text-slate-200 font-semibold cursor-pointer"
+              >
+                အားလုံးပြမည် ({enrolledStudents.length})
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* Confirmation Modal for Removing Student */}

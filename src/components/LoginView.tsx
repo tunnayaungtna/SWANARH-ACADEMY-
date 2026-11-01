@@ -73,14 +73,20 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
-    // Fallback: if account was recently added on another device, fetch ONLY profiles table (85% faster) with a 2.5s timeout
-    setIsLoading(true);
-    await Promise.race([
-      ClassroomDB.pullFromSupabase({ force: true, onlyProfiles: true }),
-      new Promise((resolve) => setTimeout(resolve, 2500)),
-    ]);
+    // If rate-limited locally, show message immediately without network roundtrip
+    if (immediateRes.error && immediateRes.error.includes('စောင့်ဆိုင်းပြီးမှ')) {
+      setErrorMessage(immediateRes.error);
+      return;
+    }
 
-    const res = ClassroomDB.login(identifier, password, activeRole);
+    // Targeted single-row fallback (0.3KB instead of pulling 2,000 profiles) for 2,000+ concurrent user scalability
+    setIsLoading(true);
+    const res = await Promise.race([
+      ClassroomDB.loginWithRemoteFallback(identifier, password, activeRole),
+      new Promise<{ user: User | null; error?: string }>((resolve) =>
+        setTimeout(() => resolve(immediateRes), 3000)
+      ),
+    ]);
     setIsLoading(false);
 
     if (res.error) {

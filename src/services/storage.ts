@@ -62,6 +62,18 @@ export interface SecuritySettings {
 export class ClassroomDB {
   // Fast O(1) in-memory cache to eliminate repeated localStorage JSON.parse calls during high-traffic UI renders
   private static memoryCache = new Map<string, unknown>();
+  // O(1) memoized attendance stats cache for 2,000+ student lists (invalidated on attendance mutation)
+  private static attendanceStatsCache = new Map<
+    string,
+    {
+      totalSessions: number;
+      presentCount: number;
+      lateCount: number;
+      excusedCount: number;
+      absentCount: number;
+      percentage: number;
+    }
+  >();
   private static storageListenerAttached = false;
 
   private static ensureStorageListener(): void {
@@ -70,8 +82,12 @@ export class ClassroomDB {
     window.addEventListener('storage', (e) => {
       if (e.key) {
         this.memoryCache.delete(e.key);
+        if (e.key === STORAGE_KEYS.ATTENDANCE) {
+          this.attendanceStatsCache.clear();
+        }
       } else {
         this.memoryCache.clear();
+        this.attendanceStatsCache.clear();
       }
     });
   }
@@ -95,6 +111,9 @@ export class ClassroomDB {
   private static setItem<T>(key: string, value: T): void {
     this.ensureStorageListener();
     this.memoryCache.set(key, value);
+    if (key === STORAGE_KEYS.ATTENDANCE) {
+      this.attendanceStatsCache.clear();
+    }
     try {
       localStorage.setItem(key, JSON.stringify(value));
     } catch (e) {
@@ -110,7 +129,9 @@ export class ClassroomDB {
     if (!ids.length) return;
     const current = new Set(this.getDeletedIds());
     ids.forEach((id) => current.add(id));
-    this.setItem(STORAGE_KEYS.DELETED_IDS, Array.from(current));
+    // Bound DELETED_IDS to the latest 600 items so localStorage stays lean
+    const bounded = Array.from(current).slice(-600);
+    this.setItem(STORAGE_KEYS.DELETED_IDS, bounded);
   }
 
   // Init default storage
@@ -342,6 +363,64 @@ export class ClassroomDB {
 
     this.setCurrentUser(matched);
     return { user: matched };
+  }
+
+  /**
+   * High-Concurrency Login with Targeted Single-Row Supabase Fallback:
+   * Avoids downloading 2,000 profiles on the Login page. If local login fails,
+   * queries only the single matching profile row from Supabase (~0.3KB) and verifies credentials.
+   */
+  static async loginWithRemoteFallback(
+    identifier: string,
+    password: string,
+    expectedRole?: UserRole
+  ): Promise<{ user: User | null; error?: string }> {
+    const cleanId = (identifier || '').trim().toLowerCase();
+    const cleanPwd = (password || '').trim();
+    if (!cleanId || !cleanPwd) {
+      return {
+        user: null,
+        error: 'Username နှင့် Password နှစ်ခုလုံး ပြည့်စုံစွာ ရိုက်ထည့်ပေးပါ။',
+      };
+    }
+
+    // 1. Try local login first
+    const initialAttempt = this.login(cleanId, cleanPwd, expectedRole);
+    if (initialAttempt.user) {
+      return initialAttempt;
+    }
+
+    // If rate-limited, stop immediately
+    if (initialAttempt.error && initialAttempt.error.includes('စောင့်ဆိုင်းပြီးမှ')) {
+      return initialAttempt;
+    }
+
+    // 2. Single-row targeted lookup in Supabase (0.3KB instead of pulling 2,000 profiles)
+    const deletedSet = new Set(this.getDeletedIds());
+    const remoteUser = await SupabaseService.getRemoteProfileByIdentifier(cleanId);
+    if (remoteUser && !deletedSet.has(remoteUser.id)) {
+      const localUsers = this.getAllUsers();
+      const idx = localUsers.findIndex((u) => u.id === remoteUser.id);
+      const mergedUser: User = {
+        ...(idx >= 0 ? localUsers[idx] : {}),
+        ...remoteUser,
+        rulesAccepted: Boolean(remoteUser.rulesAccepted || (idx >= 0 && localUsers[idx].rulesAccepted)),
+        rulesAcceptedAt: remoteUser.rulesAcceptedAt || (idx >= 0 ? localUsers[idx].rulesAcceptedAt : undefined),
+        password:
+          remoteUser.password ||
+          (idx >= 0 ? localUsers[idx].password : undefined) ||
+          (remoteUser.role === 'admin' ? 'admin123' : remoteUser.role === 'co_admin' ? 'coadmin123' : 'student123'),
+      };
+      if (idx >= 0) {
+        localUsers[idx] = mergedUser;
+      } else {
+        localUsers.push(mergedUser);
+      }
+      this.setItem(STORAGE_KEYS.USERS, localUsers);
+      return this.login(cleanId, cleanPwd, expectedRole);
+    }
+
+    return initialAttempt;
   }
 
   static getAllUsers(): User[] {
@@ -926,12 +1005,225 @@ export class ClassroomDB {
     return { success: true };
   }
 
+  /**
+   * Automatically detects and removes any orphaned records in LocalStorage AND Supabase
+   * (e.g., enrollments for deleted users, or posts/assignments/submissions/quizzes/attendance/notifications
+   * referencing a classroom course, post, assignment, quiz, or user that no longer exists).
+   */
+  static async cleanOrphanedLocalAndCloudData(
+    forceCloudSweep: boolean = false
+  ): Promise<{ localCleaned: number; cloudCleaned: number; details: string }> {
+    let localCleaned = 0;
+    const deletedSet = new Set(this.getDeletedIds());
+
+    // 1. Clean valid users & courses
+    const rawUsers = this.getItem<User[]>(STORAGE_KEYS.USERS, INITIAL_USERS);
+    const validUsers = rawUsers.filter((u) => u && u.id && !deletedSet.has(u.id));
+    if (validUsers.length !== rawUsers.length) {
+      localCleaned += rawUsers.length - validUsers.length;
+      this.setItem(STORAGE_KEYS.USERS, validUsers);
+    }
+    const validUserIds = new Set(validUsers.map((u) => u.id));
+
+    const rawCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    let coursesMutated = false;
+    const validCourses: Course[] = [];
+    for (const c of rawCourses) {
+      if (!c || !c.id || deletedSet.has(c.id)) {
+        localCleaned++;
+        coursesMutated = true;
+        continue;
+      }
+      const cleanEnrolled = (c.enrolledStudentIds || []).filter(
+        (stuId) => validUserIds.has(stuId) && !deletedSet.has(stuId)
+      );
+      if (cleanEnrolled.length !== (c.enrolledStudentIds || []).length) {
+        localCleaned += (c.enrolledStudentIds || []).length - cleanEnrolled.length;
+        coursesMutated = true;
+        validCourses.push({ ...c, enrolledStudentIds: cleanEnrolled });
+      } else {
+        validCourses.push(c);
+      }
+    }
+    if (coursesMutated) {
+      this.setItem(STORAGE_KEYS.COURSES, validCourses);
+    }
+    const validCourseIds = new Set(validCourses.map((c) => c.id));
+
+    // 2. Clean orphaned posts (and likes/comments from deleted users)
+    const rawPosts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS);
+    let postsMutated = false;
+    const validPosts: CoursePost[] = [];
+    for (const p of rawPosts) {
+      if (!p || !p.id || deletedSet.has(p.id) || !validCourseIds.has(p.courseId)) {
+        localCleaned++;
+        postsMutated = true;
+        continue;
+      }
+      const cleanLikes = (p.likes || []).filter((uId) => validUserIds.has(uId));
+      const cleanComments = (p.comments || []).filter(
+        (cm) => cm && cm.id && !deletedSet.has(cm.id) && validUserIds.has(cm.authorId)
+      );
+      if (
+        cleanLikes.length !== (p.likes || []).length ||
+        cleanComments.length !== (p.comments || []).length
+      ) {
+        postsMutated = true;
+        validPosts.push({ ...p, likes: cleanLikes, comments: cleanComments });
+      } else {
+        validPosts.push(p);
+      }
+    }
+    if (postsMutated) {
+      this.setItem(STORAGE_KEYS.POSTS, validPosts);
+    }
+    const validPostIds = new Set(validPosts.map((p) => p.id));
+
+    // 3. Clean orphaned assignments & assignment submissions
+    const rawAssignments = this.getItem<Assignment[]>(STORAGE_KEYS.ASSIGNMENTS, INITIAL_ASSIGNMENTS);
+    const validAssignments = rawAssignments.filter(
+      (a) => a && a.id && !deletedSet.has(a.id) && validCourseIds.has(a.courseId)
+    );
+    if (validAssignments.length !== rawAssignments.length) {
+      localCleaned += rawAssignments.length - validAssignments.length;
+      this.setItem(STORAGE_KEYS.ASSIGNMENTS, validAssignments);
+    }
+    const validAssignmentIds = new Set(validAssignments.map((a) => a.id));
+
+    const rawSubmissions = this.getItem<AssignmentSubmission[]>(
+      STORAGE_KEYS.SUBMISSIONS,
+      INITIAL_SUBMISSIONS
+    );
+    const validSubmissions = rawSubmissions.filter(
+      (s) =>
+        s &&
+        s.id &&
+        !deletedSet.has(s.id) &&
+        validAssignmentIds.has(s.assignmentId) &&
+        validUserIds.has(s.studentId) &&
+        (!s.courseId || validCourseIds.has(s.courseId))
+    );
+    if (validSubmissions.length !== rawSubmissions.length) {
+      localCleaned += rawSubmissions.length - validSubmissions.length;
+      this.setItem(STORAGE_KEYS.SUBMISSIONS, validSubmissions);
+    }
+
+    // 4. Clean orphaned quizzes & quiz submissions
+    const rawQuizzes = this.getItem<Quiz[]>(STORAGE_KEYS.QUIZZES, INITIAL_QUIZZES);
+    const validQuizzes = rawQuizzes.filter(
+      (q) => q && q.id && !deletedSet.has(q.id) && validCourseIds.has(q.courseId)
+    );
+    if (validQuizzes.length !== rawQuizzes.length) {
+      localCleaned += rawQuizzes.length - validQuizzes.length;
+      this.setItem(STORAGE_KEYS.QUIZZES, validQuizzes);
+    }
+    const validQuizIds = new Set(validQuizzes.map((q) => q.id));
+
+    const rawQuizSubs = this.getItem<QuizSubmission[]>(
+      STORAGE_KEYS.QUIZ_SUBMISSIONS,
+      INITIAL_QUIZ_SUBMISSIONS
+    );
+    const validQuizSubs = rawQuizSubs.filter(
+      (qs) =>
+        qs &&
+        qs.id &&
+        !deletedSet.has(qs.id) &&
+        validQuizIds.has(qs.quizId) &&
+        validUserIds.has(qs.studentId) &&
+        (!qs.courseId || validCourseIds.has(qs.courseId))
+    );
+    if (validQuizSubs.length !== rawQuizSubs.length) {
+      localCleaned += rawQuizSubs.length - validQuizSubs.length;
+      this.setItem(STORAGE_KEYS.QUIZ_SUBMISSIONS, validQuizSubs);
+    }
+
+    // 5. Clean orphaned attendance sessions & records for deleted students
+    const rawAttendance = this.getItem<AttendanceSession[]>(
+      STORAGE_KEYS.ATTENDANCE,
+      INITIAL_ATTENDANCE_SESSIONS
+    );
+    let attMutated = false;
+    const validAttendance: AttendanceSession[] = [];
+    for (const sess of rawAttendance) {
+      if (!sess || !sess.id || deletedSet.has(sess.id) || !validCourseIds.has(sess.courseId)) {
+        localCleaned++;
+        attMutated = true;
+        continue;
+      }
+      const records = sess.records || {};
+      const recordKeys = Object.keys(records);
+      const orphanRecordKeys = recordKeys.filter((stuId) => !validUserIds.has(stuId));
+      if (orphanRecordKeys.length > 0) {
+        const cleanRecords = { ...records };
+        orphanRecordKeys.forEach((k) => delete cleanRecords[k]);
+        attMutated = true;
+        validAttendance.push({ ...sess, records: cleanRecords });
+      } else {
+        validAttendance.push(sess);
+      }
+    }
+    if (attMutated) {
+      this.setItem(STORAGE_KEYS.ATTENDANCE, validAttendance);
+    }
+
+    // 6. Clean orphaned student progress
+    const rawProgress = this.getItem<StudentProgress[]>(STORAGE_KEYS.PROGRESS, INITIAL_PROGRESS);
+    const validProgress = rawProgress.filter(
+      (pr) =>
+        pr &&
+        validCourseIds.has(pr.courseId) &&
+        validUserIds.has(pr.studentId)
+    );
+    if (validProgress.length !== rawProgress.length) {
+      localCleaned += rawProgress.length - validProgress.length;
+      this.setItem(STORAGE_KEYS.PROGRESS, validProgress);
+    }
+
+    // 7. Clean orphaned or expired notifications
+    this.purgeExpiredNotifications(forceCloudSweep);
+    const rawNotifs = this.getItem<NotificationItem[]>(
+      STORAGE_KEYS.NOTIFICATIONS,
+      INITIAL_NOTIFICATIONS
+    );
+    const validNotifs = rawNotifs.filter(
+      (n) =>
+        n &&
+        n.id &&
+        !deletedSet.has(n.id) &&
+        validCourseIds.has(n.courseId) &&
+        validUserIds.has(n.userId) &&
+        (!n.postId || validPostIds.has(n.postId))
+    );
+    if (validNotifs.length !== rawNotifs.length) {
+      localCleaned += rawNotifs.length - validNotifs.length;
+      this.setItem(STORAGE_KEYS.NOTIFICATIONS, validNotifs);
+    }
+
+    // 8. Run Supabase cloud orphan cleanup
+    const cloudRes = await SupabaseService.cleanOrphanedCloudData(
+      Array.from(validCourseIds),
+      Array.from(validUserIds),
+      Array.from(deletedSet),
+      forceCloudSweep
+    );
+
+    return {
+      localCleaned,
+      cloudCleaned: cloudRes.totalCleaned,
+      details: `Local cleaned: ${localCleaned}, Cloud cleaned: ${cloudRes.totalCleaned}. ${cloudRes.details}`,
+    };
+  }
+
   static async syncWithSupabase(): Promise<{
     success: boolean;
     syncedUsers: number;
     syncedCourses: number;
+    cleanedOrphans?: number;
     error?: string;
   }> {
+    // Clean local orphaned references first so we never push stale/orphaned data to Supabase
+    await this.cleanOrphanedLocalAndCloudData(false);
+
     const users = this.getAllUsers();
     const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
     const posts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS);
@@ -1297,6 +1589,12 @@ export class ClassroomDB {
             this.setItem(STORAGE_KEYS.ATTENDANCE, merged);
             updated = true;
           }
+        }
+
+        // Automatically clean up any orphaned data in LocalStorage and Supabase (throttled to every 5m in cloud)
+        const orphanCleanup = await this.cleanOrphanedLocalAndCloudData(false);
+        if (orphanCleanup.localCleaned > 0) {
+          updated = true;
         }
 
         return updated;
@@ -2485,10 +2783,16 @@ export class ClassroomDB {
     absentCount: number;
     percentage: number;
   } {
+    const cacheKey = `${courseId}:${studentId}`;
+    const cached = this.attendanceStatsCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const sessions = this.getAttendanceSessions(courseId);
     const totalSessions = sessions.length;
     if (totalSessions === 0) {
-      return {
+      const emptyStats = {
         totalSessions: 0,
         presentCount: 0,
         lateCount: 0,
@@ -2496,6 +2800,8 @@ export class ClassroomDB {
         absentCount: 0,
         percentage: 100,
       };
+      this.attendanceStatsCache.set(cacheKey, emptyStats);
+      return emptyStats;
     }
 
     let presentCount = 0;
@@ -2522,7 +2828,7 @@ export class ClassroomDB {
     });
 
     const percentage = Math.min(100, Math.round((weightedAttended / totalSessions) * 100));
-    return {
+    const computed = {
       totalSessions,
       presentCount,
       lateCount,
@@ -2530,6 +2836,8 @@ export class ClassroomDB {
       absentCount,
       percentage,
     };
+    this.attendanceStatsCache.set(cacheKey, computed);
+    return computed;
   }
 
   static calculateTotalAttendancePercentage(courseId: string, studentId: string): number {

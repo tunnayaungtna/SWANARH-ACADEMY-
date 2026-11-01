@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User, VideoAsset } from '../types/classroom';
+import { ClassroomDB } from '../services/storage';
 import { Play, Pause, Volume2, VolumeX, Maximize, Shield, Wifi, AlertCircle, RefreshCw } from 'lucide-react';
 
 interface SecureVideoPlayerProps {
@@ -15,6 +16,11 @@ export const SecureVideoPlayer: React.FC<SecureVideoPlayerProps> = ({
   onCompleted,
   textProtectionEnabled = true,
 }) => {
+  const securitySettings = ClassroomDB.getSecuritySettings();
+  const isWatermarkActive =
+    Boolean(video.allowDynamicWatermark) && Boolean(securitySettings.dynamicWatermarkEnabled);
+  const watermarkOpacity = securitySettings.watermarkOpacity || 0.25;
+
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(180); // 3 min simulation for lecture preview
@@ -121,20 +127,21 @@ export const SecureVideoPlayer: React.FC<SecureVideoPlayerProps> = ({
         <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-slate-950/60" />
 
         {/* Anti-Piracy Watermark: Displays logged-in student info */}
-        {video.allowDynamicWatermark && (
+        {isWatermarkActive && (
           <div
             style={{
               top: `${watermarkPos.top}%`,
               left: `${watermarkPos.left}%`,
+              opacity: watermarkOpacity,
             }}
             className="pointer-events-none absolute z-20 transition-all duration-1000 ease-in-out"
           >
-            <div className="flex flex-col text-[11px] font-mono tracking-wider text-white/25 select-none bg-black/15 px-2.5 py-1 rounded border border-white/5 backdrop-blur-[1px]">
-              <span className="font-semibold text-white/35">
+            <div className="flex flex-col text-[11px] font-mono tracking-wider text-white select-none bg-black/25 px-2.5 py-1 rounded border border-white/10 backdrop-blur-[1px]">
+              <span className="font-semibold text-white">
                 {currentUser.name} · {currentUser.username}
               </span>
               <span>ID: {currentUser.id.slice(0, 12)} · {currentUser.phone}</span>
-              <span className="text-[9px] text-white/20">
+              <span className="text-[9px] text-white/80">
                 HOST: {window.location.hostname} · {new Date().toLocaleTimeString()}
               </span>
             </div>

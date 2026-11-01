@@ -54,6 +54,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   const [openImmediately, setOpenImmediately] = useState(true);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [sessionToDelete, setSessionToDelete] = useState<AttendanceSession | null>(null);
+  const [visibleRosterLimit, setVisibleRosterLimit] = useState<number>(60);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -63,10 +64,11 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   const activeSession: AttendanceSession | undefined =
     sessions.find((s) => s.id === selectedSessionId) || sessions[0];
 
-  // Enrolled students list
+  // Enrolled students list (O(1) Set lookup for 2,000+ students)
   const allUsers = ClassroomDB.getAllUsers();
+  const enrolledSet = new Set(course.enrolledStudentIds);
   const enrolledStudents = allUsers.filter(
-    (u) => u.role === 'student' && course.enrolledStudentIds.includes(u.id)
+    (u) => u.role === 'student' && enrolledSet.has(u.id)
   );
 
   // Open sessions where student can self check-in
@@ -583,7 +585,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
               </div>
             ) : (
               <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                {enrolledStudents.map((stu) => {
+                {enrolledStudents.slice(0, visibleRosterLimit).map((stu) => {
                   const rec = activeSession.records[stu.id];
                   const currentStatus: AttendanceStatus = rec?.status || 'absent';
 
@@ -596,6 +598,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                         <img
                           src={stu.avatar}
                           alt={stu.name}
+                          loading="lazy"
                           referrerPolicy="no-referrer"
                           className="w-9 h-9 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
                         />
@@ -747,7 +750,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
-                  {enrolledStudents.map((stu) => {
+                  {enrolledStudents.slice(0, visibleRosterLimit).map((stu) => {
                     const st = ClassroomDB.getStudentAttendanceStats(course.id, stu.id);
                     const stuProg = ClassroomDB.getStudentProgress(stu.id, course.id);
                     const isEligible = st.percentage >= 75;
@@ -762,6 +765,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                             <img
                               src={stu.avatar}
                               alt={stu.name}
+                              loading="lazy"
                               referrerPolicy="no-referrer"
                               className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-slate-700"
                             />
@@ -860,6 +864,30 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                 </tbody>
               </table>
             </div>
+
+            {enrolledStudents.length > visibleRosterLimit && (
+              <div className="p-4 border-t border-slate-200/60 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-2.5 text-xs">
+                <span className="text-slate-600 dark:text-slate-300 font-medium">
+                  ပြသထားသည်: <strong>{visibleRosterLimit}</strong> / စုစုပေါင်း <strong>{enrolledStudents.length}</strong> ဦး
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setVisibleRosterLimit((prev) => prev + 100)}
+                    className="px-3.5 py-1.5 rounded-xl neu-btn-indigo font-bold cursor-pointer"
+                  >
+                    + နောက်ထပ် ၁၀၀ ဦး ပြမည်
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setVisibleRosterLimit(enrolledStudents.length)}
+                    className="px-3 py-1.5 rounded-xl neu-btn text-slate-700 dark:text-slate-200 font-semibold cursor-pointer"
+                  >
+                    အားလုံးပြမည် ({enrolledStudents.length})
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

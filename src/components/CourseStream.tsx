@@ -97,6 +97,9 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
 
   // Scheduled posts drawer expand state
   const [scheduledDrawerOpen, setScheduledDrawerOpen] = useState(true);
+  // Progressive stream post limit for smooth 60fps scrolling
+  const [visiblePostLimit, setVisiblePostLimit] = useState<number>(20);
+  const userByIdMap = new Map<string, User>(ClassroomDB.getAllUsers().map((u) => [u.id, u]));
 
   const [rateLimitError, setRateLimitError] = useState<string | null>(null);
   const [successToast, setSuccessToast] = useState<string | null>(null);
@@ -1170,7 +1173,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
             </p>
           </div>
         ) : (
-          posts.map((post) => {
+          posts.slice(0, visiblePostLimit).map((post) => {
             const hasLiked = post.likes.includes(currentUser.id);
             const isCommentsOpen = expandedComments[post.id] ?? (post.comments.length > 0);
             const isPostScheduled = post.status === 'scheduled';
@@ -1461,14 +1464,13 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                         {post.comments.map((comm) => {
                           const canDeleteComment =
                             isInstructor || comm.authorId === currentUser.id;
-                          const commentUser = ClassroomDB.getAllUsers().find(
-                            (u) => u.id === comm.authorId
-                          );
+                          const commentUser = userByIdMap.get(comm.authorId);
                           return (
                             <div key={comm.id} className="flex items-start gap-2.5 text-xs">
                               <img
                                 src={comm.authorAvatar}
                                 alt={comm.authorName}
+                                loading="lazy"
                                 referrerPolicy="no-referrer"
                                 className="w-7 h-7 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0 mt-0.5"
                               />
@@ -1558,6 +1560,31 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
               </article>
             );
           })
+        )}
+
+        {/* Load Older Posts Button */}
+        {posts.length > visiblePostLimit && (
+          <div className="neu-card rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+            <span className="text-slate-600 dark:text-slate-300 font-medium">
+              ပြသထားသော ပို့စ်: <strong>{visiblePostLimit}</strong> / စုစုပေါင်း <strong>{posts.length}</strong> ခု
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setVisiblePostLimit((prev) => prev + 20)}
+                className="px-4 py-2 rounded-xl neu-btn-indigo font-bold cursor-pointer"
+              >
+                + ပို့စ်အဟောင်းများ ထပ်ပြမည် (+20)
+              </button>
+              <button
+                type="button"
+                onClick={() => setVisiblePostLimit(posts.length)}
+                className="px-3.5 py-2 rounded-xl neu-btn text-slate-700 dark:text-slate-200 font-semibold cursor-pointer"
+              >
+                အားလုံးပြမည် ({posts.length})
+              </button>
+            </div>
+          </div>
         )}
       </div>
 

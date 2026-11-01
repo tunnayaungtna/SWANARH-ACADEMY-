@@ -138,12 +138,14 @@ export default function App() {
       ClassroomDB.init();
       refreshData();
       const loggedUser = ClassroomDB.getCurrentUser();
-      // If on Login screen, only pull profiles (saves 85% of Supabase Free Plan queries)
-      ClassroomDB.pullFromSupabase({ onlyProfiles: !loggedUser }).then((updated) => {
-        if (updated) {
-          refreshData();
-        }
-      });
+      // Only pull full catalog if already authenticated; LoginView uses a 0.3KB single-row lookup on login!
+      if (loggedUser) {
+        ClassroomDB.pullFromSupabase().then((updated) => {
+          if (updated) {
+            refreshData();
+          }
+        });
+      }
     }, 50);
 
     // Multi-user / multi-tab synchronization
@@ -153,24 +155,26 @@ export default function App() {
     window.addEventListener('storage', handleStorageChange);
 
     // When reopening the installed PWA from the background,
-    // silently refresh local & remote data (throttled by 40s cooldown so rapid tab switches cost 0 queries)
+    // silently refresh local & remote data (throttled by 75s cooldown so rapid tab switches cost 0 queries)
     const handleWakeUp = () => {
       if (document.visibilityState === 'visible') {
         refreshData();
         const loggedUser = ClassroomDB.getCurrentUser();
-        ClassroomDB.pullFromSupabase({ onlyProfiles: !loggedUser }).then((updated) => {
-          if (updated) {
-            refreshData();
-          }
-        });
+        if (loggedUser) {
+          ClassroomDB.pullFromSupabase().then((updated) => {
+            if (updated) {
+              refreshData();
+            }
+          });
+        }
       }
     };
     document.addEventListener('visibilitychange', handleWakeUp);
     window.addEventListener('pageshow', handleWakeUp);
 
-    // Adaptive background sync with randomized jitter (85s–95s) & tiered catalog caching
-    // so 200+ concurrent students use minimal Supabase Free Plan Egress Bandwidth
-    const jitteredIntervalMs = 85000 + Math.floor(Math.random() * 10000);
+    // Adaptive background sync with wide randomized jitter (105s–150s) & tiered catalog caching
+    // so 2,000+ concurrent students distribute requests smoothly without thundering-herd spikes
+    const jitteredIntervalMs = 105000 + Math.floor(Math.random() * 45000);
     const syncInterval = setInterval(() => {
       if (
         document.visibilityState === 'visible' &&
@@ -690,6 +694,46 @@ export default function App() {
             onClose={() => setShowRulesModal(false)}
             onLogout={handleLogout}
           />
+        )}
+
+        {/* Primary Admin Local Cache Reset Confirmation Modal */}
+        {showResetConfirmModal && currentUser.role === 'admin' && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm">
+            <div className="neu-raised w-full max-w-md rounded-2xl p-6 border border-rose-500/20">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-600 dark:text-rose-400">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Reset Local Demo Data?
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Primary Admin Action Only
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed mb-5">
+                ဤလုပ်ဆောင်ချက်သည် ယခု Browser ပေါ်ရှိ Local Cache Data များကို မူလ Default အနေအထားသို့ ပြန်လည်သတ်မှတ်ပြီး Supabase Cloud မှ Data အသစ်များကို ပြန်လည်ဆွဲယူပေးမည် ဖြစ်ပါသည်။
+              </p>
+              <div className="flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setShowResetConfirmModal(false)}
+                  className="neu-btn px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmResetData}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white shadow-sm cursor-pointer"
+                >
+                  Confirm Reset
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </Suspense>
 

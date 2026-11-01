@@ -92,8 +92,13 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
   const [selectedCsvCourseId, setSelectedCsvCourseId] = useState<string>(courses[0]?.id || 'all');
   const [auditFilterMode, setAuditFilterMode] = useState<'accepted_only' | 'all'>('accepted_only');
   const [ruleStatusFilter, setRuleStatusFilter] = useState<'all' | 'accepted' | 'pending'>('all');
+  // High-concurrency DOM virtualization limit (renders 60 cards initially for 60fps with 2,000+ users)
+  const [visibleLimit, setVisibleLimit] = useState<number>(60);
 
   if (!isOpen) return null;
+
+  const currentLoggedUser = ClassroomDB.getCurrentUser();
+  const isCoAdminSession = currentLoggedUser?.role === 'co_admin';
 
   const handleExportAttendanceCSV = (courseId: string) => {
     if (courseId === 'all') {
@@ -339,8 +344,12 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
         `Supabase Sync သတိပေးချက်: ${syncRes.error} (Navbar ရှိ "Supabase Setup" ကိုနှိပ်ပြီး SQL Script ကို Supabase SQL Editor တွင် Run ပေးပါ)`
       );
     } else {
+      const cleanedNote =
+        syncRes.cleanedOrphans && syncRes.cleanedOrphans > 0
+          ? `, Auto-Cleaned Orphans: ${syncRes.cleanedOrphans} ခု`
+          : '';
       setToastMsg(
-        `✅ Supabase သို့ အောင်မြင်စွာ Sync လုပ်ပြီးပါပြီ! (Users: ${syncRes.syncedUsers} ဦး, Courses: ${syncRes.syncedCourses} ခု)`
+        `✅ Supabase သို့ အောင်မြင်စွာ Sync လုပ်ပြီးပါပြီ! (Users: ${syncRes.syncedUsers} ဦး, Courses: ${syncRes.syncedCourses} ခု${cleanedNote})`
       );
     }
     setTimeout(() => setToastMsg(null), 6000);
@@ -609,21 +618,23 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                       </div>
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={() => handleRoleChange('admin')}
-                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex items-center gap-2.5 ${
-                        selectedRole === 'admin'
-                          ? 'bg-indigo-50 dark:bg-indigo-950/60 border-indigo-500 text-indigo-900 dark:text-indigo-100 ring-2 ring-indigo-500/20 shadow-xs'
-                          : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-slate-300'
-                      }`}
-                    >
-                      <ShieldCheck className="w-5 h-5 text-indigo-600 dark:text-indigo-400 shrink-0" />
-                      <div>
-                        <div className="font-bold text-xs">🛡️ Admin (ပင်မ အက်ဒမင်)</div>
-                        <div className="text-[10px] text-slate-500 dark:text-slate-400">အတန်းဖန်တီး၊ User စီမံ၊ အကုန်လုပ်ပိုင်ခွင့်</div>
-                      </div>
-                    </button>
+                    {!isCoAdminSession && (
+                      <button
+                        type="button"
+                        onClick={() => handleRoleChange('admin')}
+                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex items-center gap-2.5 ${
+                          selectedRole === 'admin'
+                            ? 'bg-indigo-50 dark:bg-indigo-950/60 border-indigo-500 text-indigo-900 dark:text-indigo-100 ring-2 ring-indigo-500/20 shadow-xs'
+                            : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-slate-300'
+                        }`}
+                      >
+                        <ShieldCheck className="w-5 h-5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                        <div>
+                          <div className="font-bold text-xs">🛡️ Admin (ပင်မ အက်ဒမင်)</div>
+                          <div className="text-[10px] text-slate-500 dark:text-slate-400">အတန်းဖန်တီး၊ User စီမံ၊ အကုန်လုပ်ပိုင်ခွင့်</div>
+                        </div>
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -1140,22 +1151,26 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                 <input
                   type="text"
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setVisibleLimit(60);
+                  }}
                   placeholder="အမည်၊ Username၊ လိပ်စာ ရှာရန်..."
                   className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:border-indigo-500 text-slate-900 dark:text-white"
                 />
               </div>
             </div>
 
-            {/* Users Directory Cards */}
+            {/* Users Directory Cards (Paginated for 2,000+ Concurrent Users Performance) */}
             <div className="space-y-3">
               {filteredUsers.length === 0 ? (
                 <div className="p-8 text-center text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-800">
                   ရှာဖွေမှုနှင့် ကိုက်ညီသော အကောင့် မတွေ့ရှိပါ။
                 </div>
               ) : (
-                filteredUsers.map((user) => {
-                  const isRevealed = revealedPasswords[user.id];
+                filteredUsers.slice(0, visibleLimit).map((user) => {
+                  const isProtectedPrimaryAdmin = isCoAdminSession && user.role === 'admin';
+                  const isRevealed = !isProtectedPrimaryAdmin && revealedPasswords[user.id];
                   const userPassword =
                     user.password || (user.role === 'admin' ? 'admin123' : user.role === 'co_admin' ? 'coadmin123' : 'student123');
                   const normalizedGender = user.gender?.toLowerCase();
@@ -1171,12 +1186,13 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                           <img
                             src={user.avatar}
                             alt={user.name}
+                            loading="lazy"
                             onError={(e) => {
                               (e.target as HTMLImageElement).src = PRESET_AVATARS[0].url;
                             }}
                             className="w-11 h-11 rounded-full object-cover border border-slate-200 dark:border-slate-700"
                           />
-                          {(user.role === 'admin' || user.role === 'co_admin') && (
+                          {(user.role === 'admin' || user.role === 'co_admin') && !isProtectedPrimaryAdmin && (
                             <button
                               type="button"
                               onClick={() => setEditingAvatarUser(user)}
@@ -1282,53 +1298,61 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                             </div>
                           )}
 
-                          {/* Login Credentials Pill */}
-                          <div className="flex items-center gap-2 pt-0.5">
+                          {/* Login Credentials Pill (Protected for Primary Admin when viewed by Co-Admin) */}
+                          <div className="flex items-center gap-2 pt-0.5 flex-wrap">
                             <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
                               Login Password:
                             </span>
-                            <span className="font-mono text-xs font-semibold text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded">
-                              {isRevealed ? userPassword : '••••••••'}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => toggleRevealPassword(user.id)}
-                              className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer p-0.5"
-                              title={isRevealed ? 'Hide Password' : 'Show Password'}
-                            >
-                              {isRevealed ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                handleCopyCredentials({
-                                  name: user.name,
-                                  username: user.username,
-                                  password: userPassword,
-                                  role: user.role,
-                                  gender: normalizedGender === 'female' ? 'Female (မ)' : 'Male (ကျား)',
-                                  address: user.address,
-                                });
-                                setToastMsg(`အကောင့် "${user.name}" ၏ Login အချက်အလက်များကို ကူးယူပြီးပါပြီ။`);
-                                setTimeout(() => setToastMsg(null), 3000);
-                              }}
-                              className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 cursor-pointer p-0.5"
-                              title="Copy Credentials to Clipboard"
-                            >
-                              <Copy className="w-3.5 h-3.5" />
-                            </button>
+                            {isProtectedPrimaryAdmin ? (
+                              <span className="text-[10px] font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
+                                🔒 Protected (Primary Admin Only)
+                              </span>
+                            ) : (
+                              <>
+                                <span className="font-mono text-xs font-semibold text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded">
+                                  {isRevealed ? userPassword : '••••••••'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleRevealPassword(user.id)}
+                                  className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer p-0.5"
+                                  title={isRevealed ? 'Hide Password' : 'Show Password'}
+                                >
+                                  {isRevealed ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    handleCopyCredentials({
+                                      name: user.name,
+                                      username: user.username,
+                                      password: userPassword,
+                                      role: user.role,
+                                      gender: normalizedGender === 'female' ? 'Female (မ)' : 'Male (ကျား)',
+                                      address: user.address,
+                                    });
+                                    setToastMsg(`အကောင့် "${user.name}" ၏ Login အချက်အလက်များကို ကူးယူပြီးပါပြီ။`);
+                                    setTimeout(() => setToastMsg(null), 3000);
+                                  }}
+                                  className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 cursor-pointer p-0.5"
+                                  title="Copy Credentials to Clipboard"
+                                >
+                                  <Copy className="w-3.5 h-3.5" />
+                                </button>
 
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setResettingUser(user);
-                                setNewUserPassword(userPassword);
-                                setShowResetPassword(false);
-                              }}
-                              className="text-[10px] text-amber-700 dark:text-amber-400 hover:underline font-medium cursor-pointer ml-1"
-                            >
-                              Reset Password
-                            </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setResettingUser(user);
+                                    setNewUserPassword(userPassword);
+                                    setShowResetPassword(false);
+                                  }}
+                                  className="text-[10px] text-amber-700 dark:text-amber-400 hover:underline font-medium cursor-pointer ml-1"
+                                >
+                                  Reset Password
+                                </button>
+                              </>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1395,19 +1419,46 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                           </div>
                         )}
 
-                        {/* Delete User Action */}
-                        <button
-                          onClick={() => handleDeleteUser(user)}
-                          className="p-2 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg transition-colors cursor-pointer self-end sm:self-center"
-                          title="Delete user from platform"
-                          aria-label="Delete user"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {/* Delete User Action (Hidden for Primary Admin when viewed by Co-Admin) */}
+                        {!isProtectedPrimaryAdmin && (
+                          <button
+                            onClick={() => handleDeleteUser(user)}
+                            className="p-2 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg transition-colors cursor-pointer self-end sm:self-center"
+                            title="Delete user from platform"
+                            aria-label="Delete user"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
                 })
+              )}
+
+              {/* Progressive Load More Bar for 2,000+ Student Directory */}
+              {filteredUsers.length > visibleLimit && (
+                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row items-center justify-between gap-2.5 text-xs">
+                  <span className="text-slate-600 dark:text-slate-300 font-medium">
+                    ပြသထားသည်: <strong>{visibleLimit}</strong> / စုစုပေါင်း <strong>{filteredUsers.length}</strong> ဦး
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setVisibleLimit((prev) => prev + 100)}
+                      className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold cursor-pointer transition-colors"
+                    >
+                      + နောက်ထပ် ၁၀၀ ဦး ပြမည် (Load +100)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setVisibleLimit(filteredUsers.length)}
+                      className="px-3 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-semibold cursor-pointer transition-colors"
+                    >
+                      အားလုံးပြမည် ({filteredUsers.length})
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
           </div>
