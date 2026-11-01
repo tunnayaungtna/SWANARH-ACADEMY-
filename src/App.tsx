@@ -138,15 +138,14 @@ export default function App() {
       ClassroomDB.init();
       refreshData();
       const loggedUser = ClassroomDB.getCurrentUser();
-      // Only pull full catalog if already authenticated; LoginView uses a 0.3KB single-row lookup on login!
       if (loggedUser) {
-        ClassroomDB.pullFromSupabase().then((updated) => {
-          if (updated) {
+        ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
+          if (updated || !ClassroomDB.getCurrentUser()) {
             refreshData();
           }
         });
       }
-    }, 50);
+    }, 30);
 
     // Multi-user / multi-tab synchronization
     const handleStorageChange = () => {
@@ -154,15 +153,15 @@ export default function App() {
     };
     window.addEventListener('storage', handleStorageChange);
 
-    // When reopening the installed PWA from the background,
-    // silently refresh local & remote data (throttled by 75s cooldown so rapid tab switches cost 0 queries)
+    // When refreshing, focusing, or reopening the installed PWA from the background,
+    // immediately pull authoritative remote state (courses, posts, deletions, and 1-device session lock)
     const handleWakeUp = () => {
       if (document.visibilityState === 'visible') {
         refreshData();
         const loggedUser = ClassroomDB.getCurrentUser();
         if (loggedUser) {
-          ClassroomDB.pullFromSupabase().then((updated) => {
-            if (updated) {
+          ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
+            if (updated || !ClassroomDB.getCurrentUser()) {
               refreshData();
             }
           });
@@ -171,10 +170,10 @@ export default function App() {
     };
     document.addEventListener('visibilitychange', handleWakeUp);
     window.addEventListener('pageshow', handleWakeUp);
+    window.addEventListener('focus', handleWakeUp);
 
-    // Adaptive background sync with wide randomized jitter (105s–150s) & tiered catalog caching
-    // so 2,000+ concurrent students distribute requests smoothly without thundering-herd spikes
-    const jitteredIntervalMs = 105000 + Math.floor(Math.random() * 45000);
+    // Fast background sync (25s–35s jittered) so Admin/Co-Admin changes & single-device session enforcement reflect rapidly across devices
+    const jitteredIntervalMs = 25000 + Math.floor(Math.random() * 10000);
     const syncInterval = setInterval(() => {
       if (
         document.visibilityState === 'visible' &&
@@ -184,7 +183,7 @@ export default function App() {
         const loggedUser = ClassroomDB.getCurrentUser();
         if (loggedUser) {
           ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
-            if (updated) {
+            if (updated || !ClassroomDB.getCurrentUser()) {
               refreshData();
             }
           });
@@ -204,6 +203,7 @@ export default function App() {
       window.removeEventListener('storage', handleStorageChange);
       document.removeEventListener('visibilitychange', handleWakeUp);
       window.removeEventListener('pageshow', handleWakeUp);
+      window.removeEventListener('focus', handleWakeUp);
       clearInterval(syncInterval);
       clearInterval(notifCleanupInterval);
     };

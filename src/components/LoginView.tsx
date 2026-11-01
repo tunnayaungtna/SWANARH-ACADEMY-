@@ -39,13 +39,20 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(() =>
+    ClassroomDB.consumeKickReason()
+  );
+  const [isDeviceLocked, setIsDeviceLocked] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   React.useEffect(() => {
     try {
       localStorage.removeItem('classroom_custom_academy_logo');
       localStorage.removeItem('classroom_custom_academy_logo_v2');
+      const kickReason = ClassroomDB.consumeKickReason();
+      if (kickReason) {
+        setErrorMessage(kickReason);
+      }
     } catch {
       // ignore
     }
@@ -54,40 +61,36 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const handleSwitchTab = (role: UserRole) => {
     setActiveRole(role);
     setErrorMessage(null);
+    setIsDeviceLocked(false);
   };
 
-  const handleSignInSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const executeSignIn = async (forceTakeover: boolean) => {
     if (!identifier.trim()) {
       setErrorMessage('ကျေးဇူးပြု၍ သင်၏ Username သို့မဟုတ် Email ကို ရိုက်ထည့်ပါ။');
       return;
     }
 
     setErrorMessage(null);
-
-    // Fast path: check local credentials immediately (0ms delay)
-    const immediateRes = ClassroomDB.login(identifier, password, activeRole);
-    if (immediateRes.user) {
-      onLoginSuccess(immediateRes.user);
-      ClassroomDB.pullFromSupabase({ force: true }).catch(() => {});
-      return;
-    }
-
-    // If rate-limited locally, show message immediately without network roundtrip
-    if (immediateRes.error && immediateRes.error.includes('စောင့်ဆိုင်းပြီးမှ')) {
-      setErrorMessage(immediateRes.error);
-      return;
-    }
-
-    // Targeted single-row fallback (0.3KB instead of pulling 2,000 profiles) for 2,000+ concurrent user scalability
+    setIsDeviceLocked(false);
     setIsLoading(true);
+
+    // Always verify against Supabase first (when online) so 1-Account-1-Device lock is strictly enforced
     const res = await Promise.race([
-      ClassroomDB.loginWithRemoteFallback(identifier, password, activeRole),
-      new Promise<{ user: User | null; error?: string }>((resolve) =>
-        setTimeout(() => resolve(immediateRes), 3000)
+      ClassroomDB.loginWithRemoteFallback(identifier, password, activeRole, forceTakeover),
+      new Promise<{ user: User | null; deviceLocked?: boolean; error?: string }>((resolve) =>
+        setTimeout(
+          () => resolve(ClassroomDB.login(identifier, password, activeRole, forceTakeover)),
+          3500
+        )
       ),
     ]);
     setIsLoading(false);
+
+    if (res.deviceLocked) {
+      setIsDeviceLocked(true);
+      setErrorMessage(res.error || 'ဤအကောင့်သည် အခြားစက်တွင် Login ဝင်ထားပါသည်။');
+      return;
+    }
 
     if (res.error) {
       setErrorMessage(res.error);
@@ -95,6 +98,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
       onLoginSuccess(res.user);
       ClassroomDB.pullFromSupabase({ force: true }).catch(() => {});
     }
+  };
+
+  const handleSignInSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await executeSignIn(false);
   };
 
   return (
@@ -311,11 +319,26 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </p>
               </div>
 
-              {/* Error Message Toast */}
+              {/* Error Message Toast & Single-Device Switch Control */}
               {errorMessage && (
-                <div className="neu-inset flex items-start gap-2.5 p-3.5 rounded-2xl text-rose-700 dark:text-rose-300 text-xs font-medium">
-                  <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
-                  <div className="leading-snug">{errorMessage}</div>
+                <div className="neu-inset p-3.5 rounded-2xl space-y-2.5 text-rose-700 dark:text-rose-300 text-xs font-medium">
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                    <div className="leading-snug">{errorMessage}</div>
+                  </div>
+                  {isDeviceLocked && (
+                    <button
+                      type="button"
+                      disabled={isLoading}
+                      onClick={() => executeSignIn(true)}
+                      className="w-full py-2.5 px-3.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 shadow-xs disabled:opacity-50"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      <span>
+                        အခြားစက်မှ အကောင့်ထွက်ပြီး ဤစက်တွင် ဝင်မည် (Switch Active Device Here)
+                      </span>
+                    </button>
+                  )}
                 </div>
               )}
 

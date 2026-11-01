@@ -1,4 +1,4 @@
-/*! SwanArh Classroom v16 | tailwindcss v4.3.3 | MIT License | https://tailwindcss.com */
+/*! SwanArh Classroom v17 | tailwindcss v4.3.3 | MIT License | https://tailwindcss.com */
 @layer properties {
   @supports (((-webkit-hyphens: none)) and (not (margin-trim: inline))) or ((-moz-orient: inline) and (not (color: rgb(from red r g b)))) {
     *, :before, :after, ::backdrop {
@@ -1270,6 +1270,10 @@
     transform: var(--tw-rotate-x, ) var(--tw-rotate-y, ) var(--tw-rotate-z, ) var(--tw-skew-x, ) var(--tw-skew-y, );
   }
 
+  .transform\! {
+    transform: var(--tw-rotate-x, ) var(--tw-rotate-y, ) var(--tw-rotate-z, ) var(--tw-skew-x, ) var(--tw-skew-y, ) !important;
+  }
+
   .animate-bounce {
     animation: var(--animate-bounce);
   }
@@ -1953,6 +1957,16 @@
     border-color: #0000;
   }
 
+  .border-white\/5 {
+    border-color: #ffffff0d;
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .border-white\/5 {
+      border-color: color-mix(in oklab, var(--color-white) 5%, transparent);
+    }
+  }
+
   .border-white\/10 {
     border-color: #ffffff1a;
   }
@@ -2015,6 +2029,16 @@
 
   .bg-black {
     background-color: var(--color-black);
+  }
+
+  .bg-black\/15 {
+    background-color: #00000026;
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .bg-black\/15 {
+      background-color: color-mix(in oklab, var(--color-black) 15%, transparent);
+    }
   }
 
   .bg-black\/20 {
@@ -3466,6 +3490,36 @@
     color: var(--color-white);
   }
 
+  .text-white\/20 {
+    color: #fff3;
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .text-white\/20 {
+      color: color-mix(in oklab, var(--color-white) 20%, transparent);
+    }
+  }
+
+  .text-white\/25 {
+    color: #ffffff40;
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .text-white\/25 {
+      color: color-mix(in oklab, var(--color-white) 25%, transparent);
+    }
+  }
+
+  .text-white\/35 {
+    color: #ffffff59;
+  }
+
+  @supports (color: color-mix(in lab, red, red)) {
+    .text-white\/35 {
+      color: color-mix(in oklab, var(--color-white) 35%, transparent);
+    }
+  }
+
   .text-white\/80 {
     color: #fffc;
   }
@@ -3763,6 +3817,10 @@
 
   .filter {
     filter: var(--tw-blur, ) var(--tw-brightness, ) var(--tw-contrast, ) var(--tw-grayscale, ) var(--tw-hue-rotate, ) var(--tw-invert, ) var(--tw-saturate, ) var(--tw-sepia, ) var(--tw-drop-shadow, );
+  }
+
+  .filter\! {
+    filter: var(--tw-blur, ) var(--tw-brightness, ) var(--tw-contrast, ) var(--tw-grayscale, ) var(--tw-hue-rotate, ) var(--tw-invert, ) var(--tw-saturate, ) var(--tw-sepia, ) var(--tw-drop-shadow, ) !important;
   }
 
   .backdrop-blur-\[1px\] {

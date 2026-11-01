@@ -363,34 +363,76 @@ function compactBannerForCloud(banner?: string): string {
 }
 
 const RULES_MARKER_PREFIX = '||RULES_OK:';
+const DEVICE_SESSION_MARKER_PREFIX = '||DEV_SES:';
 
 function encodeTitleWithRules(user: User): string | null {
-  const baseTitle = (user.title || '').split(RULES_MARKER_PREFIX)[0].trim();
+  const rawBase = (user.title || '')
+    .split(RULES_MARKER_PREFIX)[0]
+    .split(DEVICE_SESSION_MARKER_PREFIX)[0]
+    .trim();
+
+  let encoded = rawBase;
   if (user.rulesAccepted) {
     const stamp = user.rulesAcceptedAt || new Date().toISOString();
-    return `${baseTitle}${RULES_MARKER_PREFIX}${stamp}`;
+    encoded += `${RULES_MARKER_PREFIX}${stamp}`;
   }
-  return baseTitle || null;
+  if (user.activeDeviceId) {
+    const sesToken = (user.activeSessionToken || '').replace(/[~|]/g, '');
+    const sesTs = user.sessionUpdatedAtMs || Date.now();
+    encoded += `${DEVICE_SESSION_MARKER_PREFIX}${user.activeDeviceId}~${sesToken}~${sesTs}`;
+  }
+  return encoded || null;
 }
 
 function decodeTitleAndRules(
   rawTitle?: string | null,
   rowRulesAccepted?: boolean | null,
   rowRulesAcceptedAt?: string | null
-): { title?: string; rulesAccepted?: boolean; rulesAcceptedAt?: string } {
-  const str = rawTitle || '';
-  if (str.includes(RULES_MARKER_PREFIX)) {
-    const [cleanTitle, acceptedStamp] = str.split(RULES_MARKER_PREFIX);
+): {
+  title?: string;
+  rulesAccepted?: boolean;
+  rulesAcceptedAt?: string;
+  activeDeviceId?: string;
+  activeSessionToken?: string;
+  sessionUpdatedAtMs?: number;
+} {
+  let working = rawTitle || '';
+  let activeDeviceId: string | undefined;
+  let activeSessionToken: string | undefined;
+  let sessionUpdatedAtMs: number | undefined;
+
+  if (working.includes(DEVICE_SESSION_MARKER_PREFIX)) {
+    const [beforeSes, sesRaw] = working.split(DEVICE_SESSION_MARKER_PREFIX);
+    working = beforeSes;
+    if (sesRaw) {
+      const [devId, token, tsStr] = sesRaw.trim().split('~');
+      if (devId) activeDeviceId = devId.trim();
+      if (token) activeSessionToken = token.trim();
+      const parsedTs = Number(tsStr);
+      if (Number.isFinite(parsedTs) && parsedTs > 0) {
+        sessionUpdatedAtMs = parsedTs;
+      }
+    }
+  }
+
+  if (working.includes(RULES_MARKER_PREFIX)) {
+    const [cleanTitle, acceptedStamp] = working.split(RULES_MARKER_PREFIX);
     return {
       title: cleanTitle.trim() || undefined,
       rulesAccepted: true,
       rulesAcceptedAt: rowRulesAcceptedAt || acceptedStamp?.trim() || undefined,
+      activeDeviceId,
+      activeSessionToken,
+      sessionUpdatedAtMs,
     };
   }
   return {
-    title: str.trim() || undefined,
+    title: working.trim() || undefined,
     rulesAccepted: rowRulesAccepted ? true : undefined,
     rulesAcceptedAt: rowRulesAcceptedAt || undefined,
+    activeDeviceId,
+    activeSessionToken,
+    sessionUpdatedAtMs,
   };
 }
 
@@ -496,20 +538,26 @@ export class SupabaseService {
       address: row.address ? String(row.address) : undefined,
       rulesAccepted: decoded.rulesAccepted,
       rulesAcceptedAt: decoded.rulesAcceptedAt,
+      activeDeviceId: decoded.activeDeviceId,
+      activeSessionToken: decoded.activeSessionToken,
+      sessionUpdatedAtMs: decoded.sessionUpdatedAtMs,
     };
   }
 
   /**
    * Fast single-row lookup by username or email for Login (0.3KB egress instead of pulling 2,000 profiles on Login view)
    */
-  static async getRemoteProfileByIdentifier(identifier: string): Promise<User | null> {
+  static async getRemoteProfileByIdentifier(
+    identifier: string,
+    skipDedupe: boolean = false
+  ): Promise<User | null> {
     const cleanId = (identifier || '').trim().toLowerCase();
     if (!cleanId) return null;
     // Sanitize against PostgREST filter syntax characters
     const safeId = cleanId.replace(/[,()"'\\]/g, '');
     if (!safeId) return null;
 
-    return this.dedupeGet(`profile_login:${safeId}`, async () => {
+    const fetcher = async () => {
       try {
         const { data, error } = await supabase
           .from('profiles')
@@ -525,7 +573,12 @@ export class SupabaseService {
       } catch {
         return null;
       }
-    });
+    };
+
+    if (skipDedupe) {
+      return fetcher();
+    }
+    return this.dedupeGet(`profile_login:${safeId}`, fetcher);
   }
 
   /**
@@ -1195,6 +1248,14 @@ export class SupabaseService {
       createdAt: c.createdAt,
     }));
 
+    const idTsMatch = post.id ? post.id.match(/(\d{13})/) : null;
+    const idTs = idTsMatch ? Number(idTsMatch[1]) : undefined;
+    const isInitialDemoPost = /^post-\d{3}$/.test(post.id || '');
+    const effectiveMs =
+      post.createdAtMs ||
+      (idTs && idTs > 1_600_000_000_000 ? idTs : undefined) ||
+      (isInitialDemoPost ? 1_704_067_200_000 : undefined); // 2024-01-01 for demo posts so new posts are always newer
+
     return {
       id: post.id,
       course_id: post.courseId,
@@ -1214,6 +1275,7 @@ export class SupabaseService {
       attachments: safeAttachments,
       likes: post.likes || [],
       comments: safeComments,
+      ...(effectiveMs ? { created_at: new Date(effectiveMs).toISOString() } : {}),
     };
   }
 

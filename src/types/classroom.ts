@@ -14,6 +14,9 @@ export interface User {
   address?: string;
   rulesAccepted?: boolean;
   rulesAcceptedAt?: string;
+  activeDeviceId?: string;
+  activeSessionToken?: string;
+  sessionUpdatedAtMs?: number;
   createdAt?: string;
 }
 

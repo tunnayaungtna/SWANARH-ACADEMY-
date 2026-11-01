@@ -1,4 +1,4 @@
-const CACHE_NAME = 'swanarh-classroom-v16';
+const CACHE_NAME = 'swanarh-classroom-v17';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',

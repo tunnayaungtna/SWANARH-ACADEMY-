@@ -112,7 +112,9 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   const [expandedComments, setExpandedComments] = useState<Record<string, boolean>>({});
 
   // Filtered post collections
-  const pinnedPosts = posts.filter((p) => p.isPinned && p.status !== 'scheduled');
+  const pinnedPosts = posts
+    .filter((p) => p.isPinned && p.status !== 'scheduled')
+    .sort((a, b) => (a.pinOrder || 99) - (b.pinOrder || 99));
   const scheduledPosts = posts.filter((p) => p.status === 'scheduled');
   const currentPinnedCount = posts.filter((p) => p.isPinned).length;
 

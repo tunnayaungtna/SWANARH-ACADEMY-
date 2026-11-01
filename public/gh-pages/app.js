@@ -1,4 +1,4 @@
-/* SwanArh Classroom v16 — 2000+ Concurrent Users & Auto-Clean Bundle */
+/* SwanArh Classroom v17 - Single-Device Lock, Authoritative Sync & Newest-First Stream */
 //#region \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -33309,25 +33309,54 @@ function compactBannerForCloud(banner) {
 	return banner;
 }
 var RULES_MARKER_PREFIX = "||RULES_OK:";
+var DEVICE_SESSION_MARKER_PREFIX = "||DEV_SES:";
 function encodeTitleWithRules(user) {
-	const baseTitle = (user.title || "").split(RULES_MARKER_PREFIX)[0].trim();
-	if (user.rulesAccepted) return `${baseTitle}${RULES_MARKER_PREFIX}${user.rulesAcceptedAt || (/* @__PURE__ */ new Date()).toISOString()}`;
-	return baseTitle || null;
+	let encoded = (user.title || "").split(RULES_MARKER_PREFIX)[0].split(DEVICE_SESSION_MARKER_PREFIX)[0].trim();
+	if (user.rulesAccepted) {
+		const stamp = user.rulesAcceptedAt || (/* @__PURE__ */ new Date()).toISOString();
+		encoded += `${RULES_MARKER_PREFIX}${stamp}`;
+	}
+	if (user.activeDeviceId) {
+		const sesToken = (user.activeSessionToken || "").replace(/[~|]/g, "");
+		const sesTs = user.sessionUpdatedAtMs || Date.now();
+		encoded += `${DEVICE_SESSION_MARKER_PREFIX}${user.activeDeviceId}~${sesToken}~${sesTs}`;
+	}
+	return encoded || null;
 }
 function decodeTitleAndRules(rawTitle, rowRulesAccepted, rowRulesAcceptedAt) {
-	const str = rawTitle || "";
-	if (str.includes(RULES_MARKER_PREFIX)) {
-		const [cleanTitle, acceptedStamp] = str.split(RULES_MARKER_PREFIX);
+	let working = rawTitle || "";
+	let activeDeviceId;
+	let activeSessionToken;
+	let sessionUpdatedAtMs;
+	if (working.includes(DEVICE_SESSION_MARKER_PREFIX)) {
+		const [beforeSes, sesRaw] = working.split(DEVICE_SESSION_MARKER_PREFIX);
+		working = beforeSes;
+		if (sesRaw) {
+			const [devId, token, tsStr] = sesRaw.trim().split("~");
+			if (devId) activeDeviceId = devId.trim();
+			if (token) activeSessionToken = token.trim();
+			const parsedTs = Number(tsStr);
+			if (Number.isFinite(parsedTs) && parsedTs > 0) sessionUpdatedAtMs = parsedTs;
+		}
+	}
+	if (working.includes(RULES_MARKER_PREFIX)) {
+		const [cleanTitle, acceptedStamp] = working.split(RULES_MARKER_PREFIX);
 		return {
 			title: cleanTitle.trim() || void 0,
 			rulesAccepted: true,
-			rulesAcceptedAt: rowRulesAcceptedAt || acceptedStamp?.trim() || void 0
+			rulesAcceptedAt: rowRulesAcceptedAt || acceptedStamp?.trim() || void 0,
+			activeDeviceId,
+			activeSessionToken,
+			sessionUpdatedAtMs
 		};
 	}
 	return {
-		title: str.trim() || void 0,
+		title: working.trim() || void 0,
 		rulesAccepted: rowRulesAccepted ? true : void 0,
-		rulesAcceptedAt: rowRulesAcceptedAt || void 0
+		rulesAcceptedAt: rowRulesAcceptedAt || void 0,
+		activeDeviceId,
+		activeSessionToken,
+		sessionUpdatedAtMs
 	};
 }
 var SupabaseService = class {
@@ -33424,18 +33453,21 @@ var SupabaseService = class {
 			gender: row.gender || void 0,
 			address: row.address ? String(row.address) : void 0,
 			rulesAccepted: decoded.rulesAccepted,
-			rulesAcceptedAt: decoded.rulesAcceptedAt
+			rulesAcceptedAt: decoded.rulesAcceptedAt,
+			activeDeviceId: decoded.activeDeviceId,
+			activeSessionToken: decoded.activeSessionToken,
+			sessionUpdatedAtMs: decoded.sessionUpdatedAtMs
 		};
 	}
 	/**
 	* Fast single-row lookup by username or email for Login (0.3KB egress instead of pulling 2,000 profiles on Login view)
 	*/
-	static async getRemoteProfileByIdentifier(identifier) {
+	static async getRemoteProfileByIdentifier(identifier, skipDedupe = false) {
 		const cleanId = (identifier || "").trim().toLowerCase();
 		if (!cleanId) return null;
 		const safeId = cleanId.replace(/[,()"'\\]/g, "");
 		if (!safeId) return null;
-		return this.dedupeGet(`profile_login:${safeId}`, async () => {
+		const fetcher = async () => {
 			try {
 				const { data, error } = await supabase.from("profiles").select("*").or(`username.ilike.${safeId},email.ilike.${safeId}`).limit(1).maybeSingle();
 				if (error || !data) return null;
@@ -33443,7 +33475,9 @@ var SupabaseService = class {
 			} catch {
 				return null;
 			}
-		});
+		};
+		if (skipDedupe) return fetcher();
+		return this.dedupeGet(`profile_login:${safeId}`, fetcher);
 	}
 	/**
 	* Fetch all profiles from Supabase if table exists (supports up to 3,000 concurrent classroom users)
@@ -33944,6 +33978,10 @@ var SupabaseService = class {
 			content: (c.content || "").slice(0, 1e3),
 			createdAt: c.createdAt
 		}));
+		const idTsMatch = post.id ? post.id.match(/(\d{13})/) : null;
+		const idTs = idTsMatch ? Number(idTsMatch[1]) : void 0;
+		const isInitialDemoPost = /^post-\d{3}$/.test(post.id || "");
+		const effectiveMs = post.createdAtMs || (idTs && idTs > 16e11 ? idTs : void 0) || (isInitialDemoPost ? 17040672e5 : void 0);
 		return {
 			id: post.id,
 			course_id: post.courseId,
@@ -33962,7 +34000,8 @@ var SupabaseService = class {
 			pin_order: post.pinOrder ?? null,
 			attachments: safeAttachments,
 			likes: post.likes || [],
-			comments: safeComments
+			comments: safeComments,
+			...effectiveMs ? { created_at: new Date(effectiveMs).toISOString() } : {}
 		};
 	}
 	/**
@@ -35171,7 +35210,12 @@ var STORAGE_KEYS = {
 	RATE_LIMITS: "classroom_rate_limits",
 	SECURITY_SETTINGS: "classroom_security_settings",
 	THEME: "classroom_theme",
-	DELETED_IDS: "classroom_deleted_ids"
+	DELETED_IDS: "classroom_deleted_ids",
+	DEVICE_ID: "classroom_os_device_id_v1",
+	SESSION_TOKEN: "classroom_os_session_token_v1",
+	RECENT_WRITES: "classroom_os_recent_writes_v1",
+	CLOUD_SYNCED: "classroom_os_cloud_synced_v1",
+	KICK_REASON: "classroom_os_kick_reason_v1"
 };
 var ClassroomDB = class {
 	static {
@@ -35226,26 +35270,83 @@ var ClassroomDB = class {
 		if (!ids.length) return;
 		const current = new Set(this.getDeletedIds());
 		ids.forEach((id) => current.add(id));
-		const bounded = Array.from(current).slice(-600);
+		const bounded = Array.from(current).slice(-800);
 		this.setItem(STORAGE_KEYS.DELETED_IDS, bounded);
 	}
+	static getDeviceId() {
+		try {
+			let devId = localStorage.getItem(STORAGE_KEYS.DEVICE_ID);
+			if (!devId) {
+				devId = `dev-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+				localStorage.setItem(STORAGE_KEYS.DEVICE_ID, devId);
+			}
+			return devId;
+		} catch {
+			return "dev-fallback-local";
+		}
+	}
+	static getSessionToken() {
+		try {
+			return localStorage.getItem(STORAGE_KEYS.SESSION_TOKEN) || "";
+		} catch {
+			return "";
+		}
+	}
+	static generateAndSaveSessionToken() {
+		const token = `ses-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+		try {
+			localStorage.setItem(STORAGE_KEYS.SESSION_TOKEN, token);
+		} catch {}
+		return token;
+	}
+	static setKickReason(reason) {
+		try {
+			localStorage.setItem(STORAGE_KEYS.KICK_REASON, reason);
+		} catch {}
+	}
+	static consumeKickReason() {
+		try {
+			const reason = localStorage.getItem(STORAGE_KEYS.KICK_REASON);
+			if (reason) localStorage.removeItem(STORAGE_KEYS.KICK_REASON);
+			return reason;
+		} catch {
+			return null;
+		}
+	}
+	static markLocalWrite(id) {
+		if (!id) return;
+		const now = Date.now();
+		const map = this.getItem(STORAGE_KEYS.RECENT_WRITES, {});
+		const next = { [id]: now };
+		for (const [k, ts] of Object.entries(map)) if (now - ts < 3e4) next[k] = ts;
+		this.setItem(STORAGE_KEYS.RECENT_WRITES, next);
+	}
+	static isRecentLocalWrite(id, maxAgeMs = 25e3) {
+		if (!id) return false;
+		const ts = this.getItem(STORAGE_KEYS.RECENT_WRITES, {})[id];
+		if (!ts) return false;
+		return Date.now() - ts < maxAgeMs;
+	}
 	static init() {
-		if (!localStorage.getItem(STORAGE_KEYS.USERS)) this.setItem(STORAGE_KEYS.USERS, INITIAL_USERS);
-		if (!localStorage.getItem(STORAGE_KEYS.COURSES)) this.setItem(STORAGE_KEYS.COURSES, INITIAL_COURSES);
-		if (!localStorage.getItem(STORAGE_KEYS.POSTS)) this.setItem(STORAGE_KEYS.POSTS, INITIAL_POSTS);
-		if (!localStorage.getItem(STORAGE_KEYS.ASSIGNMENTS)) this.setItem(STORAGE_KEYS.ASSIGNMENTS, INITIAL_ASSIGNMENTS);
-		if (!localStorage.getItem(STORAGE_KEYS.SUBMISSIONS)) this.setItem(STORAGE_KEYS.SUBMISSIONS, INITIAL_SUBMISSIONS);
-		if (!localStorage.getItem(STORAGE_KEYS.QUIZZES)) this.setItem(STORAGE_KEYS.QUIZZES, INITIAL_QUIZZES);
-		if (!localStorage.getItem(STORAGE_KEYS.QUIZ_SUBMISSIONS)) this.setItem(STORAGE_KEYS.QUIZ_SUBMISSIONS, INITIAL_QUIZ_SUBMISSIONS);
-		if (!localStorage.getItem(STORAGE_KEYS.PROGRESS)) this.setItem(STORAGE_KEYS.PROGRESS, INITIAL_PROGRESS);
-		if (!localStorage.getItem(STORAGE_KEYS.NOTIFICATIONS)) this.setItem(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
-		if (!localStorage.getItem(STORAGE_KEYS.ATTENDANCE)) this.setItem(STORAGE_KEYS.ATTENDANCE, INITIAL_ATTENDANCE_SESSIONS);
+		const isCloudSynced = localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) === "true";
+		const deletedSet = new Set(this.getDeletedIds());
+		if (!localStorage.getItem(STORAGE_KEYS.USERS)) this.setItem(STORAGE_KEYS.USERS, INITIAL_USERS.filter((u) => !deletedSet.has(u.id)));
+		if (!localStorage.getItem(STORAGE_KEYS.COURSES)) this.setItem(STORAGE_KEYS.COURSES, isCloudSynced ? [] : INITIAL_COURSES.filter((c) => !deletedSet.has(c.id)));
+		if (!localStorage.getItem(STORAGE_KEYS.POSTS)) this.setItem(STORAGE_KEYS.POSTS, isCloudSynced ? [] : INITIAL_POSTS.filter((p) => !deletedSet.has(p.id)));
+		if (!localStorage.getItem(STORAGE_KEYS.ASSIGNMENTS)) this.setItem(STORAGE_KEYS.ASSIGNMENTS, isCloudSynced ? [] : INITIAL_ASSIGNMENTS.filter((a) => !deletedSet.has(a.id)));
+		if (!localStorage.getItem(STORAGE_KEYS.SUBMISSIONS)) this.setItem(STORAGE_KEYS.SUBMISSIONS, isCloudSynced ? [] : INITIAL_SUBMISSIONS.filter((s) => !deletedSet.has(s.id)));
+		if (!localStorage.getItem(STORAGE_KEYS.QUIZZES)) this.setItem(STORAGE_KEYS.QUIZZES, isCloudSynced ? [] : INITIAL_QUIZZES.filter((q) => !deletedSet.has(q.id)));
+		if (!localStorage.getItem(STORAGE_KEYS.QUIZ_SUBMISSIONS)) this.setItem(STORAGE_KEYS.QUIZ_SUBMISSIONS, isCloudSynced ? [] : INITIAL_QUIZ_SUBMISSIONS.filter((qs) => !deletedSet.has(qs.id)));
+		if (!localStorage.getItem(STORAGE_KEYS.PROGRESS)) this.setItem(STORAGE_KEYS.PROGRESS, isCloudSynced ? [] : INITIAL_PROGRESS);
+		if (!localStorage.getItem(STORAGE_KEYS.NOTIFICATIONS)) this.setItem(STORAGE_KEYS.NOTIFICATIONS, isCloudSynced ? [] : INITIAL_NOTIFICATIONS);
+		if (!localStorage.getItem(STORAGE_KEYS.ATTENDANCE)) this.setItem(STORAGE_KEYS.ATTENDANCE, isCloudSynced ? [] : INITIAL_ATTENDANCE_SESSIONS.filter((att) => !deletedSet.has(att.id)));
 		if (!localStorage.getItem(STORAGE_KEYS.SECURITY_SETTINGS)) this.setItem(STORAGE_KEYS.SECURITY_SETTINGS, {
 			textProtectionEnabled: true,
 			dynamicWatermarkEnabled: true,
 			watermarkOpacity: .22,
-			domainRestriction: "ais-dev-x3aphtm3a4npfd5tmiiqhv-683201169391.asia-southeast1.run.app"
+			domainRestriction: "www.swanarhclassroom.online"
 		});
+		this.getDeviceId();
 		this.setTheme(this.getTheme());
 	}
 	static getTheme() {
@@ -35330,21 +35431,44 @@ var ClassroomDB = class {
 		}
 	}
 	static logout() {
+		const storedUser = this.getItem(STORAGE_KEYS.CURRENT_USER, null);
 		this.memoryCache.delete(STORAGE_KEYS.CURRENT_USER);
 		localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+		localStorage.removeItem(STORAGE_KEYS.SESSION_TOKEN);
+		if (storedUser) {
+			const allUsers = this.getAllUsers();
+			const idx = allUsers.findIndex((u) => u.id === storedUser.id);
+			const unlockedUser = {
+				...idx >= 0 ? allUsers[idx] : storedUser,
+				activeDeviceId: "LOGGED_OUT",
+				activeSessionToken: "",
+				sessionUpdatedAtMs: Date.now()
+			};
+			if (idx >= 0) {
+				allUsers[idx] = unlockedUser;
+				this.setItem(STORAGE_KEYS.USERS, allUsers);
+			}
+			this.markLocalWrite(unlockedUser.id);
+			try {
+				SupabaseService.upsertProfile(unlockedUser).catch(() => {});
+			} catch {}
+		}
 	}
-	static login(identifier, password, expectedRole) {
+	static forceLocalLogoutWithReason(reason) {
+		this.memoryCache.delete(STORAGE_KEYS.CURRENT_USER);
+		try {
+			localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+			localStorage.removeItem(STORAGE_KEYS.SESSION_TOKEN);
+		} catch {}
+		this.setKickReason(reason);
+	}
+	static verifyCredentialsOnly(identifier, password, expectedRole) {
 		this.init();
 		const cleanId = (identifier || "").trim().toLowerCase();
 		const cleanPwd = (password || "").trim();
 		if (!cleanId || !cleanPwd) return {
 			user: null,
 			error: "Username နှင့် Password နှစ်ခုလုံး ပြည့်စုံစွာ ရိုက်ထည့်ပေးပါ။"
-		};
-		const rateCheck = this.checkRateLimit("auth_login", cleanId || "ip", 6, 60);
-		if (!rateCheck.allowed) return {
-			user: null,
-			error: `လုံခြုံရေးအရ ဝင်ရောက်ရန် ကြိုးပမ်းမှု များပြားနေပါသည်။ ${rateCheck.retryAfterSeconds} စက္ကန့် စောင့်ဆိုင်းပြီးမှ ပြန်လည်ကြိုးစားပါ။`
 		};
 		const matched = this.getAllUsers().find((u) => u.email.toLowerCase() === cleanId || u.username.toLowerCase() === cleanId);
 		const genericAuthError = "Username သို့မဟုတ် Password မှားယွင်းနေပါသည်။ ကျေးဇူးပြု၍ သေချာစွာ ပြန်လည်စစ်ဆေးပြီး ဝင်ရောက်ပါ။ (Invalid username or password)";
@@ -35361,42 +35485,91 @@ var ClassroomDB = class {
 			user: null,
 			error: "ရွေးချယ်ထားသော အကောင့်အမျိုးအစား (Role Tab) နှင့် ကိုက်ညီမှု မရှိပါ။ သက်ဆိုင်ရာ Login Tab ကို ပြောင်းလဲရွေးချယ်ပြီး ဝင်ရောက်ပါ။"
 		};
-		this.setCurrentUser(matched);
 		return { user: matched };
 	}
+	static login(identifier, password, expectedRole, forceTakeover = false) {
+		const cleanId = (identifier || "").trim().toLowerCase();
+		const rateCheck = this.checkRateLimit("auth_login", cleanId || "ip", 8, 60);
+		if (!rateCheck.allowed) return {
+			user: null,
+			error: `လုံခြုံရေးအရ ဝင်ရောက်ရန် ကြိုးပမ်းမှု များပြားနေပါသည်။ ${rateCheck.retryAfterSeconds} စက္ကန့် စောင့်ဆိုင်းပြီးမှ ပြန်လည်ကြိုးစားပါ။`
+		};
+		const check = this.verifyCredentialsOnly(identifier, password, expectedRole);
+		if (!check.user) return {
+			user: null,
+			error: check.error
+		};
+		const matched = check.user;
+		const localDeviceId = this.getDeviceId();
+		const activeDev = matched.activeDeviceId || "";
+		if (activeDev && activeDev !== "LOGGED_OUT" && activeDev !== localDeviceId && !forceTakeover) return {
+			user: null,
+			deviceLocked: true,
+			error: "ဤအကောင့်သည် အခြားစက် (Device) တစ်ခုတွင် လက်ရှိ Login ဝင်ရောက်သုံးစွဲနေပါသည်။ အကောင့်တစ်ခုလျှင် စက်တစ်ခုတည်းသာ (1 Account = 1 Device Only) အသုံးပြုခွင့်ရှိပါသည်။ ပထမစက်မှ Logout အရင်ထွက်ပေးပါ သို့မဟုတ် အောက်ပါခလုတ်ဖြင့် အခြားစက်မှ အကောင့်ထွက်ပြီး ဤစက်တွင် ပြောင်းလဲဝင်ရောက်ပါ။"
+		};
+		const sessionToken = this.generateAndSaveSessionToken();
+		const stampedUser = {
+			...matched,
+			activeDeviceId: localDeviceId,
+			activeSessionToken: sessionToken,
+			sessionUpdatedAtMs: Date.now()
+		};
+		const allUsers = this.getAllUsers();
+		const idx = allUsers.findIndex((u) => u.id === stampedUser.id);
+		if (idx >= 0) {
+			allUsers[idx] = stampedUser;
+			this.setItem(STORAGE_KEYS.USERS, allUsers);
+		}
+		this.markLocalWrite(stampedUser.id);
+		this.setCurrentUser(stampedUser);
+		try {
+			SupabaseService.upsertProfile(stampedUser).catch(() => {});
+		} catch {}
+		return { user: stampedUser };
+	}
 	/**
-	* High-Concurrency Login with Targeted Single-Row Supabase Fallback:
-	* Avoids downloading 2,000 profiles on the Login page. If local login fails,
-	* queries only the single matching profile row from Supabase (~0.3KB) and verifies credentials.
+	* High-Concurrency Login with Authoritative Single-Device Verification:
+	* Queries the single matching profile row from Supabase (~0.3KB) to verify live credentials
+	* and check whether the account is already active on another device (1 Account = 1 Device Only).
 	*/
-	static async loginWithRemoteFallback(identifier, password, expectedRole) {
+	static async loginWithRemoteFallback(identifier, password, expectedRole, forceTakeover = false) {
 		const cleanId = (identifier || "").trim().toLowerCase();
 		const cleanPwd = (password || "").trim();
 		if (!cleanId || !cleanPwd) return {
 			user: null,
 			error: "Username နှင့် Password နှစ်ခုလုံး ပြည့်စုံစွာ ရိုက်ထည့်ပေးပါ။"
 		};
-		const initialAttempt = this.login(cleanId, cleanPwd, expectedRole);
-		if (initialAttempt.user) return initialAttempt;
-		if (initialAttempt.error && initialAttempt.error.includes("စောင့်ဆိုင်းပြီးမှ")) return initialAttempt;
+		const rateCheck = this.checkRateLimit("auth_login_remote", cleanId || "ip", 10, 60);
+		if (!rateCheck.allowed) return {
+			user: null,
+			error: `လုံခြုံရေးအရ ဝင်ရောက်ရန် ကြိုးပမ်းမှု များပြားနေပါသည်။ ${rateCheck.retryAfterSeconds} စက္ကန့် စောင့်ဆိုင်းပြီးမှ ပြန်လည်ကြိုးစားပါ။`
+		};
 		const deletedSet = new Set(this.getDeletedIds());
-		const remoteUser = await SupabaseService.getRemoteProfileByIdentifier(cleanId);
-		if (remoteUser && !deletedSet.has(remoteUser.id)) {
-			const localUsers = this.getAllUsers();
-			const idx = localUsers.findIndex((u) => u.id === remoteUser.id);
-			const mergedUser = {
-				...idx >= 0 ? localUsers[idx] : {},
-				...remoteUser,
-				rulesAccepted: Boolean(remoteUser.rulesAccepted || idx >= 0 && localUsers[idx].rulesAccepted),
-				rulesAcceptedAt: remoteUser.rulesAcceptedAt || (idx >= 0 ? localUsers[idx].rulesAcceptedAt : void 0),
-				password: remoteUser.password || (idx >= 0 ? localUsers[idx].password : void 0) || (remoteUser.role === "admin" ? "admin123" : remoteUser.role === "co_admin" ? "coadmin123" : "student123")
-			};
-			if (idx >= 0) localUsers[idx] = mergedUser;
-			else localUsers.push(mergedUser);
-			this.setItem(STORAGE_KEYS.USERS, localUsers);
-			return this.login(cleanId, cleanPwd, expectedRole);
+		if (typeof navigator === "undefined" || navigator.onLine !== false) {
+			const remoteUser = await SupabaseService.getRemoteProfileByIdentifier(cleanId, true);
+			if (remoteUser && !deletedSet.has(remoteUser.id)) {
+				const localUsers = this.getAllUsers();
+				const idx = localUsers.findIndex((u) => u.id === remoteUser.id);
+				const mergedUser = {
+					...idx >= 0 ? localUsers[idx] : {},
+					...remoteUser,
+					activeDeviceId: remoteUser.activeDeviceId,
+					activeSessionToken: remoteUser.activeSessionToken,
+					sessionUpdatedAtMs: remoteUser.sessionUpdatedAtMs,
+					rulesAccepted: Boolean(remoteUser.rulesAccepted || idx >= 0 && localUsers[idx].rulesAccepted),
+					rulesAcceptedAt: remoteUser.rulesAcceptedAt || (idx >= 0 ? localUsers[idx].rulesAcceptedAt : void 0),
+					password: remoteUser.password || (idx >= 0 ? localUsers[idx].password : void 0) || (remoteUser.role === "admin" ? "admin123" : remoteUser.role === "co_admin" ? "coadmin123" : "student123")
+				};
+				if (idx >= 0) localUsers[idx] = mergedUser;
+				else localUsers.push(mergedUser);
+				this.setItem(STORAGE_KEYS.USERS, localUsers);
+			}
 		}
-		return initialAttempt;
+		const res = this.login(cleanId, cleanPwd, expectedRole, forceTakeover);
+		if (res.user) try {
+			await SupabaseService.upsertProfile(res.user);
+		} catch {}
+		return res;
 	}
 	static getAllUsers() {
 		return this.getItem(STORAGE_KEYS.USERS, INITIAL_USERS);
@@ -35443,6 +35616,7 @@ var ClassroomDB = class {
 			address: data.address?.trim() || void 0
 		};
 		const updatedUsers = [...users, newUser];
+		this.markLocalWrite(newUser.id);
 		this.setItem(STORAGE_KEYS.USERS, updatedUsers);
 		const coursesToEnroll = /* @__PURE__ */ new Set();
 		if (data.initialCourseId) coursesToEnroll.add(data.initialCourseId);
@@ -35694,6 +35868,7 @@ var ClassroomDB = class {
 			...newCourse,
 			id
 		};
+		this.markLocalWrite(course.id);
 		this.setItem(STORAGE_KEYS.COURSES, [course, ...courses]);
 		try {
 			SupabaseService.upsertCourse(course).catch(() => {});
@@ -35897,6 +36072,7 @@ var ClassroomDB = class {
 		};
 	}
 	static async syncWithSupabase() {
+		await this.pullFromSupabase({ force: true });
 		await this.cleanOrphanedLocalAndCloudData(false);
 		const users = this.getAllUsers();
 		const courses = this.getItem(STORAGE_KEYS.COURSES, INITIAL_COURSES);
@@ -35932,11 +36108,28 @@ var ClassroomDB = class {
 		}
 	}
 	/**
-	* Supabase Free Plan Ultra-Optimized Pull:
-	* - Coalesces concurrent requests
-	* - Enforces a 75-second cooldown on background polls (unless `force: true`)
-	* - Caches heavy catalog tables (`profiles`, `courses`) for 5 minutes on background ticks
-	* - Scopes `posts`, `attendance_sessions`, and `notifications` to the student's enrolled courses
+	* Computes a deterministic numeric sort timestamp for any CoursePost so that
+	* newly created posts ALWAYS appear at the very top (#1 spot) of the classroom stream.
+	*/
+	static getPostSortTimestamp(post) {
+		if (!post) return 0;
+		const idTs = this.extractTimestampFromId(post.id);
+		if (typeof post.createdAtMs === "number" && Number.isFinite(post.createdAtMs) && post.createdAtMs > 0) return idTs ? Math.max(post.createdAtMs, idTs) : post.createdAtMs;
+		if (idTs) return idTs;
+		if (/^post-\d{3}$/.test(post.id || "")) return 17040672e5 + (Number((post.id || "").replace("post-", "")) || 0);
+		if (post.createdAt === "Just now") return Date.now();
+		if (post.createdAt && post.createdAt !== "Recently") {
+			const cleaned = post.createdAt.split("·")[0].replace("Scheduled for", "").trim();
+			const parsed = Date.parse(cleaned);
+			if (!isNaN(parsed) && parsed > 0) return parsed;
+		}
+		return 0;
+	}
+	/**
+	* Supabase High-Speed Authoritative Sync:
+	* - Enforces Single-Device Session Lock (1 Account = 1 Device Only) across all devices
+	* - Reconciles remote deletions authoritatively so classrooms/posts/users deleted on one device disappear on all devices immediately
+	* - Sorts classroom stream posts strictly newest-first
 	* - Automatically purges notifications older than 30 minutes from both local storage & Supabase
 	*/
 	static async pullFromSupabase(options) {
@@ -35946,24 +36139,40 @@ var ClassroomDB = class {
 		const onlyProfiles = Boolean(options?.onlyProfiles);
 		const isBackground = Boolean(options?.background);
 		const now = Date.now();
-		const COOLDOWN_MS = 75e3;
-		const CATALOG_TTL_MS = 3e5;
+		const COOLDOWN_MS = 2e4;
+		const CATALOG_TTL_MS = 45e3;
 		if (!force) {
 			if (onlyProfiles && now - this.lastProfilePullAt < COOLDOWN_MS) return purgedLocalNotifs;
 			if (!onlyProfiles && now - this.lastFullPullAt < COOLDOWN_MS) return purgedLocalNotifs;
 		}
-		if (this.activePullPromise) return this.activePullPromise;
+		if (this.activePullPromise) {
+			if (force) try {
+				await this.activePullPromise;
+			} catch {}
+			else return this.activePullPromise;
+		}
 		this.activePullPromise = (async () => {
 			try {
 				const deletedSet = new Set(this.getDeletedIds());
+				const newlyDiscoveredRemoteDeletions = [];
 				if (onlyProfiles) {
 					this.lastProfilePullAt = Date.now();
 					const remoteProfiles = await SupabaseService.getRemoteProfiles();
 					if (!remoteProfiles || remoteProfiles.length === 0) return purgedLocalNotifs;
+					try {
+						localStorage.setItem(STORAGE_KEYS.CLOUD_SYNCED, "true");
+					} catch {}
+					const remoteProfileIds = new Set(remoteProfiles.map((ru) => ru.id));
 					const localUsers = this.getAllUsers().filter((u) => !deletedSet.has(u.id));
 					const prevJson = JSON.stringify(localUsers);
 					const userMap = /* @__PURE__ */ new Map();
-					localUsers.forEach((u) => userMap.set(u.id, u));
+					localUsers.forEach((u) => {
+						if (remoteProfileIds.has(u.id) || this.isRecentLocalWrite(u.id)) userMap.set(u.id, u);
+						else {
+							newlyDiscoveredRemoteDeletions.push(u.id);
+							deletedSet.add(u.id);
+						}
+					});
 					remoteProfiles.forEach((ru) => {
 						if (deletedSet.has(ru.id)) return;
 						const existing = userMap.get(ru.id);
@@ -35976,6 +36185,7 @@ var ClassroomDB = class {
 							password: ru.password || existing?.password || (ru.role === "admin" ? "admin123" : ru.role === "co_admin" ? "coadmin123" : "student123")
 						});
 					});
+					if (newlyDiscoveredRemoteDeletions.length > 0) this.recordDeletedIds(newlyDiscoveredRemoteDeletions);
 					const mergedUsers = Array.from(userMap.values());
 					if (JSON.stringify(mergedUsers) !== prevJson) {
 						this.setItem(STORAGE_KEYS.USERS, mergedUsers);
@@ -35992,19 +36202,34 @@ var ClassroomDB = class {
 				const loggedUser = this.getCurrentUser();
 				const currentCourses = this.getItem(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter((c) => !deletedSet.has(c.id));
 				const studentScopedCourseIds = loggedUser && loggedUser.role === "student" ? currentCourses.filter((c) => c.enrolledStudentIds.includes(loggedUser.id)).map((c) => c.id) : void 0;
-				const [remoteProfiles, remoteCourses, remotePosts, remoteAttendance, remoteNotifications] = await Promise.all([
+				const [remoteProfiles, remoteCourses, remotePosts, remoteAssignments, remoteQuizzes, remoteAttendance, remoteNotifications, singleLoggedProfile] = await Promise.all([
 					shouldFetchCatalog ? SupabaseService.getRemoteProfiles() : Promise.resolve(null),
 					shouldFetchCatalog ? SupabaseService.getRemoteCourses() : Promise.resolve(null),
 					SupabaseService.getRemotePosts(studentScopedCourseIds),
+					shouldFetchCatalog ? SupabaseService.getRemoteAssignments() : Promise.resolve(null),
+					shouldFetchCatalog ? SupabaseService.getRemoteQuizzes() : Promise.resolve(null),
 					SupabaseService.getRemoteAttendanceSessions(studentScopedCourseIds),
-					loggedUser ? SupabaseService.getRemoteNotifications(loggedUser.id) : Promise.resolve(null)
+					loggedUser ? SupabaseService.getRemoteNotifications(loggedUser.id) : Promise.resolve(null),
+					!shouldFetchCatalog && loggedUser ? SupabaseService.getRemoteProfileByIdentifier(loggedUser.username || loggedUser.email, true) : Promise.resolve(null)
 				]);
 				let updated = purgedLocalNotifs;
+				const hasRemoteCatalogData = remoteProfiles && remoteProfiles.length > 0 || remoteCourses && remoteCourses.length > 0;
+				if (hasRemoteCatalogData) try {
+					localStorage.setItem(STORAGE_KEYS.CLOUD_SYNCED, "true");
+				} catch {}
+				const cloudActive = hasRemoteCatalogData || localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) === "true";
 				if (remoteProfiles && remoteProfiles.length > 0) {
+					const remoteProfileIds = new Set(remoteProfiles.map((ru) => ru.id));
 					const localUsers = this.getAllUsers().filter((u) => !deletedSet.has(u.id));
 					const prevJson = JSON.stringify(localUsers);
 					const userMap = /* @__PURE__ */ new Map();
-					localUsers.forEach((u) => userMap.set(u.id, u));
+					localUsers.forEach((u) => {
+						if (remoteProfileIds.has(u.id) || this.isRecentLocalWrite(u.id)) userMap.set(u.id, u);
+						else {
+							newlyDiscoveredRemoteDeletions.push(u.id);
+							deletedSet.add(u.id);
+						}
+					});
 					remoteProfiles.forEach((ru) => {
 						if (deletedSet.has(ru.id)) {
 							if (!this.purgedRemoteIds.has(ru.id)) {
@@ -36017,6 +36242,9 @@ var ClassroomDB = class {
 						userMap.set(ru.id, {
 							...existing,
 							...ru,
+							activeDeviceId: ru.activeDeviceId,
+							activeSessionToken: ru.activeSessionToken,
+							sessionUpdatedAtMs: ru.sessionUpdatedAtMs,
 							rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
 							rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
 							avatar: existing?.avatar && existing.avatar.startsWith("data:image/") && !ru.avatar?.startsWith("data:image/") ? existing.avatar : ru.avatar || existing?.avatar || "",
@@ -36029,11 +36257,52 @@ var ClassroomDB = class {
 						updated = true;
 					}
 				}
-				if (remoteCourses) {
+				if (loggedUser) {
+					const remoteUserForSession = remoteProfiles && remoteProfiles.find((ru) => ru.id === loggedUser.id) || singleLoggedProfile;
+					if (remoteProfiles && remoteProfiles.length > 0 && !remoteUserForSession && !this.isRecentLocalWrite(loggedUser.id)) {
+						this.forceLocalLogoutWithReason("သင်၏ အကောင့်သည် စနစ်မှ ဖယ်ရှားခံထားရသဖြင့် အလိုအလျောက် Logout ထွက်ပေးထားပါသည်။");
+						updated = true;
+					} else if (remoteUserForSession) {
+						const localDeviceId = this.getDeviceId();
+						const remoteDevId = remoteUserForSession.activeDeviceId || "";
+						if (!remoteDevId) {
+							const token = this.getSessionToken() || this.generateAndSaveSessionToken();
+							const allUsers = this.getAllUsers();
+							const idx = allUsers.findIndex((u) => u.id === loggedUser.id);
+							const claimedUser = {
+								...idx >= 0 ? allUsers[idx] : loggedUser,
+								activeDeviceId: localDeviceId,
+								activeSessionToken: token,
+								sessionUpdatedAtMs: Date.now()
+							};
+							if (idx >= 0) {
+								allUsers[idx] = claimedUser;
+								this.setItem(STORAGE_KEYS.USERS, allUsers);
+							}
+							this.markLocalWrite(claimedUser.id);
+							this.setCurrentUser(claimedUser);
+							SupabaseService.upsertProfile(claimedUser).catch(() => {});
+						} else if (remoteDevId === "LOGGED_OUT" && !this.isRecentLocalWrite(loggedUser.id)) {
+							this.forceLocalLogoutWithReason("သင်၏ အကောင့်သည် Logout ပြုလုပ်ထားသဖြင့် ကျေးဇူးပြု၍ ပြန်လည်ဝင်ရောက်ပေးပါ။");
+							updated = true;
+						} else if (remoteDevId !== localDeviceId && !this.isRecentLocalWrite(loggedUser.id)) {
+							this.forceLocalLogoutWithReason("သင်၏ အကောင့်ကို အခြားစက် (Device) တစ်ခုတွင် Login ဝင်ရောက်သုံးစွဲနေသဖြင့် လုံခြုံရေးစည်းမျဉ်း (1 Account = 1 Device Only) အရ ဤစက်မှ အလိုအလျောက် ထွက်ပေးထားပါသည်။");
+							updated = true;
+						}
+					}
+				}
+				if (remoteCourses !== null) {
+					const remoteCourseIds = new Set(remoteCourses.map((rc) => rc.id));
 					const localCourses = this.getItem(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter((c) => !deletedSet.has(c.id));
 					const prevJson = JSON.stringify(localCourses);
 					const courseMap = /* @__PURE__ */ new Map();
-					localCourses.forEach((c) => courseMap.set(c.id, c));
+					localCourses.forEach((c) => {
+						if (!cloudActive || remoteCourseIds.has(c.id) || this.isRecentLocalWrite(c.id)) courseMap.set(c.id, c);
+						else {
+							newlyDiscoveredRemoteDeletions.push(c.id);
+							deletedSet.add(c.id);
+						}
+					});
 					remoteCourses.forEach((rc) => {
 						if (deletedSet.has(rc.id)) {
 							if (!this.purgedRemoteIds.has(rc.id)) {
@@ -36055,11 +36324,20 @@ var ClassroomDB = class {
 						updated = true;
 					}
 				}
-				if (remotePosts && remotePosts.length > 0) {
-					const localPosts = this.getItem(STORAGE_KEYS.POSTS, INITIAL_POSTS).filter((p) => !deletedSet.has(p.id));
+				if (remotePosts !== null) {
+					const remotePostIds = new Set(remotePosts.map((rp) => rp.id));
+					const scopedCourseSet = studentScopedCourseIds ? new Set(studentScopedCourseIds) : null;
+					const localPosts = this.getItem(STORAGE_KEYS.POSTS, INITIAL_POSTS).filter((p) => !deletedSet.has(p.id) && !deletedSet.has(p.courseId));
 					const prevJson = JSON.stringify(localPosts);
 					const postMap = /* @__PURE__ */ new Map();
-					localPosts.forEach((p) => postMap.set(p.id, p));
+					localPosts.forEach((p) => {
+						const isInQueriedScope = !scopedCourseSet || scopedCourseSet.has(p.courseId);
+						if (!cloudActive || !isInQueriedScope || remotePostIds.has(p.id) || this.isRecentLocalWrite(p.id)) postMap.set(p.id, p);
+						else {
+							newlyDiscoveredRemoteDeletions.push(p.id);
+							deletedSet.add(p.id);
+						}
+					});
 					const newlyPublishedRemotePosts = [];
 					remotePosts.forEach((rp) => {
 						if (deletedSet.has(rp.id) || deletedSet.has(rp.courseId)) {
@@ -36090,7 +36368,7 @@ var ClassroomDB = class {
 							}) : existing?.attachments || []
 						});
 					});
-					const merged = Array.from(postMap.values());
+					const merged = Array.from(postMap.values()).sort((a, b) => this.getPostSortTimestamp(b) - this.getPostSortTimestamp(a));
 					if (JSON.stringify(merged) !== prevJson) {
 						this.setItem(STORAGE_KEYS.POSTS, merged);
 						updated = true;
@@ -36104,6 +36382,58 @@ var ClassroomDB = class {
 								updated = true;
 							}
 						});
+					}
+				}
+				if (remoteAssignments !== null && cloudActive) {
+					const remoteAssIds = new Set(remoteAssignments.map((ra) => ra.id));
+					const localAssignments = this.getItem(STORAGE_KEYS.ASSIGNMENTS, INITIAL_ASSIGNMENTS).filter((a) => !deletedSet.has(a.id) && !deletedSet.has(a.courseId));
+					const prevJson = JSON.stringify(localAssignments);
+					const assMap = /* @__PURE__ */ new Map();
+					localAssignments.forEach((a) => {
+						if (remoteAssIds.has(a.id) || this.isRecentLocalWrite(a.id)) assMap.set(a.id, a);
+						else {
+							newlyDiscoveredRemoteDeletions.push(a.id);
+							deletedSet.add(a.id);
+						}
+					});
+					remoteAssignments.forEach((ra) => {
+						if (deletedSet.has(ra.id) || deletedSet.has(ra.courseId)) return;
+						const existing = assMap.get(ra.id);
+						assMap.set(ra.id, {
+							...existing,
+							...ra
+						});
+					});
+					const mergedAss = Array.from(assMap.values());
+					if (JSON.stringify(mergedAss) !== prevJson) {
+						this.setItem(STORAGE_KEYS.ASSIGNMENTS, mergedAss);
+						updated = true;
+					}
+				}
+				if (remoteQuizzes !== null && cloudActive) {
+					const remoteQuizIds = new Set(remoteQuizzes.map((rq) => rq.id));
+					const localQuizzes = this.getItem(STORAGE_KEYS.QUIZZES, INITIAL_QUIZZES).filter((q) => !deletedSet.has(q.id) && !deletedSet.has(q.courseId));
+					const prevJson = JSON.stringify(localQuizzes);
+					const quizMap = /* @__PURE__ */ new Map();
+					localQuizzes.forEach((q) => {
+						if (remoteQuizIds.has(q.id) || this.isRecentLocalWrite(q.id)) quizMap.set(q.id, q);
+						else {
+							newlyDiscoveredRemoteDeletions.push(q.id);
+							deletedSet.add(q.id);
+						}
+					});
+					remoteQuizzes.forEach((rq) => {
+						if (deletedSet.has(rq.id) || deletedSet.has(rq.courseId)) return;
+						const existing = quizMap.get(rq.id);
+						quizMap.set(rq.id, {
+							...existing,
+							...rq
+						});
+					});
+					const mergedQuizzes = Array.from(quizMap.values());
+					if (JSON.stringify(mergedQuizzes) !== prevJson) {
+						this.setItem(STORAGE_KEYS.QUIZZES, mergedQuizzes);
+						updated = true;
 					}
 				}
 				if (remoteNotifications && remoteNotifications.length > 0) {
@@ -36128,11 +36458,20 @@ var ClassroomDB = class {
 					}
 				}
 				if (this.purgeExpiredNotifications()) updated = true;
-				if (remoteAttendance && remoteAttendance.length > 0) {
-					const localAttendance = this.getItem(STORAGE_KEYS.ATTENDANCE, INITIAL_ATTENDANCE_SESSIONS).filter((att) => !deletedSet.has(att.id));
+				if (remoteAttendance !== null) {
+					const remoteAttIds = new Set(remoteAttendance.map((ratt) => ratt.id));
+					const scopedCourseSet = studentScopedCourseIds ? new Set(studentScopedCourseIds) : null;
+					const localAttendance = this.getItem(STORAGE_KEYS.ATTENDANCE, INITIAL_ATTENDANCE_SESSIONS).filter((att) => !deletedSet.has(att.id) && !deletedSet.has(att.courseId));
 					const prevJson = JSON.stringify(localAttendance);
 					const attMap = /* @__PURE__ */ new Map();
-					localAttendance.forEach((att) => attMap.set(att.id, att));
+					localAttendance.forEach((att) => {
+						const isInQueriedScope = !scopedCourseSet || scopedCourseSet.has(att.courseId);
+						if (!cloudActive || !isInQueriedScope || remoteAttIds.has(att.id) || this.isRecentLocalWrite(att.id)) attMap.set(att.id, att);
+						else {
+							newlyDiscoveredRemoteDeletions.push(att.id);
+							deletedSet.add(att.id);
+						}
+					});
 					remoteAttendance.forEach((ratt) => {
 						if (deletedSet.has(ratt.id) || deletedSet.has(ratt.courseId)) {
 							if (!this.purgedRemoteIds.has(ratt.id)) {
@@ -36156,6 +36495,10 @@ var ClassroomDB = class {
 						this.setItem(STORAGE_KEYS.ATTENDANCE, merged);
 						updated = true;
 					}
+				}
+				if (newlyDiscoveredRemoteDeletions.length > 0) {
+					this.recordDeletedIds(newlyDiscoveredRemoteDeletions);
+					updated = true;
 				}
 				if ((await this.cleanOrphanedLocalAndCloudData(false)).localCleaned > 0) updated = true;
 				return updated;
@@ -36198,20 +36541,11 @@ var ClassroomDB = class {
 			});
 		}
 		const coursePosts = processedPosts.filter((post) => post.courseId === courseId);
-		return (currentUser.role === "admin" || currentUser.role === "co_admin" ? coursePosts : coursePosts.filter((post) => {
+		return [...currentUser.role === "admin" || currentUser.role === "co_admin" ? coursePosts : coursePosts.filter((post) => {
 			if (!post.status || post.status === "published") return true;
 			if (post.status === "scheduled" && post.scheduledFor) return new Date(post.scheduledFor).getTime() <= now;
 			return false;
-		})).sort((a, b) => {
-			const aPinned = a.isPinned ? 1 : 0;
-			const bPinned = b.isPinned ? 1 : 0;
-			if (bPinned !== aPinned) return bPinned - aPinned;
-			if (a.isPinned && b.isPinned) {
-				if (a.pinOrder && b.pinOrder) return a.pinOrder - b.pinOrder;
-				if (a.pinnedAt && b.pinnedAt) return new Date(b.pinnedAt).getTime() - new Date(a.pinnedAt).getTime();
-			}
-			return 0;
-		});
+		})].sort((a, b) => this.getPostSortTimestamp(b) - this.getPostSortTimestamp(a));
 	}
 	static addPost(postData, currentUser) {
 		const isInstructor = currentUser.role === "admin" || currentUser.role === "co_admin";
@@ -36238,7 +36572,9 @@ var ClassroomDB = class {
 			likes: [],
 			comments: []
 		};
-		this.setItem(STORAGE_KEYS.POSTS, [newPost, ...posts]);
+		this.markLocalWrite(newPost.id);
+		const sortedPosts = [newPost, ...posts].sort((a, b) => this.getPostSortTimestamp(b) - this.getPostSortTimestamp(a));
+		this.setItem(STORAGE_KEYS.POSTS, sortedPosts);
 		try {
 			SupabaseService.upsertPost(newPost).catch(() => {});
 		} catch {}
@@ -36823,6 +37159,7 @@ var ClassroomDB = class {
 			}),
 			records: {}
 		};
+		this.markLocalWrite(newSession.id);
 		this.setItem(STORAGE_KEYS.ATTENDANCE, [newSession, ...sessions]);
 		try {
 			SupabaseService.upsertAttendanceSession(newSession).catch(() => {});
@@ -40282,43 +40619,46 @@ var LoginView = ({ onLoginSuccess, theme, onToggleTheme }) => {
 	const [identifier, setIdentifier] = (0, import_react.useState)("");
 	const [password, setPassword] = (0, import_react.useState)("");
 	const [showPassword, setShowPassword] = (0, import_react.useState)(false);
-	const [errorMessage, setErrorMessage] = (0, import_react.useState)(null);
+	const [errorMessage, setErrorMessage] = (0, import_react.useState)(() => ClassroomDB.consumeKickReason());
+	const [isDeviceLocked, setIsDeviceLocked] = (0, import_react.useState)(false);
 	const [isLoading, setIsLoading] = (0, import_react.useState)(false);
 	import_react.useEffect(() => {
 		try {
 			localStorage.removeItem("classroom_custom_academy_logo");
 			localStorage.removeItem("classroom_custom_academy_logo_v2");
+			const kickReason = ClassroomDB.consumeKickReason();
+			if (kickReason) setErrorMessage(kickReason);
 		} catch {}
 	}, []);
 	const handleSwitchTab = (role) => {
 		setActiveRole(role);
 		setErrorMessage(null);
+		setIsDeviceLocked(false);
 	};
-	const handleSignInSubmit = async (e) => {
-		e.preventDefault();
+	const executeSignIn = async (forceTakeover) => {
 		if (!identifier.trim()) {
 			setErrorMessage("ကျေးဇူးပြု၍ သင်၏ Username သို့မဟုတ် Email ကို ရိုက်ထည့်ပါ။");
 			return;
 		}
 		setErrorMessage(null);
-		const immediateRes = ClassroomDB.login(identifier, password, activeRole);
-		if (immediateRes.user) {
-			onLoginSuccess(immediateRes.user);
-			ClassroomDB.pullFromSupabase({ force: true }).catch(() => {});
-			return;
-		}
-		if (immediateRes.error && immediateRes.error.includes("စောင့်ဆိုင်းပြီးမှ")) {
-			setErrorMessage(immediateRes.error);
-			return;
-		}
+		setIsDeviceLocked(false);
 		setIsLoading(true);
-		const res = await Promise.race([ClassroomDB.loginWithRemoteFallback(identifier, password, activeRole), new Promise((resolve) => setTimeout(() => resolve(immediateRes), 3e3))]);
+		const res = await Promise.race([ClassroomDB.loginWithRemoteFallback(identifier, password, activeRole, forceTakeover), new Promise((resolve) => setTimeout(() => resolve(ClassroomDB.login(identifier, password, activeRole, forceTakeover)), 3500))]);
 		setIsLoading(false);
+		if (res.deviceLocked) {
+			setIsDeviceLocked(true);
+			setErrorMessage(res.error || "ဤအကောင့်သည် အခြားစက်တွင် Login ဝင်ထားပါသည်။");
+			return;
+		}
 		if (res.error) setErrorMessage(res.error);
 		else if (res.user) {
 			onLoginSuccess(res.user);
 			ClassroomDB.pullFromSupabase({ force: true }).catch(() => {});
 		}
+	};
+	const handleSignInSubmit = async (e) => {
+		e.preventDefault();
+		await executeSignIn(false);
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "min-h-screen neu-canvas text-slate-900 dark:text-slate-100 flex flex-col justify-between transition-colors duration-300 selection:bg-emerald-500/20",
@@ -40491,10 +40831,19 @@ var LoginView = ({ onLoginSuccess, theme, onToggleTheme }) => {
 									})]
 								}),
 								errorMessage && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "neu-inset flex items-start gap-2.5 p-3.5 rounded-2xl text-rose-700 dark:text-rose-300 text-xs font-medium",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleAlert, { className: "w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-										className: "leading-snug",
-										children: errorMessage
+									className: "neu-inset p-3.5 rounded-2xl space-y-2.5 text-rose-700 dark:text-rose-300 text-xs font-medium",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "flex items-start gap-2.5",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleAlert, { className: "w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+											className: "leading-snug",
+											children: errorMessage
+										})]
+									}), isDeviceLocked && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+										type: "button",
+										disabled: isLoading,
+										onClick: () => executeSignIn(true),
+										className: "w-full py-2.5 px-3.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 shadow-xs disabled:opacity-50",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldCheck, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "အခြားစက်မှ အကောင့်ထွက်ပြီး ဤစက်တွင် ဝင်မည် (Switch Active Device Here)" })]
 									})]
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
@@ -43152,7 +43501,7 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, textProtectionEnabl
 	const isInstructor = currentUser.role === "admin" || currentUser.role === "co_admin";
 	const [commentInputs, setCommentInputs] = (0, import_react.useState)({});
 	const [expandedComments, setExpandedComments] = (0, import_react.useState)({});
-	const pinnedPosts = posts.filter((p) => p.isPinned && p.status !== "scheduled");
+	const pinnedPosts = posts.filter((p) => p.isPinned && p.status !== "scheduled").sort((a, b) => (a.pinOrder || 99) - (b.pinOrder || 99));
 	const scheduledPosts = posts.filter((p) => p.status === "scheduled");
 	const currentPinnedCount = posts.filter((p) => p.isPinned).length;
 	const processFiles = (fileList) => {
@@ -49377,10 +49726,10 @@ function App() {
 		const initTimer = setTimeout(() => {
 			ClassroomDB.init();
 			refreshData();
-			if (ClassroomDB.getCurrentUser()) ClassroomDB.pullFromSupabase().then((updated) => {
-				if (updated) refreshData();
+			if (ClassroomDB.getCurrentUser()) ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
+				if (updated || !ClassroomDB.getCurrentUser()) refreshData();
 			});
-		}, 50);
+		}, 30);
 		const handleStorageChange = () => {
 			refreshData();
 		};
@@ -49388,18 +49737,19 @@ function App() {
 		const handleWakeUp = () => {
 			if (document.visibilityState === "visible") {
 				refreshData();
-				if (ClassroomDB.getCurrentUser()) ClassroomDB.pullFromSupabase().then((updated) => {
-					if (updated) refreshData();
+				if (ClassroomDB.getCurrentUser()) ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
+					if (updated || !ClassroomDB.getCurrentUser()) refreshData();
 				});
 			}
 		};
 		document.addEventListener("visibilitychange", handleWakeUp);
 		window.addEventListener("pageshow", handleWakeUp);
-		const jitteredIntervalMs = 105e3 + Math.floor(Math.random() * 45e3);
+		window.addEventListener("focus", handleWakeUp);
+		const jitteredIntervalMs = 25e3 + Math.floor(Math.random() * 1e4);
 		const syncInterval = setInterval(() => {
 			if (document.visibilityState === "visible" && navigator.onLine !== false && !isLowBandwidthRef.current) {
 				if (ClassroomDB.getCurrentUser()) ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
-					if (updated) refreshData();
+					if (updated || !ClassroomDB.getCurrentUser()) refreshData();
 				});
 			}
 		}, jitteredIntervalMs);
@@ -49411,6 +49761,7 @@ function App() {
 			window.removeEventListener("storage", handleStorageChange);
 			document.removeEventListener("visibilitychange", handleWakeUp);
 			window.removeEventListener("pageshow", handleWakeUp);
+			window.removeEventListener("focus", handleWakeUp);
 			clearInterval(syncInterval);
 			clearInterval(notifCleanupInterval);
 		};
