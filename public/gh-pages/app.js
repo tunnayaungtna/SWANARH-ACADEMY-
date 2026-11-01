@@ -39649,6 +39649,14 @@ var PWAInstallButton = ({ variant = "navbar" }) => {
 										className: "p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-800 dark:text-emerald-200 font-semibold",
 										children: "✓ SwanArh Classroom App ကို သင့်စက်တွင် သွင်းထားပြီးသားဖြစ်ပါသည် (Home Screen / Desktop ပေါ်တွင် ဖွင့်သုံးနိုင်ပါသည်)။"
 									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "p-2.5 rounded-lg bg-amber-50/90 dark:bg-amber-950/40 border border-amber-200/80 dark:border-amber-800/60 text-[11px] text-amber-900 dark:text-amber-200 leading-relaxed",
+										children: [
+											"💡 ",
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "အရေးကြီးချက် —" }),
+											" အကယ်၍ ယခင် GitHub Link အဟောင်း (သို့) Shortcut အဟောင်းဖြင့် သွင်းထားသော Icon ရှိနေပါက ဖုန်း/ကွန်ပျူတာ Home Screen ပေါ်မှ အရင်ဖျက်ပြီး (Remove/Uninstall) ယခု Domain အသစ်မှ ပြန်သွင်းပေးပါက Browser Tab မပေါ်တော့ဘဲ တကယ့် Native App အဖြစ် ပွင့်လာပါမည်။"
+										]
+									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 										className: "text-xs font-bold text-slate-900 dark:text-white",
 										children: [deviceLabel, " တွင် SwanArh Classroom App သွင်းယူနည်း —"]
@@ -49278,4 +49286,3 @@ try {
 } catch {}
 (0, import_client.createRoot)(document.getElementById("root")).render(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RootErrorBoundary, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(App, {}) }));
 //#endregion
-

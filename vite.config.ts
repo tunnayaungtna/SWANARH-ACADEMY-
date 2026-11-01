@@ -39,6 +39,27 @@ function syncGhPagesBundlePlugin(): Plugin {
           fs.copyFileSync(path.join(assetsDir, cssFile), path.join(assetsDir, 'app.css'));
         }
 
+        // Ensure dist/index.html always points to root /manifest.webmanifest and root icons (never ./assets/app-*.webmanifest)
+        const distIndexPath = path.resolve(__dirname, 'dist/index.html');
+        if (fs.existsSync(distIndexPath)) {
+          let html = fs.readFileSync(distIndexPath, 'utf8');
+          html = html.replace(/href="\.?\/?assets\/app-[^"]+\.webmanifest"/g, 'href="/manifest.webmanifest"');
+          fs.writeFileSync(distIndexPath, html);
+          fs.writeFileSync(path.resolve(__dirname, 'dist/404.html'), html);
+        }
+
+        // Ensure root and dist always have the latest manifest.webmanifest and sw.js from public/
+        const publicManifest = path.resolve(__dirname, 'public/manifest.webmanifest');
+        if (fs.existsSync(publicManifest)) {
+          fs.copyFileSync(publicManifest, path.resolve(__dirname, 'dist/manifest.webmanifest'));
+          fs.copyFileSync(publicManifest, path.resolve(__dirname, 'manifest.webmanifest'));
+        }
+        const publicSw = path.resolve(__dirname, 'public/sw.js');
+        if (fs.existsSync(publicSw)) {
+          fs.copyFileSync(publicSw, path.resolve(__dirname, 'dist/sw.js'));
+          fs.copyFileSync(publicSw, path.resolve(__dirname, 'sw.js'));
+        }
+
         // Ensure GitHub Pages CNAME is always present in dist, root, and public
         const cnameDomain = 'www.swanarhclassroom.online\n';
         fs.writeFileSync(path.resolve(__dirname, 'dist/CNAME'), cnameDomain);
@@ -53,7 +74,7 @@ function syncGhPagesBundlePlugin(): Plugin {
 
 export default defineConfig(() => {
   return {
-    base: './',
+    base: '/',
     plugins: [
       react(),
       tailwindcss(),
@@ -82,5 +103,3 @@ export default defineConfig(() => {
     },
   };
 });
-
-

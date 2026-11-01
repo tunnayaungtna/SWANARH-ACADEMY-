@@ -1,28 +1,31 @@
-const CACHE_NAME = 'swanarh-classroom-v14';
-const RELATIVE_ICON_ASSETS = [
-  './pwa-192x192.png',
-  './pwa-512x512.png',
-  './pwa-maskable-512x512.png',
-  './apple-touch-icon.png',
-  './icon.svg',
+const CACHE_NAME = 'swanarh-classroom-v15';
+const PRECACHE_ASSETS = [
+  '/',
+  '/index.html',
+  '/manifest.webmanifest',
+  '/pwa-192x192.png',
+  '/pwa-512x512.png',
+  '/pwa-maskable-512x512.png',
+  '/apple-touch-icon.png',
+  '/icon.svg',
 ];
-
-function getScopedIconAssets() {
-  const base = (self.registration && self.registration.scope) || self.location.origin + '/';
-  return RELATIVE_ICON_ASSETS.map((rel) => {
-    try {
-      return new URL(rel, base).pathname;
-    } catch {
-      return rel.replace(/^\./, '');
-    }
-  });
-}
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(getScopedIconAssets()).catch(() => {});
+      return Promise.allSettled(
+        PRECACHE_ASSETS.map((assetUrl) =>
+          fetch(assetUrl, { cache: 'reload' })
+            .then((res) => {
+              if (res && res.status === 200) {
+                return cache.put(assetUrl, res);
+              }
+              return undefined;
+            })
+            .catch(() => {})
+        )
+      );
     })
   );
 });
@@ -60,23 +63,38 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
 
-  // NEVER intercept HTML document navigation, scripts, or stylesheets.
-  // This ensures that when reopening the installed app 2-3 hours later,
-  // Cloud Run / AI Studio session refreshes and JS chunks always load directly from the network.
-  if (
-    request.mode === 'navigate' ||
-    request.destination === 'document' ||
-    request.destination === 'script' ||
-    request.destination === 'style'
-  ) {
-    return;
-  }
-
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  const scopedIcons = getScopedIconAssets();
-  if (scopedIcons.includes(url.pathname)) {
+  // Network-First for HTML navigation requests:
+  // 1. Always fetches fresh HTML from network when online (prevents stale session hangs 2-3 hours later)
+  // 2. Calls event.respondWith() with offline fallback so Chrome/Android WebAPK & Desktop PWA install as a true Standalone Native App
+  if (request.mode === 'navigate' || request.destination === 'document') {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response && response.status === 200 && response.type === 'basic') {
+            const cloned = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put('/', cloned)).catch(() => {});
+          }
+          return response;
+        })
+        .catch(() =>
+          caches
+            .match(request)
+            .then((cached) => cached || caches.match('/') || caches.match('/index.html'))
+        )
+    );
+    return;
+  }
+
+  // Never intercept JS or CSS bundles so code updates are always live
+  if (request.destination === 'script' || request.destination === 'style') {
+    return;
+  }
+
+  // Cache-First with background refresh for PWA icons and manifest
+  if (PRECACHE_ASSETS.includes(url.pathname)) {
     event.respondWith(
       caches.match(request).then((cached) => {
         const networkFetch = fetch(request)
@@ -93,4 +111,3 @@ self.addEventListener('fetch', (event) => {
     );
   }
 });
-

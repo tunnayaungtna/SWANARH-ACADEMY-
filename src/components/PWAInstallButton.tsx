@@ -265,6 +265,10 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ variant = 'n
                         </div>
                       )}
 
+                      <div className="p-2.5 rounded-lg bg-amber-50/90 dark:bg-amber-950/40 border border-amber-200/80 dark:border-amber-800/60 text-[11px] text-amber-900 dark:text-amber-200 leading-relaxed">
+                        💡 <strong>အရေးကြီးချက် —</strong> အကယ်၍ ယခင် GitHub Link အဟောင်း (သို့) Shortcut အဟောင်းဖြင့် သွင်းထားသော Icon ရှိနေပါက ဖုန်း/ကွန်ပျူတာ Home Screen ပေါ်မှ အရင်ဖျက်ပြီး (Remove/Uninstall) ယခု Domain အသစ်မှ ပြန်သွင်းပေးပါက Browser Tab မပေါ်တော့ဘဲ တကယ့် Native App အဖြစ် ပွင့်လာပါမည်။
+                      </div>
+
                       <p className="text-xs font-bold text-slate-900 dark:text-white">
                         {deviceLabel} တွင် SwanArh Classroom App သွင်းယူနည်း —
                       </p>

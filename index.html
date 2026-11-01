@@ -8,14 +8,32 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-    <meta name="apple-mobile-web-app-title" content="SwanArh Classroom" />
-    <link rel="manifest" href="./manifest.webmanifest" crossorigin="use-credentials" />
-    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
-    <link rel="icon" type="image/png" sizes="192x192" href="./pwa-192x192.png" />
-    <link rel="icon" type="image/svg+xml" href="./icon.svg" />
+    <meta name="apple-mobile-web-app-title" content="SwanArh" />
+    <link id="app-manifest-link" rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <script>
       window.__pwaDeferredPrompt = null;
       window.__swanarhMounted = false;
+
+      // Enforce HTTPS on custom domain so Service Worker & Standalone WebAPK always work
+      try {
+        if (
+          window.location.protocol === 'http:' &&
+          window.location.hostname !== 'localhost' &&
+          window.location.hostname !== '127.0.0.1'
+        ) {
+          window.location.replace(
+            'https://' + window.location.host + window.location.pathname + window.location.search + window.location.hash
+          );
+        }
+        // Only use-credentials for manifest when inside AI Studio Cloud Run preview
+        if (window.location.hostname.indexOf('.run.app') !== -1) {
+          var mLink = document.getElementById('app-manifest-link');
+          if (mLink) mLink.setAttribute('crossorigin', 'use-credentials');
+        }
+      } catch (e) {}
 
       // Immediately clean up any ?wake= query parameter from the address bar
       try {
@@ -36,13 +54,13 @@
         window.dispatchEvent(new Event('pwa-installed'));
       });
 
-      // Immediately purge any stale Workbox or old version caches on startup
+      // Immediately purge any stale Workbox or old version caches on startup and register Service Worker
       (function () {
         try {
           if ('caches' in window) {
             caches.keys().then(function (keys) {
               keys.forEach(function (key) {
-                if (key !== 'swanarh-classroom-v14') {
+                if (key !== 'swanarh-classroom-v15') {
                   caches.delete(key).catch(function () {});
                 }
               });
@@ -59,6 +77,14 @@
                 }
               });
             }).catch(function () {});
+
+            // Register Service Worker early at root scope so beforeinstallprompt & WebAPK are ready immediately
+            navigator.serviceWorker
+              .register('/sw.js', { scope: '/', updateViaCache: 'none' })
+              .then(function (reg) {
+                reg.update().catch(function () {});
+              })
+              .catch(function () {});
           }
         } catch (e) {}
       })();
@@ -97,15 +123,15 @@
         if (window.__swanarhMounted || window.__staticBundleLoaded) return;
         window.__staticBundleLoaded = true;
         try {
-          var bust = 'v14_' + Math.floor(Date.now() / 60000);
+          var bust = 'v15_' + Math.floor(Date.now() / 60000);
           var link = document.createElement('link');
           link.rel = 'stylesheet';
-          link.href = './gh-pages/app.css?v=' + bust;
+          link.href = '/gh-pages/app.css?v=' + bust;
           document.head.appendChild(link);
 
           var script = document.createElement('script');
           script.type = 'module';
-          script.src = './gh-pages/app.js?v=' + bust;
+          script.src = '/gh-pages/app.js?v=' + bust;
           document.body.appendChild(script);
         } catch (e) {}
       };
@@ -119,18 +145,6 @@
           }
         }
       }, 4000);
-
-      // Register lightweight icon-only Service Worker after load
-      window.addEventListener('load', function () {
-        if ('serviceWorker' in navigator) {
-          navigator.serviceWorker
-            .register('./sw.js', { scope: './', updateViaCache: 'none' })
-            .then(function (reg) {
-              reg.update().catch(function () {});
-            })
-            .catch(function () {});
-        }
-      });
     </script>
     <title>SwanArh Classroom - Dr. Si Thu Aung · Swanarh Academy</title>
     <link rel="canonical" href="https://www.swanarhclassroom.online/" />
@@ -150,10 +164,10 @@
       onload="this.media='all'"
     />
   </head>
-  <body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+  <body style="margin: 0; padding: 0; background-color: #e8eef5; font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
     <div id="root">
       <!-- Instant zero-dependency shell with inline vector Academy Crest and self-healing wake button -->
-      <div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #f8fafc; padding: 20px; text-align: center;">
+      <div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #e8eef5; padding: 20px; text-align: center;">
         <div style="width: 76px; height: 76px; border-radius: 999px; background: #ffffff; border: 2px solid #a7f3d0; box-shadow: 0 8px 20px -4px rgba(5, 150, 105, 0.18); display: flex; align-items: center; justify-content: center; margin-bottom: 12px; padding: 4px;">
           <svg viewBox="0 0 400 400" style="width: 100%; height: 100%;" xmlns="http://www.w3.org/2000/svg">
             <circle cx="200" cy="200" r="190" fill="#FFFFFF" stroke="#0f172a" stroke-width="8" />
@@ -208,4 +222,3 @@
     </script>
   </body>
 </html>
-
