@@ -1182,27 +1182,29 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                     >
                       {/* User Info & Credentials */}
                       <div className="flex items-start gap-3 min-w-0">
-                        <div className="relative group/avatar shrink-0">
-                          <img
-                            src={user.avatar}
-                            alt={user.name}
-                            loading="lazy"
-                            onError={(e) => {
-                              (e.target as HTMLImageElement).src = PRESET_AVATARS[0].url;
-                            }}
-                            className="w-11 h-11 rounded-full object-cover border border-slate-200 dark:border-slate-700"
-                          />
-                          {(user.role === 'admin' || user.role === 'co_admin') && !isProtectedPrimaryAdmin && (
-                            <button
-                              type="button"
-                              onClick={() => setEditingAvatarUser(user)}
-                              className="absolute inset-0 bg-slate-900/60 rounded-full opacity-0 group-hover/avatar:opacity-100 flex items-center justify-center text-white transition-opacity cursor-pointer"
-                              title="Edit Profile Picture (Admin / Co-Admin Only)"
-                            >
-                              <Camera className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
+                        {(user.role === 'admin' || user.role === 'co_admin') && (
+                          <div className="relative group/avatar shrink-0">
+                            <img
+                              src={user.avatar || PRESET_AVATARS[0].url}
+                              alt={user.name}
+                              loading="lazy"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).src = PRESET_AVATARS[0].url;
+                              }}
+                              className="w-11 h-11 rounded-full object-cover border border-slate-200 dark:border-slate-700"
+                            />
+                            {!isProtectedPrimaryAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => setEditingAvatarUser(user)}
+                                className="absolute inset-0 bg-slate-900/60 rounded-full opacity-0 group-hover/avatar:opacity-100 flex items-center justify-center text-white transition-opacity cursor-pointer"
+                                title="Edit Profile Picture (Admin / Co-Admin Only)"
+                              >
+                                <Camera className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        )}
 
                         <div className="min-w-0 space-y-1">
                           <div className="flex items-center gap-2 flex-wrap">

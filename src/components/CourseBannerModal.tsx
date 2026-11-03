@@ -20,66 +20,66 @@ export interface PresetBannerItem {
 
 export const PRESET_CLASSROOM_BANNERS: PresetBannerItem[] = [
   {
+    id: 'banner-collaborative-campus',
+    label: 'Modern Collaborative Campus',
+    category: 'Featured Header',
+    url: 'https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=1200&h=300&fit=crop&q=85',
+  },
+  {
+    id: 'banner-digital-classroom',
+    label: 'Interactive Digital Classroom',
+    category: 'Academic',
+    url: 'https://images.unsplash.com/photo-1509062522246-3755977927d7?w=1200&h=300&fit=crop&q=85',
+  },
+  {
+    id: 'banner-tech-innovation',
+    label: 'Technology & Innovation Lab',
+    category: 'Technology',
+    url: 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=1200&h=300&fit=crop&q=85',
+  },
+  {
     id: 'banner-academy-hall',
     label: 'University Lecture Hall',
-    category: 'Academic',
-    url: 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1000&h=250&fit=crop&q=85',
+    category: 'University',
+    url: 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1200&h=300&fit=crop&q=85',
   },
   {
     id: 'banner-medical-science',
     label: 'Medical & Laboratory Science',
     category: 'Science & Medicine',
-    url: 'https://images.unsplash.com/photo-1532094349884-543bc11b234d?w=1000&h=250&fit=crop&q=85',
-  },
-  {
-    id: 'banner-web-arch',
-    label: 'Software & Cloud Engineering',
-    category: 'Technology',
-    url: 'https://images.unsplash.com/photo-1517694712202-14dd9538aa97?w=1000&h=250&fit=crop&q=85',
-  },
-  {
-    id: 'banner-cyber-sec',
-    label: 'Cybersecurity & Networks',
-    category: 'Security',
-    url: 'https://images.unsplash.com/photo-1550751827-4bd374c3f58b?w=1000&h=250&fit=crop&q=85',
-  },
-  {
-    id: 'banner-data-ai',
-    label: 'Data Science & Analytics',
-    category: 'AI & Math',
-    url: 'https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=1000&h=250&fit=crop&q=85',
+    url: 'https://images.unsplash.com/photo-1532094349884-543bc11b234d?w=1200&h=300&fit=crop&q=85',
   },
   {
     id: 'banner-library-books',
     label: 'Classic Library & Research',
     category: 'Literature',
-    url: 'https://images.unsplash.com/photo-1507842229356-51c61504d3ab?w=1000&h=250&fit=crop&q=85',
+    url: 'https://images.unsplash.com/photo-1507842229356-51c61504d3ab?w=1200&h=300&fit=crop&q=85',
   },
   {
     id: 'banner-modern-campus',
-    label: 'Modern Study Workspace',
+    label: 'Executive Study Workspace',
     category: 'General',
-    url: 'https://images.unsplash.com/photo-1497633762265-9d179a990aa6?w=1000&h=250&fit=crop&q=85',
+    url: 'https://images.unsplash.com/photo-1497633762265-9d179a990aa6?w=1200&h=300&fit=crop&q=85',
   },
   {
     id: 'banner-biotech',
     label: 'Clinical & Microscope Study',
     category: 'Biology',
-    url: 'https://images.unsplash.com/photo-1579154204601-01588f351e67?w=1000&h=250&fit=crop&q=85',
+    url: 'https://images.unsplash.com/photo-1579154204601-01588f351e67?w=1200&h=300&fit=crop&q=85',
   },
 ];
 
 /**
  * Formats an uploaded image file to exact Google Classroom Header dimensions:
- * 1200 x 300 pixels (4:1 aspect ratio, high clarity on mobile & desktop retina screens)
+ * 960 x 240 pixels (4:1 aspect ratio, crisp clarity & compact size for instant Supabase cross-device sync)
  */
 export function resizeToGoogleClassroomBanner(
   file: File,
   verticalAlign: 'top' | 'center' | 'bottom' | 'contain' = 'center',
-  quality: number = 0.92
+  quality: number = 0.84
 ): Promise<string> {
-  const TARGET_WIDTH = 1200;
-  const TARGET_HEIGHT = 300;
+  const TARGET_WIDTH = 960;
+  const TARGET_HEIGHT = 240;
   const TARGET_RATIO = TARGET_WIDTH / TARGET_HEIGHT; // 4:1
 
   return new Promise((resolve, reject) => {
@@ -173,6 +173,7 @@ export const CourseBannerModal: React.FC<CourseBannerModalProps> = ({
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [cropAlign, setCropAlign] = useState<'top' | 'center' | 'bottom' | 'contain'>('center');
   const [customUrl, setCustomUrl] = useState<string>('');
+  const [applyToAllCourses, setApplyToAllCourses] = useState<boolean>(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -226,7 +227,7 @@ export const CourseBannerModal: React.FC<CourseBannerModalProps> = ({
 
   const handleSaveBanner = () => {
     if (!selectedBanner.trim()) return;
-    ClassroomDB.updateCourseBanner(course.id, selectedBanner);
+    ClassroomDB.updateCourseBanner(course.id, selectedBanner, applyToAllCourses);
     onSuccess();
     onClose();
   };
@@ -440,22 +441,34 @@ export const CourseBannerModal: React.FC<CourseBannerModalProps> = ({
         </div>
 
         {/* Modal Footer */}
-        <div className="px-6 py-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-850 flex items-center justify-end gap-2.5">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2 rounded-xl text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleSaveBanner}
-            className="flex items-center gap-1.5 px-5 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs transition-colors cursor-pointer"
-          >
-            <Check className="w-4 h-4" />
-            <span>Save Header Photo (သိမ်းဆည်းမည်)</span>
-          </button>
+        <div className="px-6 py-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-850 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={applyToAllCourses}
+              onChange={(e) => setApplyToAllCourses(e.target.checked)}
+              className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+            />
+            <span>အတန်းအားလုံး၏ Header ပုံကိုပါ တစ်ပြိုင်တည်း ပြောင်းမည် (Apply to all classrooms)</span>
+          </label>
+
+          <div className="flex items-center justify-end gap-2.5">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 rounded-xl text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveBanner}
+              className="flex items-center gap-1.5 px-5 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs transition-colors cursor-pointer"
+            >
+              <Check className="w-4 h-4" />
+              <span>Save Header Photo (သိမ်းဆည်းမည်)</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

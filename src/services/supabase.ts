@@ -343,22 +343,24 @@ DELETE FROM public.notifications WHERE course_id NOT IN (SELECT id FROM public.c
 const DEFAULT_FALLBACK_AVATAR =
   'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80';
 const DEFAULT_FALLBACK_BANNER =
-  'https://images.unsplash.com/photo-1517694712202-14dd9538aa97?w=1200&auto=format&fit=crop&q=80';
+  'https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=1200&h=300&fit=crop&q=85';
 
 /**
- * Strips base64 images & oversized strings (> 2.5KB) before sending to Supabase SQL
- * so the 500MB Free Plan database and 5GB monthly Egress Bandwidth stay ultra-lean.
- * Local storage retains high-res data:image/ URLs on the user's device.
+ * Compacts avatars & banners for Supabase SQL sync:
+ * - Students NEVER have profile photos (`''`).
+ * - Admin & Co-Admin compressed profile photos (including custom uploaded data:image/ URLs up to 180KB) sync across all devices.
+ * - Classroom header banners (including custom uploaded data:image/ URLs up to 220KB) sync across all devices.
  */
-function compactAvatarForCloud(avatar?: string): string {
+function compactAvatarForCloud(avatar?: string, role?: UserRole): string {
+  if (role === 'student') return '';
   if (!avatar) return DEFAULT_FALLBACK_AVATAR;
-  if (avatar.startsWith('data:') || avatar.length > 2500) return DEFAULT_FALLBACK_AVATAR;
+  if (avatar.length > 180_000) return DEFAULT_FALLBACK_AVATAR;
   return avatar;
 }
 
 function compactBannerForCloud(banner?: string): string {
-  if (!banner) return DEFAULT_FALLBACK_BANNER;
-  if (banner.startsWith('data:') || banner.length > 3500) return DEFAULT_FALLBACK_BANNER;
+  if (!banner || banner.startsWith('/src/assets/images/')) return DEFAULT_FALLBACK_BANNER;
+  if (banner.length > 220_000) return DEFAULT_FALLBACK_BANNER;
   return banner;
 }
 
@@ -524,15 +526,16 @@ export class SupabaseService {
       row.rules_accepted as boolean | null,
       row.rules_accepted_at as string | null
     );
+    const role = ((row.role as UserRole) || 'student');
     return {
       id: String(row.id || ''),
       name: String(row.name || 'User'),
       username: String(row.username || 'user'),
       email: String(row.email || ''),
       password: row.password ? String(row.password) : undefined,
-      role: (row.role as UserRole) || 'student',
+      role,
       phone: String(row.phone || ''),
-      avatar: String(row.avatar || ''),
+      avatar: role === 'student' ? '' : String(row.avatar || ''),
       title: decoded.title,
       gender: (row.gender as User['gender']) || undefined,
       address: row.address ? String(row.address) : undefined,
@@ -617,22 +620,34 @@ export class SupabaseService {
         return null;
       }
 
-      return data.map((row) => ({
-        id: row.id,
-        code: row.code,
-        title: row.title,
-        section: row.section,
-        batch: row.batch,
-        description: row.description || '',
-        instructorName: row.instructor_name,
-        instructorEmail: row.instructor_email,
-        bannerImage: row.banner_image || DEFAULT_FALLBACK_BANNER,
-        themeColor: (row.theme_color as Course['themeColor']) || 'indigo',
-        enrolledStudentIds: Array.isArray(row.enrolled_student_ids) ? row.enrolled_student_ids : [],
-        totalLessons: row.total_lessons ?? 0,
-        totalAssignments: row.total_assignments ?? 0,
-        totalQuizzes: row.total_quizzes ?? 0,
-      }));
+      return data.map((row) => {
+        const rawBanner = String(row.banner_image || '');
+        const resolvedBanner =
+          !rawBanner || rawBanner.startsWith('/src/assets/images/')
+            ? row.id === 'course-data-sci'
+              ? 'https://images.unsplash.com/photo-1509062522246-3755977927d7?w=1200&h=300&fit=crop&q=85'
+              : row.id === 'course-cyber-sec'
+              ? 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=1200&h=300&fit=crop&q=85'
+              : DEFAULT_FALLBACK_BANNER
+            : rawBanner;
+
+        return {
+          id: row.id,
+          code: row.code,
+          title: row.title,
+          section: row.section,
+          batch: row.batch,
+          description: row.description || '',
+          instructorName: row.instructor_name,
+          instructorEmail: row.instructor_email,
+          bannerImage: resolvedBanner,
+          themeColor: (row.theme_color as Course['themeColor']) || 'indigo',
+          enrolledStudentIds: Array.isArray(row.enrolled_student_ids) ? row.enrolled_student_ids : [],
+          totalLessons: row.total_lessons ?? 0,
+          totalAssignments: row.total_assignments ?? 0,
+          totalQuizzes: row.total_quizzes ?? 0,
+        };
+      });
     } catch {
       return null;
     }
@@ -663,20 +678,30 @@ export class SupabaseService {
 
       return data.map((row) => {
         const parsedMs = row.created_at ? new Date(row.created_at).getTime() : undefined;
+        const authorRole = ((row.author_role as UserRole) || 'admin');
+        const comments = Array.isArray(row.comments)
+          ? row.comments.map((cm: Record<string, unknown>) => ({
+              ...cm,
+              authorAvatar: cm.authorRole === 'student' ? '' : String(cm.authorAvatar || ''),
+            }))
+          : [];
         return {
           id: row.id,
           courseId: row.course_id,
           authorId: row.author_id || 'user-admin-1',
           authorName: row.author_name || 'Instructor',
-          authorRole: (row.author_role as UserRole) || 'admin',
-          authorAvatar: row.author_avatar || '',
+          authorRole,
+          authorAvatar: authorRole === 'student' ? '' : (row.author_avatar || ''),
           title: row.title || '',
           content: row.content || '',
           createdAt: row.created_at
-            ? new Date(row.created_at).toLocaleDateString('en-US', {
+            ? new Date(row.created_at).toLocaleString('en-US', {
                 month: 'short',
                 day: 'numeric',
                 year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: true,
               })
             : 'Recently',
           createdAtMs: parsedMs && !isNaN(parsedMs) ? parsedMs : undefined,
@@ -689,7 +714,7 @@ export class SupabaseService {
           pinOrder: row.pin_order ?? undefined,
           attachments: Array.isArray(row.attachments) ? row.attachments : [],
           likes: Array.isArray(row.likes) ? row.likes : [],
-          comments: Array.isArray(row.comments) ? row.comments : [],
+          comments: comments as CoursePost['comments'],
         };
       });
     } catch {
@@ -1009,7 +1034,7 @@ export class SupabaseService {
     user: User,
     mode: 'full' | 'no_password' | 'core'
   ): Record<string, unknown> {
-    const safeAvatar = compactAvatarForCloud(user.avatar);
+    const safeAvatar = compactAvatarForCloud(user.avatar, user.role);
     const nowIso = new Date().toISOString();
     const encodedTitle = encodeTitleWithRules(user);
 
@@ -1236,14 +1261,14 @@ export class SupabaseService {
           : att.url,
     }));
 
-    // Keep latest 50 comments max in Supabase row and strip base64 avatars
+    // Keep latest 50 comments max in Supabase row and strip student avatars
     const safeComments = (post.comments || []).slice(-50).map((c) => ({
       id: c.id,
       postId: c.postId,
       authorId: c.authorId,
       authorName: c.authorName,
       authorRole: c.authorRole,
-      authorAvatar: compactAvatarForCloud(c.authorAvatar),
+      authorAvatar: compactAvatarForCloud(c.authorAvatar, c.authorRole),
       content: (c.content || '').slice(0, 1000),
       createdAt: c.createdAt,
     }));
@@ -1262,7 +1287,7 @@ export class SupabaseService {
       author_id: post.authorId,
       author_name: post.authorName,
       author_role: post.authorRole,
-      author_avatar: compactAvatarForCloud(post.authorAvatar),
+      author_avatar: compactAvatarForCloud(post.authorAvatar, post.authorRole),
       title: post.title,
       content: post.content,
       post_type: post.postType,

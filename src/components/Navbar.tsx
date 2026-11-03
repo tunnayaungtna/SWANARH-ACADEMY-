@@ -343,15 +343,17 @@ export const Navbar: React.FC<NavbarProps> = ({
                 setShowUserDropdown(!showUserDropdown);
                 setShowNotifications(false);
               }}
-              className="neu-btn flex items-center gap-2 p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl cursor-pointer"
+              className="neu-btn flex items-center gap-2 px-2.5 py-1.5 rounded-xl cursor-pointer"
             >
-              <img
-                src={currentUser.avatar}
-                alt={currentUser.name}
-                referrerPolicy="no-referrer"
-                className="w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover shrink-0 ring-2 ring-white/80 dark:ring-slate-700"
-              />
-              <div className="hidden sm:block text-left pr-1 max-w-[150px] md:max-w-[190px]">
+              {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && currentUser.avatar && (
+                <img
+                  src={currentUser.avatar}
+                  alt={currentUser.name}
+                  referrerPolicy="no-referrer"
+                  className="w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover shrink-0 ring-2 ring-white/80 dark:ring-slate-700"
+                />
+              )}
+              <div className="text-left pr-1 max-w-[130px] sm:max-w-[160px] md:max-w-[190px]">
                 <div className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate flex items-center gap-1">
                   <span className="truncate">{currentUser.name}</span>
                 </div>
@@ -373,12 +375,14 @@ export const Navbar: React.FC<NavbarProps> = ({
             {showUserDropdown && (
               <div className="neu-card absolute right-0 mt-3 w-72 sm:w-80 rounded-2xl p-3 z-50 space-y-2">
                 <div className="neu-inset-sm p-3 rounded-xl flex items-center gap-3">
-                  <img
-                    src={currentUser.avatar}
-                    alt={currentUser.name}
-                    referrerPolicy="no-referrer"
-                    className="w-10 h-10 rounded-full object-cover shrink-0 ring-2 ring-white/80 dark:ring-slate-700"
-                  />
+                  {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && currentUser.avatar && (
+                    <img
+                      src={currentUser.avatar}
+                      alt={currentUser.name}
+                      referrerPolicy="no-referrer"
+                      className="w-10 h-10 rounded-full object-cover shrink-0 ring-2 ring-white/80 dark:ring-slate-700"
+                    />
+                  )}
                   <div className="min-w-0 flex-1">
                     <div className="text-xs font-extrabold text-slate-900 dark:text-slate-100 truncate">
                       {currentUser.name}
@@ -469,12 +473,14 @@ export const Navbar: React.FC<NavbarProps> = ({
         <div className="lg:hidden max-w-7xl mx-auto mt-2 neu-card rounded-2xl px-4 py-3.5 space-y-2.5 animate-in slide-in-from-top-2 duration-150">
           <div className="p-3 rounded-xl neu-inset-sm mb-2 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <img
-                src={currentUser.avatar}
-                alt={currentUser.name}
-                referrerPolicy="no-referrer"
-                className="w-8 h-8 rounded-full object-cover"
-              />
+              {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && currentUser.avatar && (
+                <img
+                  src={currentUser.avatar}
+                  alt={currentUser.name}
+                  referrerPolicy="no-referrer"
+                  className="w-8 h-8 rounded-full object-cover"
+                />
+              )}
               <div>
                 <div className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5 flex-wrap">
                   <span>{currentUser.name}</span>

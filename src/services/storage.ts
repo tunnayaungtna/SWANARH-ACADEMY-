@@ -50,6 +50,7 @@ const STORAGE_KEYS = {
   RECENT_WRITES: 'classroom_os_recent_writes_v1',
   CLOUD_SYNCED: 'classroom_os_cloud_synced_v1',
   KICK_REASON: 'classroom_os_kick_reason_v1',
+  NOTIFIED_POST_IDS: 'classroom_os_notified_post_ids_v1',
 };
 
 // Rate limiting in-memory / storage tracker
@@ -219,20 +220,65 @@ export class ClassroomDB {
     if (!localStorage.getItem(STORAGE_KEYS.USERS)) {
       this.setItem(
         STORAGE_KEYS.USERS,
-        INITIAL_USERS.filter((u) => !deletedSet.has(u.id))
+        INITIAL_USERS.filter((u) => !deletedSet.has(u.id)).map((u) =>
+          u.role === 'student' ? { ...u, avatar: '' } : u
+        )
       );
+    } else {
+      // Ensure existing local student accounts never retain any profile photo
+      const existingUsers = this.getItem<User[]>(STORAGE_KEYS.USERS, []);
+      let usersChanged = false;
+      const sanitizedUsers = existingUsers.map((u) => {
+        if (u.role === 'student' && u.avatar) {
+          usersChanged = true;
+          return { ...u, avatar: '' };
+        }
+        return u;
+      });
+      if (usersChanged) {
+        this.setItem(STORAGE_KEYS.USERS, sanitizedUsers);
+      }
     }
     if (!localStorage.getItem(STORAGE_KEYS.COURSES)) {
       this.setItem(
         STORAGE_KEYS.COURSES,
         isCloudSynced ? [] : INITIAL_COURSES.filter((c) => !deletedSet.has(c.id))
       );
+    } else {
+      // Upgrade any legacy local /src/assets/images/ banner paths to the new classroom header photos
+      const existingCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, []);
+      let coursesChanged = false;
+      const upgradedCourses = existingCourses.map((c) => {
+        if (!c.bannerImage || c.bannerImage.startsWith('/src/assets/images/')) {
+          coursesChanged = true;
+          const nextBanner =
+            c.id === 'course-data-sci'
+              ? 'https://images.unsplash.com/photo-1509062522246-3755977927d7?w=1200&h=300&fit=crop&q=85'
+              : c.id === 'course-cyber-sec'
+              ? 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=1200&h=300&fit=crop&q=85'
+              : 'https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=1200&h=300&fit=crop&q=85';
+          return { ...c, bannerImage: nextBanner };
+        }
+        return c;
+      });
+      if (coursesChanged) {
+        this.setItem(STORAGE_KEYS.COURSES, upgradedCourses);
+      }
     }
     if (!localStorage.getItem(STORAGE_KEYS.POSTS)) {
       this.setItem(
         STORAGE_KEYS.POSTS,
         isCloudSynced ? [] : INITIAL_POSTS.filter((p) => !deletedSet.has(p.id))
       );
+    } else {
+      // Remove legacy demo scheduled post-103 if present so it never loops notifications
+      const existingPosts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, []);
+      if (existingPosts.some((p) => p.id === 'post-103')) {
+        this.setItem(
+          STORAGE_KEYS.POSTS,
+          existingPosts.filter((p) => p.id !== 'post-103')
+        );
+      }
     }
     if (!localStorage.getItem(STORAGE_KEYS.ASSIGNMENTS)) {
       this.setItem(
@@ -399,12 +445,14 @@ export class ClassroomDB {
     localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
     localStorage.removeItem(STORAGE_KEYS.SESSION_TOKEN);
 
-    if (storedUser) {
+    // Only mark activeDeviceId as LOGGED_OUT for student accounts (since Admin/Co-Admin can be active on multiple devices simultaneously)
+    if (storedUser && storedUser.role === 'student') {
       const allUsers = this.getAllUsers();
       const idx = allUsers.findIndex((u) => u.id === storedUser.id);
       const baseUser = idx >= 0 ? allUsers[idx] : storedUser;
       const unlockedUser: User = {
         ...baseUser,
+        avatar: '',
         activeDeviceId: 'LOGGED_OUT',
         activeSessionToken: '',
         sessionUpdatedAtMs: Date.now(),
@@ -515,8 +563,10 @@ export class ClassroomDB {
     const localDeviceId = this.getDeviceId();
     const activeDev = matched.activeDeviceId || '';
 
-    // Enforce Single-Device Policy (1 Account = 1 Device Only)
+    // Enforce Single-Device Policy (1 Account = 1 Device Only) STRICTLY FOR STUDENTS ONLY.
+    // Admin and Co-Admin accounts are allowed to log in on multiple devices simultaneously.
     if (
+      matched.role === 'student' &&
       activeDev &&
       activeDev !== 'LOGGED_OUT' &&
       activeDev !== localDeviceId &&
@@ -526,16 +576,21 @@ export class ClassroomDB {
         user: null,
         deviceLocked: true,
         error:
-          'ဤအကောင့်သည် အခြားစက် (Device) တစ်ခုတွင် လက်ရှိ Login ဝင်ရောက်သုံးစွဲနေပါသည်။ အကောင့်တစ်ခုလျှင် စက်တစ်ခုတည်းသာ (1 Account = 1 Device Only) အသုံးပြုခွင့်ရှိပါသည်။ ပထမစက်မှ Logout အရင်ထွက်ပေးပါ သို့မဟုတ် အောက်ပါခလုတ်ဖြင့် အခြားစက်မှ အကောင့်ထွက်ပြီး ဤစက်တွင် ပြောင်းလဲဝင်ရောက်ပါ။',
+          'ဤကျောင်းသားအကောင့်သည် အခြားစက် (Device) တစ်ခုတွင် လက်ရှိ Login ဝင်ရောက်သုံးစွဲနေပါသည်။ ကျောင်းသားအကောင့်တစ်ခုလျှင် စက်တစ်ခုတည်းသာ (1 Student Account = 1 Device Only) အသုံးပြုခွင့်ရှိပါသည်။ ပထမစက်မှ Logout အရင်ထွက်ပေးပါ သို့မဟုတ် အောက်ပါခလုတ်ဖြင့် အခြားစက်မှ အကောင့်ထွက်ပြီး ဤစက်တွင် ပြောင်းလဲဝင်ရောက်ပါ။',
       };
     }
 
     const sessionToken = this.generateAndSaveSessionToken();
     const stampedUser: User = {
       ...matched,
-      activeDeviceId: localDeviceId,
-      activeSessionToken: sessionToken,
-      sessionUpdatedAtMs: Date.now(),
+      avatar: matched.role === 'student' ? '' : matched.avatar,
+      ...(matched.role === 'student'
+        ? {
+            activeDeviceId: localDeviceId,
+            activeSessionToken: sessionToken,
+            sessionUpdatedAtMs: Date.now(),
+          }
+        : {}),
     };
 
     const allUsers = this.getAllUsers();
@@ -547,10 +602,12 @@ export class ClassroomDB {
 
     this.markLocalWrite(stampedUser.id);
     this.setCurrentUser(stampedUser);
-    try {
-      SupabaseService.upsertProfile(stampedUser).catch(() => {});
-    } catch {
-      // ignore
+    if (stampedUser.role === 'student') {
+      try {
+        SupabaseService.upsertProfile(stampedUser).catch(() => {});
+      } catch {
+        // ignore
+      }
     }
 
     return { user: stampedUser };
@@ -626,7 +683,8 @@ export class ClassroomDB {
   }
 
   static getAllUsers(): User[] {
-    return this.getItem<User[]>(STORAGE_KEYS.USERS, INITIAL_USERS);
+    const users = this.getItem<User[]>(STORAGE_KEYS.USERS, INITIAL_USERS);
+    return users.map((u) => (u.role === 'student' && u.avatar ? { ...u, avatar: '' } : u));
   }
 
   static registerNewUser(data: {
@@ -674,7 +732,7 @@ export class ClassroomDB {
       };
     }
 
-    // Curated high quality avatars if none provided
+    // Curated high quality avatars for Admin & Co-Admin only (Students never have profile photos)
     const avatarPool = [
       'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
       'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
@@ -683,7 +741,10 @@ export class ClassroomDB {
       'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
       'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80',
     ];
-    const finalAvatar = data.avatar?.trim() || avatarPool[users.length % avatarPool.length];
+    const finalAvatar =
+      data.role === 'student'
+        ? ''
+        : data.avatar?.trim() || avatarPool[users.length % avatarPool.length];
 
     const newUser: User = {
       id: `user-${data.role}-${Date.now()}`,
@@ -763,12 +824,52 @@ export class ClassroomDB {
     }
 
     users[userIndex].avatar = avatarUrl;
+    this.markLocalWrite(userId);
     this.setItem(STORAGE_KEYS.USERS, users);
 
     const currentLogged = this.getCurrentUser();
     if (currentLogged && currentLogged.id === userId) {
       currentLogged.avatar = avatarUrl;
       this.setCurrentUser(currentLogged);
+    }
+
+    // Immediately propagate the new Admin/Co-Admin profile picture to all their authored posts & comments
+    const posts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS);
+    const updatedPostsToSync: CoursePost[] = [];
+    let postsChanged = false;
+    const nextPosts = posts.map((p) => {
+      let postModified = false;
+      let nextAuthorAvatar = p.authorAvatar;
+      if (p.authorId === userId && p.authorAvatar !== avatarUrl) {
+        nextAuthorAvatar = avatarUrl;
+        postModified = true;
+      }
+      const nextComments = (p.comments || []).map((c) => {
+        if (c.authorId === userId && c.authorAvatar !== avatarUrl) {
+          postModified = true;
+          return { ...c, authorAvatar: avatarUrl };
+        }
+        return c;
+      });
+      if (postModified) {
+        postsChanged = true;
+        const updatedPost = { ...p, authorAvatar: nextAuthorAvatar, comments: nextComments };
+        updatedPostsToSync.push(updatedPost);
+        return updatedPost;
+      }
+      return p;
+    });
+
+    if (postsChanged) {
+      this.setItem(STORAGE_KEYS.POSTS, nextPosts);
+      updatedPostsToSync.forEach((up) => {
+        this.markLocalWrite(up.id);
+        try {
+          SupabaseService.upsertPost(up).catch(() => {});
+        } catch {
+          // ignore
+        }
+      });
     }
 
     try {
@@ -1080,7 +1181,11 @@ export class ClassroomDB {
     return course;
   }
 
-  static updateCourseBanner(courseId: string, bannerImage: string): Course | null {
+  static updateCourseBanner(
+    courseId: string,
+    bannerImage: string,
+    applyToAllCourses: boolean = false
+  ): Course | null {
     const currentLogged = this.getCurrentUser();
     if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
       return null;
@@ -1091,24 +1196,32 @@ export class ClassroomDB {
     }
     const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
     let updatedCourse: Course | null = null;
+    const coursesToSync: Course[] = [];
     const updated = courses.map((c) => {
-      if (c.id === courseId) {
-        updatedCourse = {
+      if (applyToAllCourses || c.id === courseId) {
+        const nextCourse: Course = {
           ...c,
           bannerImage: cleanBanner,
         };
-        return updatedCourse;
+        if (c.id === courseId) {
+          updatedCourse = nextCourse;
+        }
+        this.markLocalWrite(nextCourse.id);
+        coursesToSync.push(nextCourse);
+        return nextCourse;
       }
       return c;
     });
 
-    if (updatedCourse) {
+    if (coursesToSync.length > 0) {
       this.setItem(STORAGE_KEYS.COURSES, updated);
-      try {
-        SupabaseService.upsertCourse(updatedCourse).catch(() => {});
-      } catch {
-        // ignore
-      }
+      coursesToSync.forEach((c) => {
+        try {
+          SupabaseService.upsertCourse(c).catch(() => {});
+        } catch {
+          // ignore
+        }
+      });
     }
     return updatedCourse;
   }
@@ -1471,43 +1584,65 @@ export class ClassroomDB {
     return undefined;
   }
 
+  static formatPostTimestamp(ms: number): string {
+    try {
+      return new Date(ms).toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      });
+    } catch {
+      return 'Just now';
+    }
+  }
+
   /**
    * Computes a deterministic numeric sort timestamp for any CoursePost so that
    * newly created posts ALWAYS appear at the very top (#1 spot) of the classroom stream.
    */
   static getPostSortTimestamp(post: CoursePost): number {
     if (!post) return 0;
-    const idTs = this.extractTimestampFromId(post.id);
-    if (typeof post.createdAtMs === 'number' && Number.isFinite(post.createdAtMs) && post.createdAtMs > 0) {
-      // If it's a real user post with a 13-digit timestamp in the ID, use the higher of the two
-      return idTs ? Math.max(post.createdAtMs, idTs) : post.createdAtMs;
-    }
-    if (idTs) {
-      return idTs;
-    }
-    // Initial demo posts (post-100, post-101, etc.) get a historical baseline (2024-01-01)
+    const now = Date.now();
+    // Initial demo posts (post-100, post-101, etc.) get a fixed historical baseline (Jan 2024)
     // so any new post created by Admin or Co-Admin is ALWAYS sorted above demo posts
     if (/^post-\d{3}$/.test(post.id || '')) {
       const num = Number((post.id || '').replace('post-', '')) || 0;
       return 1_704_067_200_000 + num;
     }
-    if (post.createdAt === 'Just now') {
-      return Date.now();
-    }
-    if (post.createdAt && post.createdAt !== 'Recently') {
+
+    const idTs = this.extractTimestampFromId(post.id);
+    let rawTs = 0;
+    if (typeof post.createdAtMs === 'number' && Number.isFinite(post.createdAtMs) && post.createdAtMs > 0) {
+      rawTs = idTs ? Math.max(post.createdAtMs, idTs) : post.createdAtMs;
+    } else if (idTs) {
+      rawTs = idTs;
+    } else if (post.createdAt === 'Just now') {
+      rawTs = now;
+    } else if (post.createdAt && post.createdAt !== 'Recently') {
       const cleaned = post.createdAt.split('·')[0].replace('Scheduled for', '').trim();
       const parsed = Date.parse(cleaned);
       if (!isNaN(parsed) && parsed > 0) {
-        return parsed;
+        rawTs = parsed;
       }
     }
-    return 0;
+
+    // Guard against simulated future clock timestamps (e.g., from AI Studio preview 2026 clock)
+    // so that real-world posts created on user devices (Date.now()) ALWAYS sort at #1 top spot!
+    if (rawTs > now + 120_000 && !this.isRecentLocalWrite(post.id)) {
+      return 1_705_000_000_000 + (rawTs % 86_400_000);
+    }
+
+    return rawTs;
   }
 
   /**
    * Supabase High-Speed Authoritative Sync:
-   * - Enforces Single-Device Session Lock (1 Account = 1 Device Only) across all devices
+   * - Enforces Single-Device Session Lock (1 Student Account = 1 Device Only) for students while allowing multi-device for Admin & Co-Admin
    * - Reconciles remote deletions authoritatively so classrooms/posts/users deleted on one device disappear on all devices immediately
+   * - Immediately syncs Admin/Co-Admin profile picture changes and Classroom header photo changes across all devices
    * - Sorts classroom stream posts strictly newest-first
    * - Automatically purges notifications older than 30 minutes from both local storage & Supabase
    */
@@ -1541,7 +1676,6 @@ export class ClassroomDB {
 
     if (this.activePullPromise) {
       if (force) {
-        // Wait for current pull to finish, then run forced pull if needed
         try {
           await this.activePullPromise;
         } catch {
@@ -1583,15 +1717,18 @@ export class ClassroomDB {
           remoteProfiles.forEach((ru) => {
             if (deletedSet.has(ru.id)) return;
             const existing = userMap.get(ru.id);
+            const resolvedAvatar =
+              ru.role === 'student'
+                ? ''
+                : this.isRecentLocalWrite(ru.id)
+                ? existing?.avatar || ru.avatar || ''
+                : ru.avatar || existing?.avatar || '';
             userMap.set(ru.id, {
               ...existing,
               ...ru,
               rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
               rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
-              avatar:
-                existing?.avatar && existing.avatar.startsWith('data:image/') && !ru.avatar?.startsWith('data:image/')
-                  ? existing.avatar
-                  : ru.avatar || existing?.avatar || '',
+              avatar: resolvedAvatar,
               password:
                 ru.password ||
                 existing?.password ||
@@ -1665,7 +1802,8 @@ export class ClassroomDB {
           hasRemoteCatalogData ||
           localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) === 'true';
 
-        // 1. Reconcile Profiles & Verify Single-Device Session Lock (1 Account = 1 Device Only)
+        // 1. Reconcile Profiles & Verify Single-Device Session Lock (Students Only)
+        const latestAvatarByUserId = new Map<string, string>();
         if (remoteProfiles && remoteProfiles.length > 0) {
           const remoteProfileIds = new Set(remoteProfiles.map((ru) => ru.id));
           const localUsers = this.getAllUsers().filter((u) => !deletedSet.has(u.id));
@@ -1690,7 +1828,13 @@ export class ClassroomDB {
               return;
             }
             const existing = userMap.get(ru.id);
-            userMap.set(ru.id, {
+            const resolvedAvatar =
+              ru.role === 'student'
+                ? ''
+                : this.isRecentLocalWrite(ru.id)
+                ? existing?.avatar || ru.avatar || ''
+                : ru.avatar || existing?.avatar || '';
+            const mergedProfile: User = {
               ...existing,
               ...ru,
               activeDeviceId: ru.activeDeviceId,
@@ -1698,24 +1842,33 @@ export class ClassroomDB {
               sessionUpdatedAtMs: ru.sessionUpdatedAtMs,
               rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
               rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
-              avatar:
-                existing?.avatar && existing.avatar.startsWith('data:image/') && !ru.avatar?.startsWith('data:image/')
-                  ? existing.avatar
-                  : ru.avatar || existing?.avatar || '',
+              avatar: resolvedAvatar,
               password:
                 ru.password ||
                 existing?.password ||
                 (ru.role === 'admin' ? 'admin123' : ru.role === 'co_admin' ? 'coadmin123' : 'student123'),
-            });
+            };
+            userMap.set(ru.id, mergedProfile);
+            latestAvatarByUserId.set(ru.id, resolvedAvatar);
           });
           const merged = Array.from(userMap.values());
           if (JSON.stringify(merged) !== prevJson) {
             this.setItem(STORAGE_KEYS.USERS, merged);
+            if (loggedUser && userMap.has(loggedUser.id)) {
+              this.setCurrentUser(userMap.get(loggedUser.id)!);
+            }
             updated = true;
           }
+        } else {
+          this.getAllUsers().forEach((u) => {
+            latestAvatarByUserId.set(u.id, u.role === 'student' ? '' : u.avatar || '');
+          });
         }
 
-        // Single-Device Session Verification for currently logged-in user
+        // Single-Device Session Verification:
+        // - Deleted accounts are logged out for any role.
+        // - Single-Device Lock (1 Account = 1 Device Only) is enforced STRICTLY for 'student' accounts only!
+        // - Admin and Co-Admin accounts can stay logged in on multiple devices simultaneously.
         if (loggedUser) {
           const remoteUserForSession =
             (remoteProfiles && remoteProfiles.find((ru) => ru.id === loggedUser.id)) ||
@@ -1731,18 +1884,19 @@ export class ClassroomDB {
               'သင်၏ အကောင့်သည် စနစ်မှ ဖယ်ရှားခံထားရသဖြင့် အလိုအလျောက် Logout ထွက်ပေးထားပါသည်။'
             );
             updated = true;
-          } else if (remoteUserForSession) {
+          } else if (remoteUserForSession && loggedUser.role === 'student') {
             const localDeviceId = this.getDeviceId();
             const remoteDevId = remoteUserForSession.activeDeviceId || '';
 
             if (!remoteDevId) {
-              // Claim single-device lock for existing session
+              // Claim single-device lock for existing student session
               const token = this.getSessionToken() || this.generateAndSaveSessionToken();
               const allUsers = this.getAllUsers();
               const idx = allUsers.findIndex((u) => u.id === loggedUser.id);
               const fullUser = idx >= 0 ? allUsers[idx] : loggedUser;
               const claimedUser: User = {
                 ...fullUser,
+                avatar: '',
                 activeDeviceId: localDeviceId,
                 activeSessionToken: token,
                 sessionUpdatedAtMs: Date.now(),
@@ -1767,14 +1921,14 @@ export class ClassroomDB {
               !this.isRecentLocalWrite(loggedUser.id)
             ) {
               this.forceLocalLogoutWithReason(
-                'သင်၏ အကောင့်ကို အခြားစက် (Device) တစ်ခုတွင် Login ဝင်ရောက်သုံးစွဲနေသဖြင့် လုံခြုံရေးစည်းမျဉ်း (1 Account = 1 Device Only) အရ ဤစက်မှ အလိုအလျောက် ထွက်ပေးထားပါသည်။'
+                'သင်၏ ကျောင်းသားအကောင့်ကို အခြားစက် (Device) တစ်ခုတွင် Login ဝင်ရောက်သုံးစွဲနေသဖြင့် လုံခြုံရေးစည်းမျဉ်း (1 Student Account = 1 Device Only) အရ ဤစက်မှ အလိုအလျောက် ထွက်ပေးထားပါသည်။'
               );
               updated = true;
             }
           }
         }
 
-        // 2. Authoritative Courses Reconciliation (Deletions & Edits on any device reflect immediately)
+        // 2. Authoritative Courses Reconciliation (Deletions & Header Banner Edits on any device reflect immediately)
         if (remoteCourses !== null) {
           const remoteCourseIds = new Set(remoteCourses.map((rc) => rc.id));
           const localCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter(
@@ -1802,13 +1956,13 @@ export class ClassroomDB {
               return;
             }
             const existing = courseMap.get(rc.id);
+            const resolvedBanner = this.isRecentLocalWrite(rc.id)
+              ? existing?.bannerImage || rc.bannerImage || ''
+              : rc.bannerImage || existing?.bannerImage || '';
             courseMap.set(rc.id, {
               ...existing,
               ...rc,
-              bannerImage:
-                existing?.bannerImage && existing.bannerImage.startsWith('data:image/') && !rc.bannerImage?.startsWith('data:image/')
-                  ? existing.bannerImage
-                  : rc.bannerImage || existing?.bannerImage || '',
+              bannerImage: resolvedBanner,
             });
           });
           const merged = Array.from(courseMap.values());
@@ -1823,7 +1977,7 @@ export class ClassroomDB {
           const remotePostIds = new Set(remotePosts.map((rp) => rp.id));
           const scopedCourseSet = studentScopedCourseIds ? new Set(studentScopedCourseIds) : null;
           const localPosts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS).filter(
-            (p) => !deletedSet.has(p.id) && !deletedSet.has(p.courseId)
+            (p) => p.id !== 'post-103' && !deletedSet.has(p.id) && !deletedSet.has(p.courseId)
           );
           const prevJson = JSON.stringify(localPosts);
           const postMap = new Map<string, CoursePost>();
@@ -1839,10 +1993,8 @@ export class ClassroomDB {
             }
           });
 
-          const newlyPublishedRemotePosts: CoursePost[] = [];
-
           remotePosts.forEach((rp) => {
-            if (deletedSet.has(rp.id) || deletedSet.has(rp.courseId)) {
+            if (rp.id === 'post-103' || deletedSet.has(rp.id) || deletedSet.has(rp.courseId)) {
               if (!this.purgedRemoteIds.has(rp.id)) {
                 this.purgedRemoteIds.add(rp.id);
                 SupabaseService.deletePost(rp.id).catch(() => {});
@@ -1850,32 +2002,46 @@ export class ClassroomDB {
               return;
             }
             const existing = postMap.get(rp.id);
-            const isNowPublished = !rp.status || rp.status === 'published';
-            const wasPreviouslyUnpublished = !existing || existing.status === 'scheduled';
-            const postTimestampMs =
+            const idTs = this.extractTimestampFromId(rp.id);
+            let postTimestampMs =
+              idTs ||
               rp.createdAtMs ||
-              existing?.createdAtMs ||
-              this.extractTimestampFromId(rp.id);
-            const isWithin30Mins =
-              postTimestampMs !== undefined ? Date.now() - postTimestampMs < NOTIFICATION_TTL_MS : false;
+              existing?.createdAtMs;
 
-            if (
-              isNowPublished &&
-              wasPreviouslyUnpublished &&
-              isWithin30Mins &&
-              (rp.authorRole === 'admin' || rp.authorRole === 'co_admin')
-            ) {
-              newlyPublishedRemotePosts.push({
-                ...rp,
-                createdAtMs: postTimestampMs,
-              });
+            // Clamp future simulated timestamps from AI Studio preview (Nov 2026) so real posts always stay on top
+            if (postTimestampMs && postTimestampMs > Date.now() + 120_000 && !this.isRecentLocalWrite(rp.id)) {
+              postTimestampMs = 1_705_000_000_000 + (postTimestampMs % 86_400_000);
             }
+
+            const formattedTime =
+              rp.status === 'scheduled'
+                ? rp.createdAt
+                : postTimestampMs
+                ? this.formatPostTimestamp(postTimestampMs)
+                : rp.createdAt || existing?.createdAt || 'Recently';
+
+            const liveAuthorAvatar =
+              rp.authorRole === 'student'
+                ? ''
+                : latestAvatarByUserId.get(rp.authorId) || rp.authorAvatar || existing?.authorAvatar || '';
+
+            const syncedComments = (rp.comments && rp.comments.length > 0 ? rp.comments : existing?.comments || []).map(
+              (cm) => ({
+                ...cm,
+                authorAvatar:
+                  cm.authorRole === 'student'
+                    ? ''
+                    : latestAvatarByUserId.get(cm.authorId) || cm.authorAvatar || '',
+              })
+            );
 
             postMap.set(rp.id, {
               ...existing,
               ...rp,
-              createdAt: existing?.createdAt || rp.createdAt,
+              authorAvatar: liveAuthorAvatar,
+              createdAt: formattedTime,
               createdAtMs: postTimestampMs,
+              comments: syncedComments,
               attachments:
                 rp.attachments && rp.attachments.length > 0
                   ? rp.attachments.map((att, idx) => {
@@ -1896,22 +2062,6 @@ export class ClassroomDB {
           if (JSON.stringify(merged) !== prevJson) {
             this.setItem(STORAGE_KEYS.POSTS, merged);
             updated = true;
-          }
-
-          if (newlyPublishedRemotePosts.length > 0) {
-            const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
-            newlyPublishedRemotePosts.forEach((np) => {
-              const targetCourse = allCourses.find((c) => c.id === np.courseId);
-              if (targetCourse) {
-                this.notifyEnrolledStudentsOfCoursePost(
-                  targetCourse,
-                  np,
-                  np.authorName,
-                  np.authorRole
-                );
-                updated = true;
-              }
-            });
           }
         }
 
@@ -2092,8 +2242,10 @@ export class ClassroomDB {
           const released: CoursePost = {
             ...post,
             status: 'published' as const,
-            createdAt: 'Just now',
+            createdAt: this.formatPostTimestamp(now),
             createdAtMs: now,
+            scheduledFor: undefined,
+            scheduledForDisplay: undefined,
           };
           autoPublishedList.push(released);
           return released;
@@ -2106,6 +2258,12 @@ export class ClassroomDB {
       this.setItem(STORAGE_KEYS.POSTS, processedPosts);
       const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
       autoPublishedList.forEach((ap) => {
+        this.markLocalWrite(ap.id);
+        try {
+          SupabaseService.upsertPost(ap).catch(() => {});
+        } catch {
+          // ignore
+        }
         const targetCourse = allCourses.find((c) => c.id === ap.courseId);
         if (targetCourse && (ap.authorRole === 'admin' || ap.authorRole === 'co_admin')) {
           this.notifyEnrolledStudentsOfCoursePost(
@@ -2166,12 +2324,13 @@ export class ClassroomDB {
     const nowMs = Date.now();
     const newPost: CoursePost = {
       ...postData,
+      authorAvatar: currentUser.role === 'student' ? '' : currentUser.avatar || postData.authorAvatar,
       isPinned,
       status: isScheduled ? 'scheduled' : 'published',
       id: `post-${nowMs}`,
       createdAt: isScheduled
         ? `Scheduled for ${postData.scheduledForDisplay || 'upcoming'}`
-        : 'Just now',
+        : this.formatPostTimestamp(nowMs),
       createdAtMs: nowMs,
       likes: [],
       comments: [],
@@ -2346,7 +2505,7 @@ export class ClassroomDB {
         publishedPost = {
           ...p,
           status: 'published' as const,
-          createdAt: 'Just now',
+          createdAt: this.formatPostTimestamp(nowMs),
           createdAtMs: nowMs,
           scheduledFor: undefined,
           scheduledForDisplay: undefined,
@@ -2356,8 +2515,12 @@ export class ClassroomDB {
       return p;
     });
 
-    this.setItem(STORAGE_KEYS.POSTS, updated);
+    const sortedUpdated = [...updated].sort(
+      (a, b) => this.getPostSortTimestamp(b) - this.getPostSortTimestamp(a)
+    );
+    this.setItem(STORAGE_KEYS.POSTS, sortedUpdated);
     if (publishedPost) {
+      this.markLocalWrite((publishedPost as CoursePost).id);
       try {
         SupabaseService.upsertPost(publishedPost).catch(() => {});
       } catch {
@@ -2483,15 +2646,16 @@ export class ClassroomDB {
       return { comment: null, error: access.error || 'Access denied.' };
     }
 
+    const nowMs = Date.now();
     const newComment: PostComment = {
-      id: `comm-${Date.now()}`,
+      id: `comm-${nowMs}`,
       postId,
       authorId: currentUser.id,
       authorName: currentUser.name,
       authorRole: currentUser.role,
-      authorAvatar: currentUser.avatar,
+      authorAvatar: currentUser.role === 'student' ? '' : currentUser.avatar,
       content: cleanContent,
-      createdAt: 'Just now',
+      createdAt: this.formatPostTimestamp(nowMs),
     };
 
     let updatedPost: CoursePost | null = null;
@@ -3718,6 +3882,14 @@ export class ClassroomDB {
       return 0;
     }
 
+    // Deduplicate by post.id so the same post can NEVER trigger notifications more than once
+    const notifiedPostIds = new Set(
+      this.getItem<string[]>(STORAGE_KEYS.NOTIFIED_POST_IDS, [])
+    );
+    if (notifiedPostIds.has(post.id)) {
+      return 0;
+    }
+
     this.purgeExpiredNotifications();
 
     const nowMs = Date.now();
@@ -3730,6 +3902,12 @@ export class ClassroomDB {
     if (nowMs - postCreatedMs >= NOTIFICATION_TTL_MS) {
       return 0;
     }
+
+    notifiedPostIds.add(post.id);
+    this.setItem(
+      STORAGE_KEYS.NOTIFIED_POST_IDS,
+      Array.from(notifiedPostIds).slice(-500)
+    );
 
     const expiresMs = postCreatedMs + NOTIFICATION_TTL_MS;
     const notifs = this.getItem<NotificationItem[]>(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
@@ -3753,12 +3931,7 @@ export class ClassroomDB {
         ? 'သင်ထောက်ကူဖိုင် (New Resource)'
         : 'ကြေညာချက်အသစ် (New Announcement)';
 
-    const timeLabel = new Date(postCreatedMs).toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
+    const timeLabel = this.formatPostTimestamp(postCreatedMs);
 
     const createdList: NotificationItem[] = [];
 
@@ -3768,7 +3941,7 @@ export class ClassroomDB {
       existingKeys.add(dedupeKey);
 
       createdList.push({
-        id: `notif-${postCreatedMs}-${studentId}-${Math.random().toString(36).slice(2, 6)}`,
+        id: `notif-post-${post.id}-${studentId}`,
         userId: studentId,
         courseId: course.id,
         courseCode: course.code,

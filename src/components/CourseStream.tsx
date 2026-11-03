@@ -74,6 +74,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   const [postDropdownOpen, setPostDropdownOpen] = useState(false);
   const [scheduledDateTime, setScheduledDateTime] = useState('');
   const [pinUponPublish, setPinUponPublish] = useState(false);
+  const [isSubmittingPost, setIsSubmittingPost] = useState(false);
 
   // Any-file upload attachments state
   const [attachedFiles, setAttachedFiles] = useState<Attachment[]>([]);
@@ -200,6 +201,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
 
   const handleCreatePost = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingPost) return;
     if (!postTitle.trim() || !postContent.trim()) return;
 
     if (publishMode === 'schedule' && !scheduledDateTime) {
@@ -214,65 +216,71 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
       return;
     }
 
-    let scheduledFor: string | undefined = undefined;
-    let scheduledForDisplay: string | undefined = undefined;
-    if (publishMode === 'schedule' && scheduledDateTime) {
-      const schedObj = new Date(scheduledDateTime);
-      scheduledFor = schedObj.toISOString();
-      scheduledForDisplay = schedObj.toLocaleString([], {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
+    setIsSubmittingPost(true);
+    try {
+      let scheduledFor: string | undefined = undefined;
+      let scheduledForDisplay: string | undefined = undefined;
+      if (publishMode === 'schedule' && scheduledDateTime) {
+        const schedObj = new Date(scheduledDateTime);
+        scheduledFor = schedObj.toISOString();
+        scheduledForDisplay = schedObj.toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true,
+        });
+      }
+
+      const res = ClassroomDB.addPost(
+        {
+          courseId: course.id,
+          authorId: currentUser.id,
+          authorName: currentUser.name,
+          authorRole: currentUser.role,
+          authorAvatar: currentUser.role === 'student' ? '' : currentUser.avatar,
+          title: postTitle.trim(),
+          content: postContent.trim(),
+          postType,
+          attachments: attachedFiles.length > 0 ? attachedFiles : undefined,
+          status: publishMode === 'schedule' ? 'scheduled' : 'published',
+          scheduledFor,
+          scheduledForDisplay,
+          isPinned: pinUponPublish,
+          pinOrder: pinUponPublish ? currentPinnedCount + 1 : undefined,
+          pinnedAt: pinUponPublish ? new Date().toISOString() : undefined,
+        },
+        currentUser
+      );
+
+      if (res.error) {
+        setRateLimitError(res.error);
+        setTimeout(() => setRateLimitError(null), 4000);
+        return;
+      }
+
+      // Reset composer
+      setPostTitle('');
+      setPostContent('');
+      setAttachedFiles([]);
+      setPublishMode('now');
+      setScheduledDateTime('');
+      setPinUponPublish(false);
+      setIsComposing(false);
+
+      const notifiedCount = res.notifiedCount ?? course.enrolledStudentIds.length;
+      setSuccessToast(
+        publishMode === 'schedule'
+          ? `Post အား ${scheduledForDisplay} တွင် တင်ရန် အချိန်သတ်မှတ်ပြီးပါပြီ! (သတ်မှတ်ချိန်ရောက်ပါက ကျောင်းသား ${course.enrolledStudentIds.length} ဦးထံ Notification ပို့ပေးပါမည်)`
+          : `🔔 Post အား Stream ထိပ်ဆုံးသို့ တင်ပြီး "${course.code}" အတန်းရှိ ကျောင်းသား (${notifiedCount}) ဦးအားလုံးထံ Notification ပေးပို့ပြီးပါပြီ!`
+      );
+      setTimeout(() => setSuccessToast(null), 4200);
+
+      onRefresh();
+    } finally {
+      setTimeout(() => setIsSubmittingPost(false), 400);
     }
-
-    const res = ClassroomDB.addPost(
-      {
-        courseId: course.id,
-        authorId: currentUser.id,
-        authorName: currentUser.name,
-        authorRole: currentUser.role,
-        authorAvatar: currentUser.avatar,
-        title: postTitle.trim(),
-        content: postContent.trim(),
-        postType,
-        attachments: attachedFiles.length > 0 ? attachedFiles : undefined,
-        status: publishMode === 'schedule' ? 'scheduled' : 'published',
-        scheduledFor,
-        scheduledForDisplay,
-        isPinned: pinUponPublish,
-        pinOrder: pinUponPublish ? currentPinnedCount + 1 : undefined,
-        pinnedAt: pinUponPublish ? new Date().toISOString() : undefined,
-      },
-      currentUser
-    );
-
-    if (res.error) {
-      setRateLimitError(res.error);
-      setTimeout(() => setRateLimitError(null), 4000);
-      return;
-    }
-
-    // Reset composer
-    setPostTitle('');
-    setPostContent('');
-    setAttachedFiles([]);
-    setPublishMode('now');
-    setScheduledDateTime('');
-    setPinUponPublish(false);
-    setIsComposing(false);
-
-    const notifiedCount = res.notifiedCount ?? course.enrolledStudentIds.length;
-    setSuccessToast(
-      publishMode === 'schedule'
-        ? `Post အား ${scheduledForDisplay} တွင် တင်ရန် အချိန်သတ်မှတ်ပြီးပါပြီ! (သတ်မှတ်ချိန်ရောက်ပါက ကျောင်းသား ${course.enrolledStudentIds.length} ဦးထံ Notification ပို့ပေးပါမည်)`
-        : `🔔 Post အား Stream ထဲသို့ တင်ပြီး "${course.code}" အတန်းရှိ ကျောင်းသား (${notifiedCount}) ဦးအားလုံးထံ Notification ပေးပို့ပြီးပါပြီ!`
-    );
-    setTimeout(() => setSuccessToast(null), 4200);
-
-    onRefresh();
   };
 
   const handleTogglePin = (postId: string) => {
@@ -1215,12 +1223,18 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                 <div className="p-3.5 sm:p-5 pb-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-2.5 sm:gap-3">
-                      <img
-                        src={post.authorAvatar}
-                        alt={post.authorName}
-                        referrerPolicy="no-referrer"
-                        className="w-8 h-8 sm:w-10 sm:h-10 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
-                      />
+                      {(post.authorRole === 'admin' || post.authorRole === 'co_admin') && (
+                        <img
+                          src={
+                            userByIdMap.get(post.authorId)?.avatar ||
+                            post.authorAvatar ||
+                            'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'
+                          }
+                          alt={post.authorName}
+                          referrerPolicy="no-referrer"
+                          className="w-8 h-8 sm:w-10 sm:h-10 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+                        />
+                      )}
                       <div>
                         <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
                           <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100">
@@ -1467,22 +1481,31 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                           const canDeleteComment =
                             isInstructor || comm.authorId === currentUser.id;
                           const commentUser = userByIdMap.get(comm.authorId);
+                          const isCommentInstructor =
+                            comm.authorRole === 'admin' || comm.authorRole === 'co_admin';
+                          const commentAvatar = isCommentInstructor
+                            ? commentUser?.avatar ||
+                              comm.authorAvatar ||
+                              'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'
+                            : '';
                           return (
                             <div key={comm.id} className="flex items-start gap-2.5 text-xs">
-                              <img
-                                src={comm.authorAvatar}
-                                alt={comm.authorName}
-                                loading="lazy"
-                                referrerPolicy="no-referrer"
-                                className="w-7 h-7 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0 mt-0.5"
-                              />
+                              {isCommentInstructor && commentAvatar && (
+                                <img
+                                  src={commentAvatar}
+                                  alt={comm.authorName}
+                                  loading="lazy"
+                                  referrerPolicy="no-referrer"
+                                  className="w-7 h-7 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0 mt-0.5"
+                                />
+                              )}
                               <div className="flex-1 neu-raised-sm p-3 rounded-2xl">
                                 <div className="flex items-center justify-between gap-2">
                                   <div className="flex items-center gap-1.5 flex-wrap">
                                     <span className="font-bold text-slate-900 dark:text-slate-100">
                                       {comm.authorName}
                                     </span>
-                                    {(comm.authorRole === 'admin' || comm.authorRole === 'co_admin') ? (
+                                    {isCommentInstructor ? (
                                       <span className="text-[9px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded">
                                         Instructor
                                       </span>
@@ -1523,12 +1546,14 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
 
                     {/* Add Comment Input Form */}
                     <div className="flex items-center gap-2.5 pt-1">
-                      <img
-                        src={currentUser.avatar}
-                        alt={currentUser.name}
-                        referrerPolicy="no-referrer"
-                        className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
-                      />
+                      {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && currentUser.avatar && (
+                        <img
+                          src={currentUser.avatar}
+                          alt={currentUser.name}
+                          referrerPolicy="no-referrer"
+                          className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+                        />
+                      )}
                       <div className="flex-1 flex items-center gap-2">
                         <input
                           type="text"

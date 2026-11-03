@@ -595,13 +595,6 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                       className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/70 dark:hover:bg-slate-800/30 transition-colors"
                     >
                       <div className="flex items-center gap-3">
-                        <img
-                          src={stu.avatar}
-                          alt={stu.name}
-                          loading="lazy"
-                          referrerPolicy="no-referrer"
-                          className="w-9 h-9 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
-                        />
                         <div>
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
@@ -762,13 +755,6 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                       >
                         <td className="py-3.5 px-4">
                           <div className="flex items-center gap-2.5">
-                            <img
-                              src={stu.avatar}
-                              alt={stu.name}
-                              loading="lazy"
-                              referrerPolicy="no-referrer"
-                              className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-slate-700"
-                            />
                             <div>
                               <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5 flex-wrap">
                                 <span>{stu.name}</span>

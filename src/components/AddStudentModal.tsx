@@ -259,12 +259,6 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
                       className="p-3 flex items-center justify-between text-xs hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors"
                     >
                       <div className="flex items-center gap-3">
-                        <img
-                          src={student.avatar}
-                          alt={student.name}
-                          referrerPolicy="no-referrer"
-                          className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-slate-700"
-                        />
                         <div>
                           <div className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5 flex-wrap">
                             <span>{student.name}</span>

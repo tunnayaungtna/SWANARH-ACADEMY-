@@ -49,8 +49,8 @@ export const ProfilePictureModal: React.FC<ProfilePictureModalProps> = ({
     try {
       setIsProcessing(true);
       setErrorMessage(null);
-      // Auto-compress to clean square avatar
-      const compressedDataUri = await compressImageFile(file, 256, 0.88);
+      // Auto-compress to clean square avatar (~15KB) so it syncs instantaneously across all devices via Supabase
+      const compressedDataUri = await compressImageFile(file, 192, 0.84);
       setSelectedAvatar(compressedDataUri);
       setSuccessMessage('ဓာတ်ပုံ အောင်မြင်စွာ တင်ပြီးပါပြီ။');
       setTimeout(() => setSuccessMessage(null), 3000);
@@ -110,7 +110,7 @@ export const ProfilePictureModal: React.FC<ProfilePictureModalProps> = ({
                 Profile Picture (ပရိုဖိုင်ဓာတ်ပုံ)
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                {user.name} ({user.role === 'admin' ? 'Instructor/Admin' : 'Student'})
+                {user.name} ({user.role === 'admin' ? 'Instructor / Admin' : 'Co-Admin'})
               </p>
             </div>
           </div>

@@ -81,32 +81,46 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
           </span>
         </div>
 
-        <div className="mt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-3.5 rounded-2xl neu-inset-sm">
-          <div className="flex items-center gap-3">
-            <img
-              src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80"
-              alt={course.instructorName}
-              referrerPolicy="no-referrer"
-              className="w-11 h-11 rounded-full object-cover border border-slate-200 dark:border-slate-700"
-            />
-            <div>
-              <div className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                <span>{course.instructorName}</span>
-                <span className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-md">
-                  Lead Instructor
-                </span>
-              </div>
-              <span className="text-xs text-slate-500 dark:text-slate-400 font-mono">{course.instructorEmail}</span>
-            </div>
-          </div>
+        <div className="mt-4 space-y-3">
+          {allUsers
+            .filter((u) => u.role === 'admin' || u.role === 'co_admin')
+            .map((instructor) => (
+              <div
+                key={instructor.id}
+                className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-3.5 rounded-2xl neu-inset-sm"
+              >
+                <div className="flex items-center gap-3">
+                  <img
+                    src={
+                      instructor.avatar ||
+                      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'
+                    }
+                    alt={instructor.name}
+                    referrerPolicy="no-referrer"
+                    className="w-11 h-11 rounded-full object-cover border border-slate-200 dark:border-slate-700"
+                  />
+                  <div>
+                    <div className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2 flex-wrap">
+                      <span>{instructor.name}</span>
+                      <span className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-md">
+                        {instructor.role === 'admin' ? 'Lead Instructor (Admin)' : 'Co-Admin'}
+                      </span>
+                    </div>
+                    <span className="text-xs text-slate-500 dark:text-slate-400 font-mono">
+                      {instructor.email}
+                    </span>
+                  </div>
+                </div>
 
-          <a
-            href={`mailto:${course.instructorEmail}`}
-            className="self-start sm:self-auto flex items-center gap-1.5 px-3.5 py-2 neu-btn text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-xl transition-all"
-          >
-            <Mail className="w-3.5 h-3.5 text-indigo-500" />
-            <span>Email</span>
-          </a>
+                <a
+                  href={`mailto:${instructor.email}`}
+                  className="self-start sm:self-auto flex items-center gap-1.5 px-3.5 py-2 neu-btn text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-xl transition-all"
+                >
+                  <Mail className="w-3.5 h-3.5 text-indigo-500" />
+                  <span>Email</span>
+                </a>
+              </div>
+            ))}
         </div>
       </section>
 
@@ -189,20 +203,6 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
                   }`}
                 >
                   <div className="flex items-center gap-3 min-w-0">
-                    <img
-                      src={student.avatar}
-                      alt={student.name}
-                      referrerPolicy="no-referrer"
-                      className={`w-9 h-9 rounded-full object-cover shrink-0 ring-1 ${
-                        isSelf
-                          ? 'ring-indigo-500 ring-2'
-                          : 'ring-slate-200 dark:ring-slate-700'
-                      }`}
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src =
-                          'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80';
-                      }}
-                    />
                     <div className="min-w-0">
                       <div className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2 flex-wrap">
                         <span className="truncate">{student.name}</span>
