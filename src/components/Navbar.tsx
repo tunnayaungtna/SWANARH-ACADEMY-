@@ -37,6 +37,7 @@ interface NavbarProps {
   onOpenArchitecture: () => void;
   onOpenSecurity: () => void;
   onOpenStudentDirectory?: () => void;
+  onOpenAuditLog?: () => void;
   onOpenRules?: () => void;
   onResetData: () => void;
   onNavigateHome: () => void;
@@ -56,6 +57,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenArchitecture,
   onOpenSecurity,
   onOpenStudentDirectory,
+  onOpenAuditLog,
   onOpenRules,
   onResetData: _onResetData,
   onNavigateHome,
@@ -176,6 +178,15 @@ export const Navbar: React.FC<NavbarProps> = ({
                 >
                   <Users className="w-3.5 h-3.5" />
                   <span>Manage Users</span>
+                </button>
+              )}
+              {currentUser.role === 'admin' && onOpenAuditLog && (
+                <button
+                  onClick={onOpenAuditLog}
+                  className="text-amber-700 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5"
+                >
+                  <Shield className="w-3.5 h-3.5" />
+                  <span>Audit Log</span>
                 </button>
               )}
               <button
@@ -423,6 +434,19 @@ export const Navbar: React.FC<NavbarProps> = ({
                     </button>
                   )}
 
+                  {currentUser.role === 'admin' && onOpenAuditLog && (
+                    <button
+                      onClick={() => {
+                        setShowUserDropdown(false);
+                        onOpenAuditLog();
+                      }}
+                      className="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-amber-800 dark:text-amber-300 hover:bg-white/60 dark:hover:bg-slate-800/70 transition-colors cursor-pointer font-bold"
+                    >
+                      <Shield className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                      <span>Security Audit Log (လုပ်ဆောင်ချက် မှတ်တမ်း)</span>
+                    </button>
+                  )}
+
                   <button
                     onClick={() => {
                       setShowUserDropdown(false);
@@ -590,6 +614,19 @@ export const Navbar: React.FC<NavbarProps> = ({
               <Key className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
               <span>Change Password (စကားဝှက် ပြောင်းမည်)</span>
             </button>
+
+            {currentUser.role === 'admin' && onOpenAuditLog && (
+              <button
+                onClick={() => {
+                  onOpenAuditLog();
+                  setIsMobileMenuOpen(false);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-amber-800 dark:text-amber-300 bg-amber-50/70 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-left font-semibold cursor-pointer"
+              >
+                <Shield className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                <span>Security Audit Log (လုပ်ဆောင်ချက် မှတ်တမ်း)</span>
+              </button>
+            )}
 
             {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
               <button

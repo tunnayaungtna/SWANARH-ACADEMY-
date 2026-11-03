@@ -9,10 +9,13 @@ import {
   Quiz,
   AttendanceSession,
   NotificationItem,
+  AuditLogEntry,
 } from '../types/classroom';
 import { encryptPassword } from '../utils/passwordCrypto';
 
 export const NOTIFICATION_TTL_MS = 30 * 60 * 1000; // 30 minutes auto-delete window
+export const AUDIT_LOG_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days security audit retention window
+const AUDIT_LOG_SYSTEM_USER_ID = 'SYSTEM_AUDIT_LOG';
 
 // Supabase Project Credentials provided by user
 export const SUPABASE_CONFIG = {
@@ -926,6 +929,8 @@ export class SupabaseService {
 
       if (userId) {
         query = query.eq('user_id', userId);
+      } else {
+        query = query.neq('user_id', AUDIT_LOG_SYSTEM_USER_ID);
       }
 
       const { data, error } = await query;
@@ -1047,6 +1052,7 @@ export class SupabaseService {
         const { error } = await supabase
           .from('notifications')
           .delete()
+          .neq('user_id', AUDIT_LOG_SYSTEM_USER_ID)
           .or(`created_at.lt.${cutoffIso},expires_at.lte.${nowIso}`);
 
         if (error) {
@@ -1074,10 +1080,147 @@ export class SupabaseService {
   static async deleteNotificationsByPostId(postId: string): Promise<boolean> {
     if (this.notificationsTableStatus === 'missing') return false;
     try {
-      const { error } = await supabase.from('notifications').delete().eq('post_id', postId);
+      const { error } = await supabase
+        .from('notifications')
+        .delete()
+        .neq('user_id', AUDIT_LOG_SYSTEM_USER_ID)
+        .eq('post_id', postId);
       if (error && (error.code === '42P01' || error.message?.includes('notifications'))) {
         this.notificationsTableStatus = 'missing';
       }
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Fetch Security Audit Logs (Admin & Co-Admin activity records) from Supabase
+   */
+  static async getRemoteAuditLogs(limit: number = 250): Promise<AuditLogEntry[] | null> {
+    if (this.notificationsTableStatus === 'missing') {
+      return null;
+    }
+    return this.dedupeGet(`audit_logs:${limit}`, async () => {
+      try {
+        const { data, error } = await supabase
+          .from('notifications')
+          .select(
+            'id,user_id,course_id,course_code,course_title,post_id,author_name,author_role,title,message,type,created_at'
+          )
+          .eq('user_id', AUDIT_LOG_SYSTEM_USER_ID)
+          .order('created_at', { ascending: false })
+          .limit(limit);
+
+        if (error) {
+          if (error.code === '42P01' || error.message?.includes('notifications')) {
+            this.notificationsTableStatus = 'missing';
+          }
+          return null;
+        }
+        this.notificationsTableStatus = 'available';
+        if (!data) return [];
+
+        const logs: AuditLogEntry[] = [];
+        for (const row of data) {
+          try {
+            if (row.message && String(row.message).trim().startsWith('{')) {
+              const parsed = JSON.parse(String(row.message)) as AuditLogEntry;
+              if (parsed && parsed.id && parsed.actionCode) {
+                logs.push(parsed);
+                continue;
+              }
+            }
+          } catch {
+            // Fallback to column reconstruction below
+          }
+          const createdMs = row.created_at ? new Date(row.created_at).getTime() : Date.now();
+          logs.push({
+            id: String(row.id),
+            actorId: 'admin',
+            actorName: String(row.author_name || 'Admin'),
+            actorUsername: 'admin',
+            actorRole: ((row.author_role as UserRole) || 'admin'),
+            category: ((row.course_code as AuditLogEntry['category']) || 'security'),
+            actionCode: String(row.course_title || 'ADMIN_ACTION'),
+            actionLabel: String(row.course_title || 'Admin Action'),
+            severity: ((row.post_id as AuditLogEntry['severity']) || 'info'),
+            courseId: row.course_id && row.course_id !== 'GLOBAL' ? String(row.course_id) : undefined,
+            summary: String(row.title || ''),
+            details: String(row.message || ''),
+            createdAt: new Date(createdMs).toLocaleString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+            }),
+            createdAtMs: createdMs,
+          });
+        }
+        return logs;
+      } catch {
+        return null;
+      }
+    });
+  }
+
+  /**
+   * Upsert Security Audit Log entries to Supabase (stored automatically in public.notifications with 30-day retention)
+   */
+  static async upsertAuditLogs(entries: AuditLogEntry[]): Promise<boolean> {
+    if (this.notificationsTableStatus === 'missing' || entries.length === 0) {
+      return false;
+    }
+    try {
+      const rows = entries.map((e) => {
+        const createdMs = e.createdAtMs || Date.now();
+        const expiresMs = createdMs + AUDIT_LOG_TTL_MS;
+        return {
+          id: e.id,
+          user_id: AUDIT_LOG_SYSTEM_USER_ID,
+          course_id: e.courseId || 'GLOBAL',
+          course_code: e.category,
+          course_title: e.actionCode,
+          post_id: e.severity,
+          author_name: `${e.actorName} (@${e.actorUsername})`,
+          author_role: e.actorRole,
+          title: e.summary,
+          message: JSON.stringify(e),
+          type: 'audit_log',
+          is_read: true,
+          created_at: new Date(createdMs).toISOString(),
+          expires_at: new Date(expiresMs).toISOString(),
+        };
+      });
+
+      for (const batch of this.chunkArray(rows, 150)) {
+        const { error } = await supabase.from('notifications').upsert(batch, { onConflict: 'id' });
+        if (error) {
+          if (error.code === '42P01' || error.message?.includes('notifications')) {
+            this.notificationsTableStatus = 'missing';
+          }
+          return false;
+        }
+      }
+      this.notificationsTableStatus = 'available';
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Clear remote Security Audit Logs (Primary Admin action)
+   */
+  static async clearRemoteAuditLogs(): Promise<boolean> {
+    if (this.notificationsTableStatus === 'missing') return false;
+    try {
+      const { error } = await supabase
+        .from('notifications')
+        .delete()
+        .eq('user_id', AUDIT_LOG_SYSTEM_USER_ID);
       return !error;
     } catch {
       return false;
@@ -1753,6 +1896,10 @@ export class SupabaseService {
           const cId = String(r.course_id || '');
           const uId = String(r.user_id || '');
           const pId = r.post_id ? String(r.post_id) : '';
+          // Never delete SYSTEM_AUDIT_LOG rows during orphan notification sweeps
+          if (uId === AUDIT_LOG_SYSTEM_USER_ID) {
+            return;
+          }
           if (
             deletedSet.has(id) ||
             (cId && !courseIdSet.has(cId)) ||

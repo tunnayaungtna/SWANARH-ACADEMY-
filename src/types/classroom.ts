@@ -231,4 +231,33 @@ export interface NotificationItem {
   expiresAtMs?: number; // Epoch ms when notification auto-deletes (createdAtMs + 30 mins)
 }
 
+export type AuditLogCategory = 'user' | 'course' | 'post' | 'academic' | 'security';
+
+export type AuditLogSeverity = 'info' | 'warning' | 'critical';
+
+export interface AuditLogEntry {
+  id: string;
+  actorId: string;
+  actorName: string;
+  actorUsername: string;
+  actorRole: UserRole;
+  actorAvatar?: string;
+  category: AuditLogCategory;
+  actionCode: string; // e.g. 'USER_CREATED', 'POST_DELETED', 'COURSE_UPDATED'
+  actionLabel: string; // Bilingual label e.g. 'ကျောင်းသား/အကောင့်အသစ် ထည့်သွင်းခြင်း (User Created)'
+  severity: AuditLogSeverity;
+  targetType?: 'user' | 'course' | 'post' | 'assignment' | 'quiz' | 'attendance' | 'system';
+  targetId?: string;
+  targetName?: string;
+  courseId?: string;
+  courseCode?: string;
+  courseTitle?: string;
+  summary: string;
+  details?: string;
+  deviceId?: string;
+  createdAt: string;
+  createdAtMs: number;
+}
+
+
 

@@ -14,6 +14,9 @@ import {
   AttendanceSession,
   AttendanceStatus,
   AttendanceRecord,
+  AuditLogEntry,
+  AuditLogCategory,
+  AuditLogSeverity,
 } from '../types/classroom';
 import { SupabaseService, NOTIFICATION_TTL_MS } from './supabase';
 import {
@@ -58,6 +61,7 @@ const STORAGE_KEYS = {
   CLOUD_SYNCED: 'classroom_os_cloud_synced_v1',
   KICK_REASON: 'classroom_os_kick_reason_v1',
   NOTIFIED_POST_IDS: 'classroom_os_notified_post_ids_v1',
+  AUDIT_LOGS: 'classroom_os_audit_logs_v1',
 };
 
 // Rate limiting in-memory / storage tracker
@@ -354,9 +358,245 @@ export class ClassroomDB {
       };
       this.setItem(STORAGE_KEYS.SECURITY_SETTINGS, defaultSec);
     }
+    if (!localStorage.getItem(STORAGE_KEYS.AUDIT_LOGS)) {
+      const baseMs = Date.now();
+      const seedLogs: AuditLogEntry[] = [
+        {
+          id: `audit-seed-1`,
+          actorId: 'user-admin-1',
+          actorName: 'Dr. Kyaw Swar',
+          actorUsername: 'kyawswar.admin',
+          actorRole: 'admin',
+          actorAvatar:
+            'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+          category: 'security',
+          actionCode: 'SECURITY_AUDIT_INITIALIZED',
+          actionLabel: 'လုံခြုံရေး မှတ်တမ်းစနစ် စတင်ဖွင့်လှစ်ခြင်း (Audit System Active)',
+          severity: 'info',
+          targetType: 'system',
+          targetName: 'Classroom OS Security Engine',
+          summary:
+            'Admin နှင့် Co-Admin လုပ်ဆောင်ချက် အားလုံးကို အလိုအလျောက် မှတ်တမ်းတင်သည့် Security Audit Log စနစ် စတင်အလုပ်လုပ်နေပါသည်။',
+          details:
+            'Tracks User Creation/Deletion, Password Resets, Classroom Edits/Reordering, Post Publishing/Deletion, and Attendance Actions in real time.',
+          deviceId: this.getDeviceId(),
+          createdAt: new Date(baseMs - 3600_000).toLocaleString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          }),
+          createdAtMs: baseMs - 3600_000,
+        },
+      ];
+      this.setItem(STORAGE_KEYS.AUDIT_LOGS, seedLogs);
+    }
     // Initialize persistent device ID & theme
     this.getDeviceId();
     this.setTheme(this.getTheme());
+  }
+
+  // ============================================================================
+  // Security Audit Log Engine (Primary Admin Oversight of Admin & Co-Admin Actions)
+  // ============================================================================
+
+  static recordAuditLog(params: {
+    actor?: User | null;
+    category: AuditLogCategory;
+    actionCode: string;
+    actionLabel: string;
+    severity?: AuditLogSeverity;
+    targetType?: AuditLogEntry['targetType'];
+    targetId?: string;
+    targetName?: string;
+    courseId?: string;
+    courseCode?: string;
+    courseTitle?: string;
+    summary: string;
+    details?: string;
+  }): AuditLogEntry | null {
+    const actor = params.actor || this.getCurrentUser();
+    if (!actor || (actor.role !== 'admin' && actor.role !== 'co_admin')) {
+      return null;
+    }
+
+    const nowMs = Date.now();
+    const formattedTime = new Date(nowMs).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true,
+    });
+
+    const entry: AuditLogEntry = {
+      id: `audit-${nowMs}-${Math.random().toString(36).slice(2, 7)}`,
+      actorId: actor.id,
+      actorName: actor.name,
+      actorUsername: actor.username,
+      actorRole: actor.role,
+      actorAvatar: actor.avatar || undefined,
+      category: params.category,
+      actionCode: params.actionCode,
+      actionLabel: params.actionLabel,
+      severity: params.severity || 'info',
+      targetType: params.targetType,
+      targetId: params.targetId,
+      targetName: params.targetName,
+      courseId: params.courseId,
+      courseCode: params.courseCode,
+      courseTitle: params.courseTitle,
+      summary: params.summary,
+      details: params.details,
+      deviceId: this.getDeviceId(),
+      createdAt: formattedTime,
+      createdAtMs: nowMs,
+    };
+
+    const existing = this.getItem<AuditLogEntry[]>(STORAGE_KEYS.AUDIT_LOGS, []);
+    // Keep up to 600 most recent audit log entries locally sorted newest-first
+    const updated = [entry, ...existing.filter((e) => e.id !== entry.id)]
+      .sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0))
+      .slice(0, 600);
+
+    this.setItem(STORAGE_KEYS.AUDIT_LOGS, updated);
+
+    // Sync immediately to Supabase in the background so Primary Admin sees it on all devices
+    try {
+      SupabaseService.upsertAuditLogs([entry]).catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    return entry;
+  }
+
+  static getAuditLogs(): AuditLogEntry[] {
+    const logs = this.getItem<AuditLogEntry[]>(STORAGE_KEYS.AUDIT_LOGS, []);
+    return [...logs].sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
+  }
+
+  static async syncAuditLogsFromCloud(): Promise<AuditLogEntry[]> {
+    try {
+      const remoteLogs = await SupabaseService.getRemoteAuditLogs(300);
+      if (remoteLogs && remoteLogs.length > 0) {
+        const localLogs = this.getItem<AuditLogEntry[]>(STORAGE_KEYS.AUDIT_LOGS, []);
+        const map = new Map<string, AuditLogEntry>();
+        localLogs.forEach((l) => map.set(l.id, l));
+        remoteLogs.forEach((rl) => map.set(rl.id, rl));
+        const merged = Array.from(map.values())
+          .sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0))
+          .slice(0, 600);
+        this.setItem(STORAGE_KEYS.AUDIT_LOGS, merged);
+        return merged;
+      }
+    } catch {
+      // ignore
+    }
+    return this.getAuditLogs();
+  }
+
+  static async clearAuditLogs(currentUser: User): Promise<{ success: boolean; error?: string }> {
+    if (!currentUser || currentUser.role !== 'admin') {
+      return {
+        success: false,
+        error: 'ခွင့်ပြုချက် မရှိပါ: Primary Admin သာလျှင် Security Audit Log မှတ်တမ်းများကို ရှင်းလင်းခွင့်ရှိပါသည်။',
+      };
+    }
+
+    await SupabaseService.clearRemoteAuditLogs();
+    this.setItem(STORAGE_KEYS.AUDIT_LOGS, []);
+
+    this.recordAuditLog({
+      actor: currentUser,
+      category: 'security',
+      actionCode: 'AUDIT_LOG_CLEARED',
+      actionLabel: 'မှတ်တမ်းဟောင်းများ ရှင်းလင်းခြင်း (Audit Log Cleared)',
+      severity: 'warning',
+      targetType: 'system',
+      targetName: 'Security Audit Log',
+      summary: `Primary Admin ${currentUser.name} (@${currentUser.username}) မှ Audit Log မှတ်တမ်းဟောင်းများကို ရှင်းလင်းခဲ့ပါသည်။`,
+    });
+
+    return { success: true };
+  }
+
+  static downloadAuditLogsCSV(customLogs?: AuditLogEntry[]): {
+    success: boolean;
+    filename?: string;
+    rowCount: number;
+  } {
+    const logs = customLogs || this.getAuditLogs();
+
+    const escapeCsv = (val: string | number | undefined) => {
+      let str = String(val ?? '');
+      if (/^[=+\-\t\r]/.test(str)) {
+        str = `'${str}`;
+      }
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    const headers = [
+      'Timestamp',
+      'Actor Name',
+      'Actor Username',
+      'Actor Role',
+      'Category',
+      'Action Code',
+      'Action Label',
+      'Severity',
+      'Classroom / Course',
+      'Target Item',
+      'Summary (လုပ်ဆောင်ချက် အကျဉ်းချုပ်)',
+      'Details (အသေးစိတ်)',
+      'Device ID',
+    ];
+
+    const rows = logs.map((l) =>
+      [
+        l.createdAt,
+        l.actorName,
+        `@${l.actorUsername}`,
+        l.actorRole === 'admin' ? 'Primary Admin' : 'Co-Admin',
+        l.category.toUpperCase(),
+        l.actionCode,
+        l.actionLabel,
+        l.severity.toUpperCase(),
+        l.courseCode ? `${l.courseCode} — ${l.courseTitle || ''}` : l.courseTitle || 'Global / System',
+        l.targetName || '—',
+        l.summary,
+        l.details || '—',
+        l.deviceId || '—',
+      ].map(escapeCsv)
+    );
+
+    const csvContent =
+      '\uFEFF' + [headers.map(escapeCsv).join(','), ...rows.map((r) => r.join(','))].join('\r\n');
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    const filename = `SwanArh_Security_Audit_Log_${dateStamp}.csv`;
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    return {
+      success: true,
+      filename,
+      rowCount: logs.length,
+    };
   }
 
   // Theme Management
@@ -405,6 +645,16 @@ export class ClassroomDB {
     const current = this.getSecuritySettings();
     const updated = { ...current, ...settings };
     this.setItem(STORAGE_KEYS.SECURITY_SETTINGS, updated);
+    this.recordAuditLog({
+      category: 'security',
+      actionCode: 'SECURITY_SETTINGS_UPDATED',
+      actionLabel: 'ဗီဒီယိုနှင့် လုံခြုံရေး Setting ပြင်ဆင်ခြင်း (Security Settings Updated)',
+      severity: 'warning',
+      targetType: 'system',
+      targetName: 'Video & Content Protection',
+      summary: `ဗီဒီယို Watermark နှင့် Content Protection လုံခြုံရေး သတ်မှတ်ချက်များကို ပြောင်းလဲခဲ့ပါသည်။`,
+      details: `Text Protection: ${updated.textProtectionEnabled ? 'ON' : 'OFF'} | Dynamic Watermark: ${updated.dynamicWatermarkEnabled ? 'ON' : 'OFF'} (${Math.round(updated.watermarkOpacity * 100)}%)`,
+    });
     return updated;
   }
 
@@ -643,6 +893,19 @@ export class ClassroomDB {
       } catch {
         // ignore
       }
+    } else if (stampedUser.role === 'admin' || stampedUser.role === 'co_admin') {
+      this.recordAuditLog({
+        actor: stampedUser,
+        category: 'security',
+        actionCode: 'ADMIN_LOGIN',
+        actionLabel: 'အကောင့် ဝင်ရောက်ခြင်း (Admin / Co-Admin Sign-In)',
+        severity: 'info',
+        targetType: 'user',
+        targetId: stampedUser.id,
+        targetName: `${stampedUser.name} (@${stampedUser.username})`,
+        summary: `${stampedUser.role === 'admin' ? 'Primary Admin' : 'Co-Admin'} ${stampedUser.name} (@${stampedUser.username}) သည် စနစ်သို့ Login ဝင်ရောက်ခဲ့ပါသည်။`,
+        details: `Device ID: ${localDeviceId} | Role: ${stampedUser.role.toUpperCase()}`,
+      });
     }
 
     return { user: stampedUser };
@@ -811,7 +1074,7 @@ export class ClassroomDB {
     }
 
     coursesToEnroll.forEach((cId) => {
-      this.enrollStudent(cId, newUser.id);
+      this.enrollStudent(cId, newUser.id, true);
     });
 
     // Background sync to Supabase if configured
@@ -820,6 +1083,38 @@ export class ClassroomDB {
     } catch {
       // ignore
     }
+
+    const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const enrolledLabels = Array.from(coursesToEnroll)
+      .map((cId) => {
+        const found = allCourses.find((c) => c.id === cId);
+        return found ? `${found.code} (${found.title})` : cId;
+      })
+      .join(', ');
+    const roleLabel =
+      newUser.role === 'admin'
+        ? 'Primary Admin'
+        : newUser.role === 'co_admin'
+        ? 'Co-Admin (တွဲဖက် အက်ဒမင်)'
+        : 'Student (ကျောင်းသား)';
+
+    this.recordAuditLog({
+      actor: currentLogged,
+      category: 'user',
+      actionCode: 'USER_CREATED',
+      actionLabel:
+        newUser.role === 'student'
+          ? 'ကျောင်းသားအသစ် ထည့်သွင်းခြင်း (New Student Added)'
+          : 'Admin / Co-Admin အကောင့်အသစ် ဖွင့်ခြင်း (Staff Account Created)',
+      severity: newUser.role === 'student' ? 'info' : 'warning',
+      targetType: 'user',
+      targetId: newUser.id,
+      targetName: `${newUser.name} (@${newUser.username})`,
+      summary: `${roleLabel} အကောင့်အသစ် "${newUser.name}" (@${newUser.username}) ကို ဖန်တီးပေးခဲ့ပါသည်။`,
+      details: `Email: ${newUser.email} | Phone: ${newUser.phone} | Role: ${roleLabel}${
+        enrolledLabels ? ` | Enrolled Classes: ${enrolledLabels}` : ''
+      }`,
+    });
 
     return { user: newUser };
   }
@@ -915,6 +1210,19 @@ export class ClassroomDB {
       // ignore
     }
 
+    this.recordAuditLog({
+      actor: currentLogged || users[userIndex],
+      category: 'user',
+      actionCode: 'PROFILE_PHOTO_UPDATED',
+      actionLabel: 'ပရိုဖိုင်ဓာတ်ပုံ ပြောင်းလဲခြင်း (Profile Photo Changed)',
+      severity: 'info',
+      targetType: 'user',
+      targetId: users[userIndex].id,
+      targetName: `${users[userIndex].name} (@${users[userIndex].username})`,
+      summary: `${users[userIndex].name} (@${users[userIndex].username}) ၏ Profile ဓာတ်ပုံကို ပြောင်းလဲခဲ့ပြီး အတန်းအားလုံးတွင် တန်းပြောင်းပြီးဖြစ်ပါသည်။`,
+      details: `Updated posts/comments avatar sync count: ${updatedPostsToSync.length}`,
+    });
+
     return { success: true, user: users[userIndex] };
   }
 
@@ -992,6 +1300,20 @@ export class ClassroomDB {
       // ignore
     }
 
+    if (users[userIndex].role === 'admin' || users[userIndex].role === 'co_admin') {
+      this.recordAuditLog({
+        actor: users[userIndex],
+        category: 'security',
+        actionCode: 'PASSWORD_CHANGED',
+        actionLabel: 'ကိုယ်ပိုင် စကားဝှက် ပြောင်းလဲခြင်း (Own Password Changed)',
+        severity: 'warning',
+        targetType: 'user',
+        targetId: users[userIndex].id,
+        targetName: `${users[userIndex].name} (@${users[userIndex].username})`,
+        summary: `${users[userIndex].name} (@${users[userIndex].username}) သည် မိမိ၏ အကောင့် Password ကို အသစ်ပြောင်းလဲခဲ့ပါသည် (ENC_V1 Encrypted)။`,
+      });
+    }
+
     return { success: true };
   }
 
@@ -1038,6 +1360,24 @@ export class ClassroomDB {
     } catch {
       // ignore
     }
+
+    const targetUser = users[userIndex];
+    this.recordAuditLog({
+      actor: currentLogged,
+      category: 'security',
+      actionCode: 'PASSWORD_RESET',
+      actionLabel: 'အကောင့် စကားဝှက် ပြန်လည်သတ်မှတ်ပေးခြင်း (Password Reset)',
+      severity: 'warning',
+      targetType: 'user',
+      targetId: targetUser.id,
+      targetName: `${targetUser.name} (@${targetUser.username})`,
+      summary: `${targetUser.role === 'student' ? 'ကျောင်းသား' : targetUser.role.toUpperCase()} "${targetUser.name}" (@${targetUser.username}) ၏ Password အသစ်ကို ပြောင်းလဲသတ်မှတ်ပေးခဲ့ပါသည်။`,
+      details: `Target Role: ${targetUser.role.toUpperCase()} | Encryption: ENC_V1 (${getEncryptedHashFingerprint(
+        targetUser.password,
+        targetUser.role,
+        targetUser.id
+      )})`,
+    });
 
     return { success: true };
   }
@@ -1119,6 +1459,19 @@ export class ClassroomDB {
       // ignore
     }
 
+    this.recordAuditLog({
+      actor: currentLogged,
+      category: 'user',
+      actionCode: 'USER_DELETED',
+      actionLabel: 'အကောင့် ဖျက်သိမ်းခြင်း (Account Deleted)',
+      severity: 'critical',
+      targetType: 'user',
+      targetId: target.id,
+      targetName: `${target.name} (@${target.username})`,
+      summary: `${target.role === 'student' ? 'ကျောင်းသား' : target.role.toUpperCase()} အကောင့် "${target.name}" (@${target.username}) ကို စနစ်မှ အပြီးတိုင် ဖျက်သိမ်းခဲ့ပါသည်။`,
+      details: `Deleted Email: ${target.email} | Role: ${target.role.toUpperCase()} | Submissions cleaned: ${removedSubIds.length}`,
+    });
+
     return { success: true };
   }
 
@@ -1174,12 +1527,13 @@ export class ClassroomDB {
     return { course };
   }
 
-  static enrollStudent(courseId: string, studentId: string): boolean {
+  static enrollStudent(courseId: string, studentId: string, skipAuditLog: boolean = false): boolean {
     const currentLogged = this.getCurrentUser();
     if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
       return false;
     }
     const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    let enrolledCourse: Course | null = null;
     const updated = courses.map((course) => {
       if (course.id === courseId) {
         if (!course.enrolledStudentIds.includes(studentId)) {
@@ -1187,6 +1541,7 @@ export class ClassroomDB {
             ...course,
             enrolledStudentIds: [...course.enrolledStudentIds, studentId],
           };
+          enrolledCourse = updatedCourse;
           try {
             SupabaseService.upsertCourse(updatedCourse).catch(() => {});
           } catch {
@@ -1198,6 +1553,25 @@ export class ClassroomDB {
       return course;
     });
     this.setItem(STORAGE_KEYS.COURSES, updated);
+
+    if (enrolledCourse && !skipAuditLog) {
+      const targetCourse = enrolledCourse as Course;
+      const student = this.getAllUsers().find((u) => u.id === studentId);
+      this.recordAuditLog({
+        actor: currentLogged,
+        category: 'user',
+        actionCode: 'STUDENT_ENROLLED',
+        actionLabel: 'အတန်းသို့ ကျောင်းသား စာရင်းသွင်းခြင်း (Student Enrolled)',
+        severity: 'info',
+        targetType: 'user',
+        targetId: studentId,
+        targetName: student ? `${student.name} (@${student.username})` : studentId,
+        courseId: targetCourse.id,
+        courseCode: targetCourse.code,
+        courseTitle: targetCourse.title,
+        summary: `ကျောင်းသား "${student ? student.name : studentId}" ကို "${targetCourse.code} — ${targetCourse.title}" အတန်းသို့ ဝင်ခွင့်ပြု (Enroll) ခဲ့ပါသည်။`,
+      });
+    }
     return true;
   }
 
@@ -1207,12 +1581,14 @@ export class ClassroomDB {
       return false;
     }
     const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    let unenrolledCourse: Course | null = null;
     const updated = courses.map((course) => {
-      if (course.id === courseId) {
+      if (course.id === courseId && course.enrolledStudentIds.includes(studentId)) {
         const updatedCourse = {
           ...course,
           enrolledStudentIds: course.enrolledStudentIds.filter((id) => id !== studentId),
         };
+        unenrolledCourse = updatedCourse;
         try {
           SupabaseService.upsertCourse(updatedCourse).catch(() => {});
         } catch {
@@ -1223,6 +1599,25 @@ export class ClassroomDB {
       return course;
     });
     this.setItem(STORAGE_KEYS.COURSES, updated);
+
+    if (unenrolledCourse) {
+      const targetCourse = unenrolledCourse as Course;
+      const student = this.getAllUsers().find((u) => u.id === studentId);
+      this.recordAuditLog({
+        actor: currentLogged,
+        category: 'user',
+        actionCode: 'STUDENT_UNENROLLED',
+        actionLabel: 'အတန်းမှ ကျောင်းသား ဖယ်ရှားခြင်း (Student Unenrolled)',
+        severity: 'warning',
+        targetType: 'user',
+        targetId: studentId,
+        targetName: student ? `${student.name} (@${student.username})` : studentId,
+        courseId: targetCourse.id,
+        courseCode: targetCourse.code,
+        courseTitle: targetCourse.title,
+        summary: `ကျောင်းသား "${student ? student.name : studentId}" ကို "${targetCourse.code} — ${targetCourse.title}" အတန်းမှ ဖယ်ရှား (Unenroll) ခဲ့ပါသည်။`,
+      });
+    }
     return true;
   }
 
@@ -1251,6 +1646,23 @@ export class ClassroomDB {
         // ignore
       }
     });
+
+    this.recordAuditLog({
+      actor: currentLogged,
+      category: 'course',
+      actionCode: 'COURSE_CREATED',
+      actionLabel: 'အတန်းအသစ် ဖွင့်လှစ်ခြင်း (Classroom Created)',
+      severity: 'info',
+      targetType: 'course',
+      targetId: course.id,
+      targetName: `${course.code} — ${course.title}`,
+      courseId: course.id,
+      courseCode: course.code,
+      courseTitle: course.title,
+      summary: `အတန်းအသစ် "${course.code}: ${course.title}" (${course.batch} · ${course.section}) ကို ဖန်တီးဖွင့်လှစ်ခဲ့ပါသည်။`,
+      details: `Instructor: ${course.instructorName} | Enrolled Students: ${course.enrolledStudentIds.length}`,
+    });
+
     return course;
   }
 
@@ -1298,6 +1710,19 @@ export class ClassroomDB {
       } catch {
         // ignore
       }
+    });
+
+    const orderPreview = normalized.map((c, idx) => `#${idx + 1} ${c.code}`).join(' → ');
+    this.recordAuditLog({
+      actor: currentLogged,
+      category: 'course',
+      actionCode: 'COURSE_REORDERED',
+      actionLabel: 'အတန်း အစီအစဉ် ပြောင်းလဲခြင်း (Classrooms Reordered)',
+      severity: 'info',
+      targetType: 'course',
+      targetName: 'Classroom Catalog Order',
+      summary: `Classroom အတန်းများ၏ ပြသသည့် အစီအစဉ် (Display Order) ကို ပြောင်းလဲသတ်မှတ်ခဲ့ပါသည်။`,
+      details: `New Order: ${orderPreview}`,
     });
 
     return normalized;
@@ -1382,6 +1807,26 @@ export class ClassroomDB {
         } catch {
           // ignore
         }
+      });
+
+      const targetCourse = (updatedCourse || coursesToSync[0]) as Course;
+      this.recordAuditLog({
+        actor: currentLogged,
+        category: 'course',
+        actionCode: 'COURSE_BANNER_UPDATED',
+        actionLabel: 'အတန်း Header ပုံ ပြောင်းလဲခြင်း (Class Header Photo Changed)',
+        severity: 'info',
+        targetType: 'course',
+        targetId: targetCourse.id,
+        targetName: applyToAllCourses
+          ? `All Classrooms (${coursesToSync.length} classes)`
+          : `${targetCourse.code} — ${targetCourse.title}`,
+        courseId: targetCourse.id,
+        courseCode: targetCourse.code,
+        courseTitle: targetCourse.title,
+        summary: applyToAllCourses
+          ? `အတန်းအားလုံး (${coursesToSync.length} ခု) ၏ Classroom Header ဓာတ်ပုံကို တစ်ပြိုင်တည်း ပြောင်းလဲခဲ့ပါသည်။`
+          : `"${targetCourse.code} — ${targetCourse.title}" အတန်း၏ Header ဓာတ်ပုံကို ပြောင်းလဲခဲ့ပါသည်။`,
       });
     }
     return updatedCourse;
@@ -1479,6 +1924,22 @@ export class ClassroomDB {
     } catch {
       // ignore
     }
+
+    this.recordAuditLog({
+      actor: currentUser,
+      category: 'course',
+      actionCode: 'COURSE_DELETED',
+      actionLabel: 'အတန်း ဖျက်သိမ်းခြင်း (Classroom Deleted)',
+      severity: 'critical',
+      targetType: 'course',
+      targetId: target.id,
+      targetName: `${target.code} — ${target.title}`,
+      courseId: target.id,
+      courseCode: target.code,
+      courseTitle: target.title,
+      summary: `"${target.code}: ${target.title}" (${target.batch}) အတန်းနှင့် သက်ဆိုင်ရာ သင်ခန်းစာအားလုံးကို ဖျက်သိမ်းခဲ့ပါသည်။`,
+      details: `Removed Posts: ${removedPostIds.length} | Assignments: ${removedAssIds.length} | Quizzes: ${removedQuizIds.length} | Attendance Sessions: ${removedAttIds.length}`,
+    });
 
     return { success: true };
   }
@@ -2426,6 +2887,15 @@ export class ClassroomDB {
           updated = true;
         }
 
+        // If Primary Admin is logged in, also pull latest Security Audit Logs from Supabase
+        if (loggedUser && loggedUser.role === 'admin' && shouldFetchCatalog) {
+          const prevAuditCount = this.getAuditLogs().length;
+          const mergedAudit = await this.syncAuditLogsFromCloud();
+          if (mergedAudit.length !== prevAuditCount) {
+            updated = true;
+          }
+        }
+
         return updated;
       } catch {
         return purgedLocalNotifs;
@@ -2564,18 +3034,38 @@ export class ClassroomDB {
 
     // Send notifications to all enrolled students in this classroom if published immediately
     let notifiedCount = 0;
-    if (!isScheduled) {
-      const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
-      const course = allCourses.find((c) => c.id === postData.courseId);
-      if (course) {
-        notifiedCount = this.notifyEnrolledStudentsOfCoursePost(
-          course,
-          newPost,
-          currentUser.name,
-          currentUser.role
-        );
-      }
+    const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const course = allCourses.find((c) => c.id === postData.courseId);
+    if (!isScheduled && course) {
+      notifiedCount = this.notifyEnrolledStudentsOfCoursePost(
+        course,
+        newPost,
+        currentUser.name,
+        currentUser.role
+      );
     }
+
+    this.recordAuditLog({
+      actor: currentUser,
+      category: 'post',
+      actionCode: isScheduled ? 'POST_SCHEDULED' : 'POST_CREATED',
+      actionLabel: isScheduled
+        ? 'Post အချိန်ဇယားဖြင့် တင်ခြင်း (Scheduled Post Created)'
+        : 'Post အသစ် တင်ခြင်း (New Post Published)',
+      severity: 'info',
+      targetType: 'post',
+      targetId: newPost.id,
+      targetName: newPost.title,
+      courseId: course?.id || postData.courseId,
+      courseCode: course?.code,
+      courseTitle: course?.title,
+      summary: `"${course ? `${course.code} — ${course.title}` : postData.courseId}" အတန်းတွင် "${newPost.title}" (${newPost.postType}) ပို့စ်အသစ် ${
+        isScheduled ? `အချိန်ဇယား (${postData.scheduledForDisplay || ''}) ဖြင့်` : 'ထိပ်ဆုံးမှ'
+      } တင်ခဲ့ပါသည်။`,
+      details: `Type: ${newPost.postType.toUpperCase()} | Status: ${newPost.status?.toUpperCase()} | Attachments: ${
+        newPost.attachments?.length || 0
+      } | Notified Students: ${notifiedCount}`,
+    });
 
     return { post: newPost, notifiedCount };
   }
@@ -2619,6 +3109,25 @@ export class ClassroomDB {
     } catch {
       // ignore
     }
+
+    const finalPost = updatedPost as CoursePost;
+    const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const course = allCourses.find((c) => c.id === finalPost.courseId);
+    this.recordAuditLog({
+      actor: currentUser,
+      category: 'post',
+      actionCode: 'POST_UPDATED',
+      actionLabel: 'Post ပြင်ဆင်ခြင်း (Post Edited)',
+      severity: 'info',
+      targetType: 'post',
+      targetId: finalPost.id,
+      targetName: finalPost.title,
+      courseId: course?.id || finalPost.courseId,
+      courseCode: course?.code,
+      courseTitle: course?.title,
+      summary: `"${course ? `${course.code} — ${course.title}` : finalPost.courseId}" အတန်းရှိ "${finalPost.title}" ပို့စ်ကို ပြင်ဆင်ခဲ့ပါသည်။`,
+    });
+
     return { post: updatedPost };
   }
 
@@ -2635,6 +3144,9 @@ export class ClassroomDB {
     if (!target) {
       return { success: false, error: 'Post not found.' };
     }
+
+    const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const course = allCourses.find((c) => c.id === target.courseId);
 
     // Count existing pinned posts for this course (excluding the target post itself)
     const otherPinned = posts.filter((p) => p.courseId === target.courseId && p.isPinned && p.id !== postId);
@@ -2662,6 +3174,20 @@ export class ClassroomDB {
           // ignore
         }
       }
+      this.recordAuditLog({
+        actor: currentUser,
+        category: 'post',
+        actionCode: 'POST_UNPINNED',
+        actionLabel: 'Post Pin ဖြုတ်ခြင်း (Post Unpinned)',
+        severity: 'info',
+        targetType: 'post',
+        targetId: target.id,
+        targetName: target.title,
+        courseId: course?.id || target.courseId,
+        courseCode: course?.code,
+        courseTitle: course?.title,
+        summary: `"${target.title}" ပို့စ်ကို Pin ဖြုတ်ခဲ့ပါသည်။`,
+      });
       return { success: true, isPinned: false, pinnedCount: otherPinned.length };
     } else {
       // Pin post - check max 3 pinned limit
@@ -2695,6 +3221,20 @@ export class ClassroomDB {
           // ignore
         }
       }
+      this.recordAuditLog({
+        actor: currentUser,
+        category: 'post',
+        actionCode: 'POST_PINNED',
+        actionLabel: 'Post Pin ထောက်ခြင်း (Post Pinned)',
+        severity: 'info',
+        targetType: 'post',
+        targetId: target.id,
+        targetName: target.title,
+        courseId: course?.id || target.courseId,
+        courseCode: course?.code,
+        courseTitle: course?.title,
+        summary: `"${target.title}" ပို့စ်ကို အတန်းထိပ်တွင် Pin (#${newOrder}) ထောက်ခဲ့ပါသည်။`,
+      });
       return { success: true, isPinned: true, pinnedCount: newOrder };
     }
   }
@@ -2756,6 +3296,21 @@ export class ClassroomDB {
       );
     }
 
+    this.recordAuditLog({
+      actor: currentUser,
+      category: 'post',
+      actionCode: 'POST_PUBLISHED_NOW',
+      actionLabel: 'Scheduled Post ချက်ချင်းတင်ခြင်း (Scheduled Post Published)',
+      severity: 'info',
+      targetType: 'post',
+      targetId: target.id,
+      targetName: target.title,
+      courseId: course?.id || target.courseId,
+      courseCode: course?.code,
+      courseTitle: course?.title,
+      summary: `အချိန်ဇယားသတ်မှတ်ထားသော "${target.title}" ပို့စ်ကို ချက်ချင်း Publish ပြုလုပ်ခဲ့ပါသည်။`,
+    });
+
     return { success: true, notifiedCount };
   }
 
@@ -2768,6 +3323,9 @@ export class ClassroomDB {
     if (!isInstructor) {
       return false;
     }
+
+    const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const course = allCourses.find((c) => c.id === target.courseId);
 
     const updated = posts.filter((p) => p.id !== postId);
     this.setItem(STORAGE_KEYS.POSTS, updated);
@@ -2790,6 +3348,22 @@ export class ClassroomDB {
     } catch {
       // ignore
     }
+
+    this.recordAuditLog({
+      actor: currentUser,
+      category: 'post',
+      actionCode: 'POST_DELETED',
+      actionLabel: 'Post ဖျက်သိမ်းခြင်း (Post Deleted)',
+      severity: 'critical',
+      targetType: 'post',
+      targetId: target.id,
+      targetName: target.title,
+      courseId: course?.id || target.courseId,
+      courseCode: course?.code,
+      courseTitle: course?.title,
+      summary: `"${course ? `${course.code} — ${course.title}` : target.courseId}" အတန်းမှ "${target.title}" (Author: ${target.authorName}) ပို့စ်ကို ဖျက်သိမ်းခဲ့ပါသည်။`,
+      details: `Post ID: ${target.id} | Original Author: ${target.authorName} (${target.authorRole}) | Created: ${target.createdAt}`,
+    });
 
     return true;
   }
@@ -2929,6 +3503,25 @@ export class ClassroomDB {
         // ignore
       }
     }
+    if (isInstructor) {
+      const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+      const course = allCourses.find((c) => c.id === targetPost.courseId);
+      this.recordAuditLog({
+        actor: currentUser,
+        category: 'post',
+        actionCode: 'COMMENT_DELETED',
+        actionLabel: 'Comment ဖျက်သိမ်းခြင်း (Comment Deleted)',
+        severity: 'warning',
+        targetType: 'post',
+        targetId: targetPost.id,
+        targetName: targetPost.title,
+        courseId: course?.id || targetPost.courseId,
+        courseCode: course?.code,
+        courseTitle: course?.title,
+        summary: `"${targetPost.title}" ပို့စ်အောက်ရှိ ${targetComment.authorName} ၏ Comment ကို ဖျက်သိမ်းခဲ့ပါသည်။`,
+        details: `Deleted Comment: "${targetComment.content.slice(0, 120)}"`,
+      });
+    }
     return true;
   }
 
@@ -3042,13 +3635,28 @@ export class ClassroomDB {
       type: 'grade',
     });
 
+    this.recordAuditLog({
+      actor: currentLogged,
+      category: 'academic',
+      actionCode: 'ASSIGNMENT_GRADED',
+      actionLabel: 'Assignment အမှတ်ပေးခြင်း (Assignment Graded)',
+      severity: 'info',
+      targetType: 'assignment',
+      targetId: target.id,
+      targetName: target.studentName,
+      courseId: target.courseId,
+      summary: `ကျောင်းသား "${target.studentName}" ၏ Assignment အား အမှတ် (${safeGrade}/100) ပေးခဲ့ပါသည်။`,
+      details: safeFeedback ? `Feedback: ${safeFeedback}` : undefined,
+    });
+
     return true;
   }
 
   static deleteAssignment(assignmentId: string, currentUser: User): boolean {
     if (currentUser.role !== 'admin' && currentUser.role !== 'co_admin') return false;
     const assignments = this.getItem<Assignment[]>(STORAGE_KEYS.ASSIGNMENTS, INITIAL_ASSIGNMENTS);
-    if (!assignments.some((a) => a.id === assignmentId)) return false;
+    const targetAss = assignments.find((a) => a.id === assignmentId);
+    if (!targetAss) return false;
 
     this.setItem(
       STORAGE_KEYS.ASSIGNMENTS,
@@ -3067,6 +3675,19 @@ export class ClassroomDB {
     } catch {
       // ignore
     }
+
+    this.recordAuditLog({
+      actor: currentUser,
+      category: 'academic',
+      actionCode: 'ASSIGNMENT_DELETED',
+      actionLabel: 'Assignment ဖျက်သိမ်းခြင်း (Assignment Deleted)',
+      severity: 'warning',
+      targetType: 'assignment',
+      targetId: targetAss.id,
+      targetName: targetAss.title,
+      courseId: targetAss.courseId,
+      summary: `"${targetAss.title}" Assignment ကို ဖျက်သိမ်းခဲ့ပါသည်။`,
+    });
     return true;
   }
 
@@ -3098,7 +3719,8 @@ export class ClassroomDB {
   static deleteQuiz(quizId: string, currentUser: User): boolean {
     if (currentUser.role !== 'admin' && currentUser.role !== 'co_admin') return false;
     const quizzes = this.getItem<Quiz[]>(STORAGE_KEYS.QUIZZES, INITIAL_QUIZZES);
-    if (!quizzes.some((q) => q.id === quizId)) return false;
+    const targetQuiz = quizzes.find((q) => q.id === quizId);
+    if (!targetQuiz) return false;
 
     this.setItem(
       STORAGE_KEYS.QUIZZES,
@@ -3116,6 +3738,19 @@ export class ClassroomDB {
     } catch {
       // ignore
     }
+
+    this.recordAuditLog({
+      actor: currentUser,
+      category: 'academic',
+      actionCode: 'QUIZ_DELETED',
+      actionLabel: 'Quiz ဖျက်သိမ်းခြင်း (Quiz Deleted)',
+      severity: 'warning',
+      targetType: 'quiz',
+      targetId: targetQuiz.id,
+      targetName: targetQuiz.title,
+      courseId: targetQuiz.courseId,
+      summary: `"${targetQuiz.title}" Quiz ကို ဖျက်သိမ်းခဲ့ပါသည်။`,
+    });
     return true;
   }
 
@@ -3397,6 +4032,24 @@ export class ClassroomDB {
     } catch {
       // ignore
     }
+
+    const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const course = allCourses.find((c) => c.id === courseId);
+    this.recordAuditLog({
+      actor: currentUser,
+      category: 'academic',
+      actionCode: 'ATTENDANCE_SESSION_CREATED',
+      actionLabel: 'Attendance Session အသစ်ဖွင့်ခြင်း (Attendance Created)',
+      severity: 'info',
+      targetType: 'attendance',
+      targetId: newSession.id,
+      targetName: newSession.title,
+      courseId: course?.id || courseId,
+      courseCode: course?.code,
+      courseTitle: course?.title,
+      summary: `"${course ? `${course.code} — ${course.title}` : courseId}" အတန်းအတွက် "${newSession.title}" (${displayDate}) Attendance Session ဖွင့်လှစ်ခဲ့ပါသည်။`,
+    });
+
     return newSession;
   }
 
@@ -3419,11 +4072,32 @@ export class ClassroomDB {
     });
     this.setItem(STORAGE_KEYS.ATTENDANCE, updated);
     if (updatedSession) {
+      const targetSess = updatedSession as AttendanceSession;
       try {
-        SupabaseService.upsertAttendanceSession(updatedSession).catch(() => {});
+        SupabaseService.upsertAttendanceSession(targetSess).catch(() => {});
       } catch {
         // ignore
       }
+      const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+      const course = allCourses.find((c) => c.id === targetSess.courseId);
+      this.recordAuditLog({
+        actor: currentLogged,
+        category: 'academic',
+        actionCode: isOpen ? 'ATTENDANCE_OPENED' : 'ATTENDANCE_CLOSED',
+        actionLabel: isOpen
+          ? 'Attendance ပြန်ဖွင့်ခြင်း (Attendance Opened)'
+          : 'Attendance ပိတ်ခြင်း (Attendance Closed)',
+        severity: 'info',
+        targetType: 'attendance',
+        targetId: targetSess.id,
+        targetName: targetSess.title,
+        courseId: course?.id || targetSess.courseId,
+        courseCode: course?.code,
+        courseTitle: course?.title,
+        summary: `"${targetSess.title}" (${targetSess.displayDate}) Attendance Session ကို ${
+          isOpen ? 'ဖွင့်လှစ် (Open)' : 'ပိတ်သိမ်း (Closed)'
+        } ခဲ့ပါသည်။`,
+      });
     }
     return updatedSession;
   }
@@ -3437,6 +4111,7 @@ export class ClassroomDB {
       STORAGE_KEYS.ATTENDANCE,
       INITIAL_ATTENDANCE_SESSIONS
     );
+    const targetSess = sessions.find((s) => s.id === sessionId);
     const updated = sessions.filter((s) => s.id !== sessionId);
     this.setItem(STORAGE_KEYS.ATTENDANCE, updated);
     this.recordDeletedIds([sessionId]);
@@ -3446,6 +4121,25 @@ export class ClassroomDB {
       SupabaseService.deleteAttendanceSession(sessionId).catch(() => {});
     } catch {
       // ignore
+    }
+
+    if (targetSess) {
+      const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+      const course = allCourses.find((c) => c.id === targetSess.courseId);
+      this.recordAuditLog({
+        actor: currentLogged,
+        category: 'academic',
+        actionCode: 'ATTENDANCE_SESSION_DELETED',
+        actionLabel: 'Attendance Session ဖျက်သိမ်းခြင်း (Attendance Deleted)',
+        severity: 'warning',
+        targetType: 'attendance',
+        targetId: targetSess.id,
+        targetName: targetSess.title,
+        courseId: course?.id || targetSess.courseId,
+        courseCode: course?.code,
+        courseTitle: course?.title,
+        summary: `"${targetSess.title}" (${targetSess.displayDate}) Attendance Session ကို ဖျက်သိမ်းခဲ့ပါသည်။`,
+      });
     }
     return true;
   }

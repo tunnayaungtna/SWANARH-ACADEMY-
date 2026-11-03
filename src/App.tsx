@@ -14,6 +14,7 @@ import { CreateCourseModal } from './components/CreateCourseModal';
 import { AdminStudentDirectoryModal } from './components/AdminStudentDirectoryModal';
 import { SupabaseModal } from './components/SupabaseModal';
 import { AcademyRulesModal } from './components/AcademyRulesModal';
+import { AdminAuditLogModal } from './components/AdminAuditLogModal';
 import {
   BookOpen,
   Plus,
@@ -33,6 +34,7 @@ import {
   ArrowDown,
   GripVertical,
   Check,
+  History,
 } from 'lucide-react';
 
 export default function App() {
@@ -72,6 +74,7 @@ export default function App() {
   const [showSupabaseModal, setShowSupabaseModal] = useState(false);
   const [showResetConfirmModal, setShowResetConfirmModal] = useState(false);
   const [showRulesModal, setShowRulesModal] = useState(false);
+  const [showAuditLogModal, setShowAuditLogModal] = useState(false);
   const [showReorderPanel, setShowReorderPanel] = useState(false);
   const [draggedCourseId, setDraggedCourseId] = useState<string | null>(null);
   const [appBannerError, setAppBannerError] = useState<string | null>(null);
@@ -86,6 +89,7 @@ export default function App() {
   useBackHandler(showSupabaseModal, () => setShowSupabaseModal(false));
   useBackHandler(showResetConfirmModal, () => setShowResetConfirmModal(false));
   useBackHandler(showRulesModal, () => setShowRulesModal(false));
+  useBackHandler(showAuditLogModal, () => setShowAuditLogModal(false));
 
   // Performance & Security Settings
   const [isLowBandwidth, setIsLowBandwidth] = useState(false);
@@ -342,6 +346,7 @@ export default function App() {
           onOpenArchitecture={() => setShowArchitectureModal(true)}
           onOpenSecurity={() => setShowSecurityModal(true)}
           onOpenStudentDirectory={() => setShowStudentDirectoryModal(true)}
+          onOpenAuditLog={() => setShowAuditLogModal(true)}
           onOpenRules={() => setShowRulesModal(true)}
           onResetData={handleResetData}
           onNavigateHome={() => setSelectedCourse(null)}
@@ -512,6 +517,17 @@ export default function App() {
 
                 {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
                   <>
+                    {currentUser.role === 'admin' && (
+                      <button
+                        onClick={() => setShowAuditLogModal(true)}
+                        className="neu-btn flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2.5 text-amber-800 dark:text-amber-300 text-xs font-bold rounded-2xl cursor-pointer border border-amber-500/20"
+                        title="Admin နှင့် Co-Admin တို့၏ လုပ်ဆောင်ချက် မှတ်တမ်းအားလုံးကို စစ်ဆေးရန်"
+                      >
+                        <History className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                        <span>Audit Log (လုပ်ဆောင်ချက် မှတ်တမ်း)</span>
+                      </button>
+                    )}
+
                     <button
                       onClick={() => setShowStudentDirectoryModal(true)}
                       className="neu-btn flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2.5 text-slate-800 dark:text-slate-100 text-xs font-bold rounded-2xl cursor-pointer"
@@ -837,6 +853,17 @@ export default function App() {
           <SupabaseModal
             isOpen={showSupabaseModal}
             onClose={() => setShowSupabaseModal(false)}
+          />
+        )}
+
+        {/* Primary Admin Security Audit Log Modal */}
+        {showAuditLogModal && (
+          <AdminAuditLogModal
+            isOpen={showAuditLogModal}
+            onClose={() => setShowAuditLogModal(false)}
+            currentUser={currentUser}
+            allUsers={allUsers}
+            courses={courses}
           />
         )}
 
