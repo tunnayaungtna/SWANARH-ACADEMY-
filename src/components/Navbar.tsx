@@ -179,12 +179,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </button>
               )}
               <button
-                onClick={onOpenArchitecture}
-                className="hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                DB Schema & RLS
-              </button>
-              <button
                 onClick={onOpenSecurity}
                 className="hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
@@ -598,29 +592,16 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
 
             {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
-              <>
-                <button
-                  onClick={() => {
-                    onOpenArchitecture();
-                    setIsMobileMenuOpen(false);
-                  }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-left cursor-pointer"
-                >
-                  <Layers className="w-4 h-4 text-slate-600 dark:text-slate-400" />
-                  <span>DB Schema & RLS Architecture</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    onOpenSecurity();
-                    setIsMobileMenuOpen(false);
-                  }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-left cursor-pointer"
-                >
-                  <Shield className="w-4 h-4 text-slate-600 dark:text-slate-400" />
-                  <span>Video Protection & Anti-Piracy</span>
-                </button>
-              </>
+              <button
+                onClick={() => {
+                  onOpenSecurity();
+                  setIsMobileMenuOpen(false);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-left cursor-pointer"
+              >
+                <Shield className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+                <span>Video Protection & Anti-Piracy</span>
+              </button>
             )}
           </div>
         </div>

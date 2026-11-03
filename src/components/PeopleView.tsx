@@ -190,21 +190,28 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
               )}
             </div>
           ) : (
-            enrolledStudents.slice(0, visibleStudentLimit).map((student) => {
+            enrolledStudents.slice(0, visibleStudentLimit).map((student, idx) => {
               const isSelf = student.id === currentUser.id;
+              const isStaff = currentUser.role === 'admin' || currentUser.role === 'co_admin';
+              const attPct = isStaff
+                ? ClassroomDB.calculateTotalAttendancePercentage(course.id, student.id)
+                : null;
 
               return (
                 <div
                   key={student.id}
-                  className={`py-3 sm:py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs p-2 sm:px-3 rounded-xl transition-colors ${
+                  className={`py-3 sm:py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs p-2.5 sm:px-3.5 rounded-2xl transition-colors min-w-0 ${
                     isSelf
                       ? 'bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/40'
                       : 'hover:bg-slate-50/70 dark:hover:bg-slate-800/50'
                   }`}
                 >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="min-w-0">
-                      <div className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2 flex-wrap">
+                  <div className="flex items-start sm:items-center gap-3 min-w-0">
+                    <div className="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono text-[11px] font-extrabold flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-700">
+                      #{idx + 1}
+                    </div>
+                    <div className="min-w-0 flex-1 space-y-0.5">
+                      <div className="font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5 flex-wrap">
                         <span className="truncate">{student.name}</span>
                         {student.rulesAccepted ? (
                           <span
@@ -219,7 +226,7 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
                             <span>သိရှိ လိုက်နာပါမည်</span>
                           </span>
                         ) : (
-                          (currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
+                          isStaff && (
                             <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/70 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 shrink-0">
                               <span>⏳ စည်းကမ်းချက် လက်ခံရန်ကျန်</span>
                             </span>
@@ -233,7 +240,7 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
                                 : 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300'
                             }`}
                           >
-                            {student.gender.toLowerCase() === 'female' ? '♀ Female' : '♂ Male'}
+                            {student.gender.toLowerCase() === 'female' ? '♀ မ' : '♂ ကျား'}
                           </span>
                         )}
                         {isSelf && (
@@ -244,9 +251,9 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
                       </div>
                       <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono truncate">
                         @{student.username}
-                        {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && ` · ${student.email} · ${student.phone}`}
+                        {isStaff && ` · ${student.phone || ''} · ${student.email}`}
                       </div>
-                      {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && student.address && (
+                      {isStaff && student.address && (
                         <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
                           📍 {student.address}
                         </div>
@@ -254,20 +261,35 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between sm:justify-end gap-2.5 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 dark:border-slate-800">
-                    <span className="text-[11px] text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200/60 dark:border-emerald-800/60 px-2.5 py-0.5 rounded-full font-medium">
-                      {isSelf ? 'Enrolled (သင်တက်ရောက်ဆဲ)' : 'Classmate (အတန်းဖော်)'}
-                    </span>
+                  <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 dark:border-slate-800">
+                    {isStaff && attPct !== null && (
+                      <span
+                        className={`text-[11px] font-mono font-bold px-2.5 py-0.5 rounded-full border ${
+                          attPct >= 75
+                            ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                            : 'bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800'
+                        }`}
+                      >
+                        Attendance: {attPct}%
+                      </span>
+                    )}
+
+                    {!isStaff && (
+                      <span className="text-[11px] text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200/60 dark:border-emerald-800/60 px-2.5 py-0.5 rounded-full font-medium">
+                        {isSelf ? 'Enrolled (သင်တက်ရောက်ဆဲ)' : 'Classmate (အတန်းဖော်)'}
+                      </span>
+                    )}
 
                     {/* Admin / Co-Admin Expel / Remove Action */}
-                    {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
+                    {isStaff && (
                       <button
+                        type="button"
                         onClick={() => setStudentToUnenroll(student)}
-                        className="flex items-center gap-1 px-2.5 py-1 text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 rounded-lg text-xs font-medium transition-colors cursor-pointer"
+                        className="flex items-center gap-1 px-2.5 py-1 text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 rounded-xl text-xs font-bold transition-colors cursor-pointer"
                         title="အတန်းမှ ထုတ်ပယ်မည်"
                       >
                         <UserX className="w-3.5 h-3.5" />
-                        <span>Remove (ထုတ်ပယ်မည်)</span>
+                        <span>Remove</span>
                       </button>
                     )}
                   </div>

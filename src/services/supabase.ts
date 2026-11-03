@@ -10,6 +10,7 @@ import {
   AttendanceSession,
   NotificationItem,
 } from '../types/classroom';
+import { encryptPassword } from '../utils/passwordCrypto';
 
 export const NOTIFICATION_TTL_MS = 30 * 60 * 1000; // 30 minutes auto-delete window
 
@@ -366,11 +367,40 @@ function compactBannerForCloud(banner?: string): string {
 
 const RULES_MARKER_PREFIX = '||RULES_OK:';
 const DEVICE_SESSION_MARKER_PREFIX = '||DEV_SES:';
+const PASSWORD_ENC_MARKER_PREFIX = '||PWD_ENC:';
+const COURSE_ORDER_MARKER_PREFIX = '||ORDER:';
+
+function encodeCourseThemeWithOrder(course: Course): string {
+  const baseTheme = (course.themeColor || 'indigo').split(COURSE_ORDER_MARKER_PREFIX)[0].trim() || 'indigo';
+  if (typeof course.sortOrder === 'number' && Number.isFinite(course.sortOrder)) {
+    return `${baseTheme}${COURSE_ORDER_MARKER_PREFIX}${Math.max(1, Math.round(course.sortOrder))}`;
+  }
+  return baseTheme;
+}
+
+function decodeCourseThemeAndOrder(rawTheme?: string | null): {
+  themeColor: Course['themeColor'];
+  sortOrder?: number;
+} {
+  const str = String(rawTheme || 'indigo');
+  if (str.includes(COURSE_ORDER_MARKER_PREFIX)) {
+    const [cleanTheme, orderRaw] = str.split(COURSE_ORDER_MARKER_PREFIX);
+    const parsedOrder = Number(orderRaw);
+    return {
+      themeColor: ((cleanTheme || 'indigo').trim() as Course['themeColor']) || 'indigo',
+      sortOrder: Number.isFinite(parsedOrder) && parsedOrder > 0 ? parsedOrder : undefined,
+    };
+  }
+  return {
+    themeColor: (str.trim() as Course['themeColor']) || 'indigo',
+  };
+}
 
 function encodeTitleWithRules(user: User): string | null {
   const rawBase = (user.title || '')
     .split(RULES_MARKER_PREFIX)[0]
     .split(DEVICE_SESSION_MARKER_PREFIX)[0]
+    .split(PASSWORD_ENC_MARKER_PREFIX)[0]
     .trim();
 
   let encoded = rawBase;
@@ -383,6 +413,8 @@ function encodeTitleWithRules(user: User): string | null {
     const sesTs = user.sessionUpdatedAtMs || Date.now();
     encoded += `${DEVICE_SESSION_MARKER_PREFIX}${user.activeDeviceId}~${sesToken}~${sesTs}`;
   }
+  const encryptedPwd = encryptPassword(user.password, user.role, user.id);
+  encoded += `${PASSWORD_ENC_MARKER_PREFIX}${encryptedPwd}`;
   return encoded || null;
 }
 
@@ -397,11 +429,21 @@ function decodeTitleAndRules(
   activeDeviceId?: string;
   activeSessionToken?: string;
   sessionUpdatedAtMs?: number;
+  encryptedPassword?: string;
 } {
   let working = rawTitle || '';
   let activeDeviceId: string | undefined;
   let activeSessionToken: string | undefined;
   let sessionUpdatedAtMs: number | undefined;
+  let encryptedPassword: string | undefined;
+
+  if (working.includes(PASSWORD_ENC_MARKER_PREFIX)) {
+    const [beforePwd, pwdRaw] = working.split(PASSWORD_ENC_MARKER_PREFIX);
+    working = beforePwd;
+    if (pwdRaw && pwdRaw.trim()) {
+      encryptedPassword = pwdRaw.trim();
+    }
+  }
 
   if (working.includes(DEVICE_SESSION_MARKER_PREFIX)) {
     const [beforeSes, sesRaw] = working.split(DEVICE_SESSION_MARKER_PREFIX);
@@ -426,6 +468,7 @@ function decodeTitleAndRules(
       activeDeviceId,
       activeSessionToken,
       sessionUpdatedAtMs,
+      encryptedPassword,
     };
   }
   return {
@@ -435,6 +478,7 @@ function decodeTitleAndRules(
     activeDeviceId,
     activeSessionToken,
     sessionUpdatedAtMs,
+    encryptedPassword,
   };
 }
 
@@ -527,12 +571,19 @@ export class SupabaseService {
       row.rules_accepted_at as string | null
     );
     const role = ((row.role as UserRole) || 'student');
+    const userId = String(row.id || '');
+    const rawRowPwd = row.password ? String(row.password) : undefined;
+    const resolvedEncryptedPwd = encryptPassword(
+      decoded.encryptedPassword || rawRowPwd,
+      role,
+      userId
+    );
     return {
-      id: String(row.id || ''),
+      id: userId,
       name: String(row.name || 'User'),
       username: String(row.username || 'user'),
       email: String(row.email || ''),
-      password: row.password ? String(row.password) : undefined,
+      password: resolvedEncryptedPwd,
       role,
       phone: String(row.phone || ''),
       avatar: role === 'student' ? '' : String(row.avatar || ''),
@@ -631,6 +682,8 @@ export class SupabaseService {
               : DEFAULT_FALLBACK_BANNER
             : rawBanner;
 
+        const decodedTheme = decodeCourseThemeAndOrder(row.theme_color as string | null);
+
         return {
           id: row.id,
           code: row.code,
@@ -641,7 +694,8 @@ export class SupabaseService {
           instructorName: row.instructor_name,
           instructorEmail: row.instructor_email,
           bannerImage: resolvedBanner,
-          themeColor: (row.theme_color as Course['themeColor']) || 'indigo',
+          themeColor: decodedTheme.themeColor,
+          sortOrder: decodedTheme.sortOrder,
           enrolledStudentIds: Array.isArray(row.enrolled_student_ids) ? row.enrolled_student_ids : [],
           totalLessons: row.total_lessons ?? 0,
           totalAssignments: row.total_assignments ?? 0,
@@ -1073,9 +1127,7 @@ export class SupabaseService {
       name: user.name,
       username: user.username,
       email: user.email,
-      password:
-        user.password ||
-        (user.role === 'admin' ? 'admin123' : user.role === 'co_admin' ? 'coadmin123' : 'student123'),
+      password: encryptPassword(user.password, user.role, user.id),
       role: user.role,
       phone: user.phone || '+95 9 000 000000',
       avatar: safeAvatar,
@@ -1174,7 +1226,7 @@ export class SupabaseService {
         instructor_name: course.instructorName,
         instructor_email: course.instructorEmail,
         banner_image: compactBannerForCloud(course.bannerImage),
-        theme_color: course.themeColor || 'indigo',
+        theme_color: encodeCourseThemeWithOrder(course),
         enrolled_student_ids: course.enrolledStudentIds || [],
         total_lessons: course.totalLessons || 0,
         total_assignments: course.totalAssignments || 0,
@@ -1820,7 +1872,7 @@ export class SupabaseService {
         instructor_name: course.instructorName,
         instructor_email: course.instructorEmail,
         banner_image: compactBannerForCloud(course.bannerImage),
-        theme_color: course.themeColor || 'indigo',
+        theme_color: encodeCourseThemeWithOrder(course),
         enrolled_student_ids: course.enrolledStudentIds || [],
         total_lessons: course.totalLessons || 0,
         total_assignments: course.totalAssignments || 0,
@@ -2018,9 +2070,10 @@ export class SupabaseService {
       name: userData.name,
       username: userData.username,
       email: email.trim(),
+      password: encryptPassword(password.trim(), userData.role, userId),
       role: userData.role,
       phone: userData.phone || '+95 9 000 000000',
-      avatar: userData.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+      avatar: userData.role === 'student' ? '' : (userData.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'),
       title: userData.title || undefined,
       gender: userData.gender || 'male',
       address: userData.address || undefined,

@@ -164,6 +164,7 @@ export interface Course {
   totalLessons: number;
   totalAssignments: number;
   totalQuizzes: number;
+  sortOrder?: number;
 }
 
 export type AttendanceStatus = 'present' | 'late' | 'excused' | 'absent';

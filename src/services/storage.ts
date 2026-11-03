@@ -17,6 +17,13 @@ import {
 } from '../types/classroom';
 import { SupabaseService, NOTIFICATION_TTL_MS } from './supabase';
 import {
+  encryptPassword,
+  decryptPassword,
+  verifyPassword,
+  isEncryptedPassword,
+  getEncryptedHashFingerprint,
+} from '../utils/passwordCrypto';
+import {
   INITIAL_USERS,
   INITIAL_COURSES,
   INITIAL_POSTS,
@@ -220,23 +227,45 @@ export class ClassroomDB {
     if (!localStorage.getItem(STORAGE_KEYS.USERS)) {
       this.setItem(
         STORAGE_KEYS.USERS,
-        INITIAL_USERS.filter((u) => !deletedSet.has(u.id)).map((u) =>
-          u.role === 'student' ? { ...u, avatar: '' } : u
-        )
+        INITIAL_USERS.filter((u) => !deletedSet.has(u.id)).map((u) => ({
+          ...u,
+          avatar: u.role === 'student' ? '' : u.avatar,
+          password: encryptPassword(u.password, u.role, u.id),
+        }))
       );
     } else {
       // Ensure existing local student accounts never retain any profile photo
+      // and automatically encrypt any legacy plaintext passwords into ENC_V1 ciphertext
       const existingUsers = this.getItem<User[]>(STORAGE_KEYS.USERS, []);
       let usersChanged = false;
+      const upgradedUsersForCloud: User[] = [];
       const sanitizedUsers = existingUsers.map((u) => {
-        if (u.role === 'student' && u.avatar) {
+        const shouldStripAvatar = u.role === 'student' && Boolean(u.avatar);
+        const needsEncryption = !isEncryptedPassword(u.password);
+        if (shouldStripAvatar || needsEncryption) {
           usersChanged = true;
-          return { ...u, avatar: '' };
+          const upgraded: User = {
+            ...u,
+            avatar: u.role === 'student' ? '' : u.avatar,
+            password: encryptPassword(u.password, u.role, u.id),
+          };
+          if (needsEncryption) {
+            upgradedUsersForCloud.push(upgraded);
+          }
+          return upgraded;
         }
         return u;
       });
       if (usersChanged) {
         this.setItem(STORAGE_KEYS.USERS, sanitizedUsers);
+        // Push migrated encrypted passwords to Supabase in the background
+        upgradedUsersForCloud.forEach((u) => {
+          try {
+            SupabaseService.upsertProfile(u).catch(() => {});
+          } catch {
+            // ignore
+          }
+        });
       }
     }
     if (!localStorage.getItem(STORAGE_KEYS.COURSES)) {
@@ -513,15 +542,7 @@ export class ClassroomDB {
       };
     }
 
-    const defaultPwd =
-      matched.role === 'admin'
-        ? 'admin123'
-        : matched.role === 'co_admin'
-        ? 'coadmin123'
-        : 'student123';
-    const userPassword = matched.password || defaultPwd;
-
-    if (cleanPwd !== userPassword) {
+    if (! verifyPassword(cleanPwd, matched.password, matched.role)) {
       return {
         user: null,
         error: genericAuthError,
@@ -537,6 +558,20 @@ export class ClassroomDB {
     }
 
     return { user: matched };
+  }
+
+  /**
+   * Decrypts a user's stored ENC_V1 ciphertext password in memory for authorized Admin / Co-Admin inspection or credential copy.
+   */
+  static getDecryptedPassword(user: User): string {
+    return decryptPassword(user.password, user.role);
+  }
+
+  /**
+   * Returns a short cryptographic fingerprint (e.g., ENC_V1:9f3a2b…e491c0) of the user's encrypted password.
+   */
+  static getPasswordFingerprint(user: User): string {
+    return getEncryptedHashFingerprint(user.password, user.role, user.id);
   }
 
   static login(
@@ -656,10 +691,11 @@ export class ClassroomDB {
           sessionUpdatedAtMs: remoteUser.sessionUpdatedAtMs,
           rulesAccepted: Boolean(remoteUser.rulesAccepted || (idx >= 0 && localUsers[idx].rulesAccepted)),
           rulesAcceptedAt: remoteUser.rulesAcceptedAt || (idx >= 0 ? localUsers[idx].rulesAcceptedAt : undefined),
-          password:
-            remoteUser.password ||
-            (idx >= 0 ? localUsers[idx].password : undefined) ||
-            (remoteUser.role === 'admin' ? 'admin123' : remoteUser.role === 'co_admin' ? 'coadmin123' : 'student123'),
+          password: encryptPassword(
+            remoteUser.password || (idx >= 0 ? localUsers[idx].password : undefined),
+            remoteUser.role,
+            remoteUser.id
+          ),
         };
         if (idx >= 0) {
           localUsers[idx] = mergedUser;
@@ -746,12 +782,13 @@ export class ClassroomDB {
         ? ''
         : data.avatar?.trim() || avatarPool[users.length % avatarPool.length];
 
+    const newUserId = `user-${data.role}-${Date.now()}`;
     const newUser: User = {
-      id: `user-${data.role}-${Date.now()}`,
+      id: newUserId,
       name: data.name.trim(),
       username: cleanUsername,
       email: cleanEmail,
-      password: cleanPassword,
+      password: encryptPassword(cleanPassword, data.role, newUserId),
       phone: data.phone.trim() || '+95 9 000 000000',
       role: data.role,
       avatar: finalAvatar,
@@ -926,15 +963,7 @@ export class ClassroomDB {
       return { success: false, error: 'အသုံးပြုသူ အကောင့် မတွေ့ရှိပါ။' };
     }
 
-    const currentPwd =
-      users[userIndex].password ||
-      (users[userIndex].role === 'admin'
-        ? 'admin123'
-        : users[userIndex].role === 'co_admin'
-        ? 'coadmin123'
-        : 'student123');
-
-    if (oldPassword.trim() !== currentPwd) {
+    if (!verifyPassword(oldPassword.trim(), users[userIndex].password, users[userIndex].role)) {
       return { success: false, error: 'လက်ရှိ လျှို့ဝှက်နံပါတ် (Current Password) မှားယွင်းနေပါသည်။' };
     }
 
@@ -942,12 +971,18 @@ export class ClassroomDB {
       return { success: false, error: 'လျှို့ဝှက်နံပါတ် အသစ်သည် အနည်းဆုံး ၄ လုံး ရှိရပါမည်။' };
     }
 
-    users[userIndex].password = newPassword.trim();
+    const encryptedNewPwd = encryptPassword(
+      newPassword.trim(),
+      users[userIndex].role,
+      users[userIndex].id
+    );
+    users[userIndex].password = encryptedNewPwd;
+    this.markLocalWrite(userId);
     this.setItem(STORAGE_KEYS.USERS, users);
 
     const currentLogged = this.getCurrentUser();
     if (currentLogged && currentLogged.id === userId) {
-      currentLogged.password = newPassword.trim();
+      currentLogged.password = encryptedNewPwd;
       this.setCurrentUser(currentLogged);
     }
 
@@ -984,11 +1019,17 @@ export class ClassroomDB {
       return { success: false, error: 'လျှို့ဝှက်နံပါတ်သည် အနည်းဆုံး ၄ လုံး ရှိရပါမည်။' };
     }
 
-    users[userIndex].password = newPassword.trim();
+    const encryptedNewPwd = encryptPassword(
+      newPassword.trim(),
+      users[userIndex].role,
+      users[userIndex].id
+    );
+    users[userIndex].password = encryptedNewPwd;
+    this.markLocalWrite(studentId);
     this.setItem(STORAGE_KEYS.USERS, users);
 
     if (currentLogged && currentLogged.id === studentId) {
-      currentLogged.password = newPassword.trim();
+      currentLogged.password = encryptedNewPwd;
       this.setCurrentUser(currentLogged);
     }
 
@@ -1085,9 +1126,31 @@ export class ClassroomDB {
     return this.deleteUser(studentId).success;
   }
 
+  // Custom Classroom Ordering Helper (Admin & Co-Admin custom order reflected for all users)
+  static sortCoursesByCustomOrder(courses: Course[]): Course[] {
+    return courses
+      .map((course, idx) => ({
+        course,
+        idx,
+        order:
+          typeof course.sortOrder === 'number' && Number.isFinite(course.sortOrder)
+            ? course.sortOrder
+            : idx + 1,
+      }))
+      .sort((a, b) => {
+        if (a.order !== b.order) return a.order - b.order;
+        return a.idx - b.idx;
+      })
+      .map((entry, normalizedIdx) => ({
+        ...entry.course,
+        sortOrder: normalizedIdx + 1,
+      }));
+  }
+
   // Strict Course & Class Access Control (RLS simulation)
   static getCourses(currentUser: User): Course[] {
-    const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const rawCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const allCourses = this.sortCoursesByCustomOrder(rawCourses);
     if (currentUser.role === 'admin' || currentUser.role === 'co_admin') {
       return allCourses;
     }
@@ -1168,17 +1231,115 @@ export class ClassroomDB {
     if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
       throw new Error('Unauthorized: Only Admin or Co-Admin can create courses.');
     }
-    const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const existing = this.sortCoursesByCustomOrder(
+      this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES)
+    );
     const id = `course-${Date.now()}`;
-    const course: Course = { ...newCourse, id };
+    const course: Course = { ...newCourse, id, sortOrder: 1 };
+    const shifted = existing.map((c, idx) => {
+      const next = { ...c, sortOrder: idx + 2 };
+      this.markLocalWrite(next.id);
+      return next;
+    });
+    const updatedList = [course, ...shifted];
     this.markLocalWrite(course.id);
-    this.setItem(STORAGE_KEYS.COURSES, [course, ...courses]);
-    try {
-      SupabaseService.upsertCourse(course).catch(() => {});
-    } catch {
-      // ignore
-    }
+    this.setItem(STORAGE_KEYS.COURSES, updatedList);
+    updatedList.forEach((c) => {
+      try {
+        SupabaseService.upsertCourse(c).catch(() => {});
+      } catch {
+        // ignore
+      }
+    });
     return course;
+  }
+
+  /**
+   * Reorders all classrooms according to an ordered array of course IDs (Admin & Co-Admin)
+   * and immediately persists to LocalStorage + Supabase so all devices see the new order.
+   */
+  static reorderCourses(orderedCourseIds: string[]): Course[] {
+    const currentLogged = this.getCurrentUser();
+    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+      return this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    }
+    const currentCourses = this.sortCoursesByCustomOrder(
+      this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES)
+    );
+    const byId = new Map<string, Course>(currentCourses.map((c) => [c.id, c]));
+    const reordered: Course[] = [];
+    const seen = new Set<string>();
+
+    orderedCourseIds.forEach((id) => {
+      const found = byId.get(id);
+      if (found && !seen.has(id)) {
+        seen.add(id);
+        reordered.push(found);
+      }
+    });
+
+    currentCourses.forEach((c) => {
+      if (!seen.has(c.id)) {
+        seen.add(c.id);
+        reordered.push(c);
+      }
+    });
+
+    const normalized = reordered.map((c, index) => {
+      const updatedCourse: Course = { ...c, sortOrder: index + 1 };
+      this.markLocalWrite(updatedCourse.id);
+      return updatedCourse;
+    });
+
+    this.setItem(STORAGE_KEYS.COURSES, normalized);
+    normalized.forEach((c) => {
+      try {
+        SupabaseService.upsertCourse(c).catch(() => {});
+      } catch {
+        // ignore
+      }
+    });
+
+    return normalized;
+  }
+
+  /**
+   * Moves a single course up, down, to top, to bottom, or to a specific 1-based position (Admin & Co-Admin).
+   */
+  static moveCourseOrder(
+    courseId: string,
+    target: 'up' | 'down' | 'top' | 'bottom' | number
+  ): Course[] {
+    const currentCourses = this.sortCoursesByCustomOrder(
+      this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES)
+    );
+    const fromIndex = currentCourses.findIndex((c) => c.id === courseId);
+    if (fromIndex === -1 || currentCourses.length <= 1) {
+      return currentCourses;
+    }
+
+    let toIndex = fromIndex;
+    if (target === 'up') {
+      toIndex = Math.max(0, fromIndex - 1);
+    } else if (target === 'down') {
+      toIndex = Math.min(currentCourses.length - 1, fromIndex + 1);
+    } else if (target === 'top') {
+      toIndex = 0;
+    } else if (target === 'bottom') {
+      toIndex = currentCourses.length - 1;
+    } else if (typeof target === 'number' && Number.isFinite(target)) {
+      toIndex = Math.max(0, Math.min(currentCourses.length - 1, Math.round(target) - 1));
+    }
+
+    if (toIndex === fromIndex) {
+      return currentCourses;
+    }
+
+    const nextIds = currentCourses.map((c) => c.id);
+    const [movedId] = nextIds.splice(fromIndex, 1);
+    nextIds.splice(toIndex, 0, movedId);
+
+    return this.reorderCourses(nextIds);
   }
 
   static updateCourseBanner(
@@ -1729,10 +1890,13 @@ export class ClassroomDB {
               rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
               rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
               avatar: resolvedAvatar,
-              password:
-                ru.password ||
-                existing?.password ||
-                (ru.role === 'admin' ? 'admin123' : ru.role === 'co_admin' ? 'coadmin123' : 'student123'),
+              password: encryptPassword(
+                this.isRecentLocalWrite(ru.id)
+                  ? existing?.password || ru.password
+                  : ru.password || existing?.password,
+                ru.role,
+                ru.id
+              ),
             });
           });
           if (newlyDiscoveredRemoteDeletions.length > 0) {
@@ -1797,6 +1961,49 @@ export class ClassroomDB {
           } catch {
             // ignore
           }
+        } else if (
+          shouldFetchCatalog &&
+          remoteProfiles !== null &&
+          remoteProfiles.length === 0 &&
+          remoteCourses !== null &&
+          remoteCourses.length === 0 &&
+          localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) !== 'true'
+        ) {
+          // Brand-new empty Supabase tables detected: automatically push initial local data in the background
+          try {
+            const seedUsers = this.getAllUsers();
+            const seedCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+            const seedPosts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS);
+            const seedAssignments = this.getItem<Assignment[]>(STORAGE_KEYS.ASSIGNMENTS, INITIAL_ASSIGNMENTS);
+            const seedSubmissions = this.getItem<AssignmentSubmission[]>(STORAGE_KEYS.SUBMISSIONS, INITIAL_SUBMISSIONS);
+            const seedQuizzes = this.getItem<Quiz[]>(STORAGE_KEYS.QUIZZES, INITIAL_QUIZZES);
+            const seedAttendance = this.getItem<AttendanceSession[]>(
+              STORAGE_KEYS.ATTENDANCE,
+              INITIAL_ATTENDANCE_SESSIONS
+            );
+            SupabaseService.syncAllData(
+              seedUsers,
+              seedCourses,
+              seedPosts,
+              seedAssignments,
+              seedQuizzes,
+              seedAttendance,
+              Array.from(deletedSet),
+              seedSubmissions
+            )
+              .then((res) => {
+                if (res.success) {
+                  try {
+                    localStorage.setItem(STORAGE_KEYS.CLOUD_SYNCED, 'true');
+                  } catch {
+                    // ignore
+                  }
+                }
+              })
+              .catch(() => {});
+          } catch {
+            // ignore
+          }
         }
         const cloudActive =
           hasRemoteCatalogData ||
@@ -1843,10 +2050,13 @@ export class ClassroomDB {
               rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
               rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
               avatar: resolvedAvatar,
-              password:
-                ru.password ||
-                existing?.password ||
-                (ru.role === 'admin' ? 'admin123' : ru.role === 'co_admin' ? 'coadmin123' : 'student123'),
+              password: encryptPassword(
+                this.isRecentLocalWrite(ru.id)
+                  ? existing?.password || ru.password
+                  : ru.password || existing?.password,
+                ru.role,
+                ru.id
+              ),
             };
             userMap.set(ru.id, mergedProfile);
             latestAvatarByUserId.set(ru.id, resolvedAvatar);
@@ -1956,16 +2166,21 @@ export class ClassroomDB {
               return;
             }
             const existing = courseMap.get(rc.id);
-            const resolvedBanner = this.isRecentLocalWrite(rc.id)
+            const isRecentWrite = this.isRecentLocalWrite(rc.id);
+            const resolvedBanner = isRecentWrite
               ? existing?.bannerImage || rc.bannerImage || ''
               : rc.bannerImage || existing?.bannerImage || '';
+            const resolvedSortOrder = isRecentWrite
+              ? existing?.sortOrder ?? rc.sortOrder
+              : rc.sortOrder ?? existing?.sortOrder;
             courseMap.set(rc.id, {
               ...existing,
               ...rc,
               bannerImage: resolvedBanner,
+              sortOrder: resolvedSortOrder,
             });
           });
-          const merged = Array.from(courseMap.values());
+          const merged = this.sortCoursesByCustomOrder(Array.from(courseMap.values()));
           if (JSON.stringify(merged) !== prevJson) {
             this.setItem(STORAGE_KEYS.COURSES, merged);
             updated = true;

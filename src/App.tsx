@@ -28,6 +28,11 @@ import {
   ScrollText,
   CheckCircle2,
   Bell,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  GripVertical,
+  Check,
 } from 'lucide-react';
 
 export default function App() {
@@ -67,6 +72,8 @@ export default function App() {
   const [showSupabaseModal, setShowSupabaseModal] = useState(false);
   const [showResetConfirmModal, setShowResetConfirmModal] = useState(false);
   const [showRulesModal, setShowRulesModal] = useState(false);
+  const [showReorderPanel, setShowReorderPanel] = useState(false);
+  const [draggedCourseId, setDraggedCourseId] = useState<string | null>(null);
   const [appBannerError, setAppBannerError] = useState<string | null>(null);
 
   // Mobile Back Key step-by-step navigation handlers (outer to inner)
@@ -198,12 +205,26 @@ export default function App() {
       }
     }, 20000);
 
+    // Automatically sync immediately whenever internet connection is restored
+    const handleOnline = () => {
+      const loggedUser = ClassroomDB.getCurrentUser();
+      if (loggedUser) {
+        ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
+          if (updated || !ClassroomDB.getCurrentUser()) {
+            refreshData();
+          }
+        });
+      }
+    };
+    window.addEventListener('online', handleOnline);
+
     return () => {
       clearTimeout(initTimer);
       window.removeEventListener('storage', handleStorageChange);
       document.removeEventListener('visibilitychange', handleWakeUp);
       window.removeEventListener('pageshow', handleWakeUp);
       window.removeEventListener('focus', handleWakeUp);
+      window.removeEventListener('online', handleOnline);
       clearInterval(syncInterval);
       clearInterval(notifCleanupInterval);
     };
@@ -506,23 +527,6 @@ export default function App() {
                       <Plus className="w-4 h-4" />
                       <span>Create Class / Batch</span>
                     </button>
-
-                    <button
-                      onClick={() => setShowSupabaseModal(true)}
-                      className="neu-btn flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-emerald-800 dark:text-emerald-300 text-xs font-bold rounded-2xl cursor-pointer"
-                      title="View Supabase configuration, connection test and SQL schema"
-                    >
-                      <Database className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                      <span>Supabase SQL</span>
-                    </button>
-
-                    <button
-                      onClick={() => setShowArchitectureModal(true)}
-                      className="neu-btn flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-slate-700 dark:text-slate-200 text-xs font-semibold rounded-2xl cursor-pointer"
-                    >
-                      <Layers className="w-4 h-4 text-slate-500 dark:text-slate-400" />
-                      <span>DB Spec</span>
-                    </button>
                   </>
                 )}
 
@@ -537,15 +541,15 @@ export default function App() {
             </div>
 
             {/* Course Grid Header & Carved Search Bar */}
-            <div className="space-y-5">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5">
-                <div className="flex items-center gap-3">
-                  <div className="neu-inset-sm p-2.5 rounded-2xl text-indigo-600 dark:text-indigo-400">
+            <div className="space-y-5 min-w-0">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3.5">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="neu-inset-sm p-2.5 rounded-2xl text-indigo-600 dark:text-indigo-400 shrink-0">
                     <BookOpen className="w-5 h-5" />
                   </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-slate-100">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h2 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-slate-100 truncate">
                         {currentUser.role === 'admin' || currentUser.role === 'co_admin'
                           ? 'All Managed Classes'
                           : 'Authorized Courses'}
@@ -554,24 +558,181 @@ export default function App() {
                         ({courses.length})
                       </span>
                     </div>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      သင်တက်ရောက်ခွင့်ရရှိထားသော အတန်းများသို့ ဝင်ရောက်၍ သင်ခန်းစာများ လေ့လာနိုင်ပါသည်
+                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                      {currentUser.role === 'admin' || currentUser.role === 'co_admin'
+                        ? 'အတန်းများကို စိတ်ကြိုက် အစီအစဉ် (Order) စီနိုင်ပြီး ပြောင်းလဲမှုအားလုံး စက်အားလုံးတွင် တန်းပြောင်းပါသည်'
+                        : 'သင်တက်ရောက်ခွင့်ရရှိထားသော အတန်းများသို့ ဝင်ရောက်၍ သင်ခန်းစာများ လေ့လာနိုင်ပါသည်'}
                     </p>
                   </div>
                 </div>
 
-                {/* Carved Neumorphic Course Search Filter */}
-                <div className="relative w-full sm:w-72">
-                  <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-                  <input
-                    type="text"
-                    placeholder="Search courses or batches..."
-                    value={courseSearch}
-                    onChange={(e) => setCourseSearch(e.target.value)}
-                    className="neu-input w-full pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 rounded-2xl"
-                  />
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full lg:w-auto">
+                  {/* Admin / Co-Admin Custom Classroom Order Button */}
+                  {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && courses.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowReorderPanel((prev) => !prev)}
+                      className={`flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-2xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
+                        showReorderPanel
+                          ? 'neu-btn-indigo text-white'
+                          : 'neu-btn text-indigo-700 dark:text-indigo-300'
+                      }`}
+                    >
+                      <ArrowUpDown className="w-4 h-4" />
+                      <span>
+                        {showReorderPanel
+                          ? '✓ အစီအစဉ်စီခြင်း ပြီးပြီ (Done)'
+                          : 'အတန်းများ အစီအစဉ်စီရန် (Order Classes)'}
+                      </span>
+                    </button>
+                  )}
+
+                  {/* Carved Neumorphic Course Search Filter */}
+                  <div className="relative w-full sm:w-64 md:w-72">
+                    <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                    <input
+                      type="text"
+                      placeholder="Search courses or batches..."
+                      value={courseSearch}
+                      onChange={(e) => setCourseSearch(e.target.value)}
+                      className="neu-input w-full pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 rounded-2xl"
+                    />
+                  </div>
                 </div>
               </div>
+
+              {/* Interactive Custom Classroom Order Manager Panel for Admin & Co-Admin */}
+              {showReorderPanel && (currentUser.role === 'admin' || currentUser.role === 'co_admin') && courses.length > 1 && (
+                <div className="neu-raised rounded-3xl p-4 sm:p-5 border border-indigo-500/20 space-y-3.5 animate-in fade-in duration-200">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-slate-200/70 dark:border-slate-800">
+                    <div>
+                      <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                        <ArrowUpDown className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                        <span>Custom Classroom Order (အတန်းများ စိတ်ကြိုက် အစီအစဉ်စီရန်)</span>
+                      </h3>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        Drag ဆွဲ၍ဖြစ်စေ၊ <strong>↑ / ↓</strong> ခလုတ် သို့မဟုတ် အမှတ်စဉ် ရွေးချယ်၍ဖြစ်စေ စိတ်ကြိုက်စီနိုင်ပါသည်။ စီထားသည့်အတိုင်း Admin, Co-Admin နှင့် ကျောင်းသားအားလုံးထံတွင် တန်းပေါ်ပါမည်။
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowReorderPanel(false)}
+                      className="self-end sm:self-center px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1 cursor-pointer shrink-0 shadow-xs"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>သိမ်းဆည်းပြီး ပိတ်မည်</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    {courses.map((course, idx) => (
+                      <div
+                        key={course.id}
+                        draggable
+                        onDragStart={() => setDraggedCourseId(course.id)}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={() => {
+                          if (!draggedCourseId || draggedCourseId === course.id) return;
+                          const ids = courses.map((c) => c.id);
+                          const fromIdx = ids.indexOf(draggedCourseId);
+                          const toIdx = ids.indexOf(course.id);
+                          if (fromIdx !== -1 && toIdx !== -1) {
+                            ids.splice(fromIdx, 1);
+                            ids.splice(toIdx, 0, draggedCourseId);
+                            ClassroomDB.reorderCourses(ids);
+                            refreshData();
+                          }
+                          setDraggedCourseId(null);
+                        }}
+                        onDragEnd={() => setDraggedCourseId(null)}
+                        className={`neu-inset-sm rounded-2xl p-2.5 sm:p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition-all ${
+                          draggedCourseId === course.id ? 'opacity-50 ring-2 ring-indigo-500' : ''
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="text-slate-400 cursor-grab active:cursor-grabbing shrink-0 hidden sm:block">
+                            <GripVertical className="w-4 h-4" />
+                          </div>
+                          <span className="w-7 h-7 rounded-xl bg-indigo-600 text-white font-mono text-xs font-extrabold flex items-center justify-center shrink-0 shadow-2xs">
+                            #{idx + 1}
+                          </span>
+                          <img
+                            src={course.bannerImage}
+                            alt={course.title}
+                            referrerPolicy="no-referrer"
+                            className="w-12 h-7 rounded-lg object-cover shrink-0 border border-slate-300 dark:border-slate-700 hidden xs:block"
+                          />
+                          <div className="min-w-0">
+                            <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">
+                              {course.title}
+                            </div>
+                            <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 truncate">
+                              {course.code} · {course.batch} · {course.enrolledStudentIds.length} students
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-end gap-1.5 shrink-0">
+                          <select
+                            value={idx + 1}
+                            onChange={(e) => {
+                              ClassroomDB.moveCourseOrder(course.id, Number(e.target.value));
+                              refreshData();
+                            }}
+                            className="px-2 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-xs font-mono font-bold text-slate-800 dark:text-slate-200 cursor-pointer"
+                            title="Move to specific position"
+                          >
+                            {courses.map((_, posIdx) => (
+                              <option key={posIdx + 1} value={posIdx + 1}>
+                                အမှတ်စဉ် #{posIdx + 1}
+                              </option>
+                            ))}
+                          </select>
+
+                          <button
+                            type="button"
+                            disabled={idx === 0}
+                            onClick={() => {
+                              ClassroomDB.moveCourseOrder(course.id, 'top');
+                              refreshData();
+                            }}
+                            className="px-2 py-1 rounded-lg bg-slate-200/80 dark:bg-slate-800 hover:bg-indigo-100 dark:hover:bg-indigo-950 text-[11px] font-bold text-slate-700 dark:text-slate-300 disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed"
+                            title="ထိပ်ဆုံး (#1) သို့ပို့မည်"
+                          >
+                            Top #1
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={idx === 0}
+                            onClick={() => {
+                              ClassroomDB.moveCourseOrder(course.id, 'up');
+                              refreshData();
+                            }}
+                            className="p-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 text-slate-700 dark:text-slate-200 disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed"
+                            title="အပေါ်သို့ ရွှေ့မည် (Move Up)"
+                          >
+                            <ArrowUp className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={idx === courses.length - 1}
+                            onClick={() => {
+                              ClassroomDB.moveCourseOrder(course.id, 'down');
+                              refreshData();
+                            }}
+                            className="p-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 text-slate-700 dark:text-slate-200 disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed"
+                            title="အောက်သို့ ရွှေ့မည် (Move Down)"
+                          >
+                            <ArrowDown className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {courses.length === 0 ? (
                 <div className="neu-card p-8 sm:p-12 text-center rounded-3xl text-slate-500 dark:text-slate-400">
@@ -587,7 +748,7 @@ export default function App() {
                 </div>
               ) : (
                 <Suspense fallback={null}>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-7">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                     {courses
                       .filter((c) => {
                         if (!courseSearch.trim()) return true;
@@ -600,6 +761,7 @@ export default function App() {
                       })
                       .map((course) => {
                         const studentProg = ClassroomDB.getStudentProgress(currentUser.id, course.id);
+                        const fullIdx = courses.findIndex((c) => c.id === course.id);
 
                         return (
                           <CourseCard
@@ -607,6 +769,8 @@ export default function App() {
                             course={course}
                             currentUser={currentUser}
                             progress={studentProg}
+                            courseIndex={fullIdx >= 0 ? fullIdx : 0}
+                            totalCourses={courses.length}
                             onSelectCourse={handleOpenCourse}
                             onRefresh={refreshData}
                           />

@@ -1,32 +1,62 @@
 import React, { useState, useRef } from 'react';
-import { ClassroomDB } from '../services/storage';
 import { Course, User, UserRole } from '../types/classroom';
-import { PRESET_AVATARS, compressImageFile } from '../data/presetAvatars';
-import { ProfilePictureModal } from './ProfilePictureModal';
+import { ClassroomDB } from '../services/storage';
 import { SupabaseService } from '../services/supabase';
+import { ProfilePictureModal } from './ProfilePictureModal';
+import { useBackHandler } from '../utils/backNavigation';
 import {
   Users,
   UserPlus,
   Search,
   Check,
-  Trash2,
   AlertCircle,
   Lock,
   Eye,
   EyeOff,
   Copy,
   Sparkles,
-  Camera,
-  Upload,
+  Trash2,
   Shield,
   ShieldCheck,
-  UserCheck,
   GraduationCap,
-  Briefcase,
-  Layers,
+  RefreshCw,
+  Upload,
+  Camera,
   Download,
   CalendarCheck,
+  BookOpen,
+  KeyRound,
+  X,
+  FileSpreadsheet,
 } from 'lucide-react';
+
+const PRESET_AVATARS = [
+  {
+    id: 'av-1',
+    name: 'Dr. Si Thu / Lead',
+    url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+  },
+  {
+    id: 'av-2',
+    name: 'Coordinator',
+    url: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
+  },
+  {
+    id: 'av-3',
+    name: 'Academic Staff',
+    url: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
+  },
+  {
+    id: 'av-4',
+    name: 'Faculty Member',
+    url: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
+  },
+  {
+    id: 'av-5',
+    name: 'Senior Lecturer',
+    url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+  },
+];
 
 interface AdminStudentDirectoryModalProps {
   isOpen: boolean;
@@ -42,135 +72,178 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
   onRefresh,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [showNewForm, setShowNewForm] = useState(false);
   const [roleFilter, setRoleFilter] = useState<'all' | 'staff' | 'student'>('all');
-
-  // Form fields
+  const [ruleStatusFilter, setRuleStatusFilter] = useState<'all' | 'accepted' | 'pending'>('all');
+  const [courseFilterId, setCourseFilterId] = useState<string>('all');
+  const [visibleLimit, setVisibleLimit] = useState<number>(60);
+  const [showNewForm, setShowNewForm] = useState(false);
+  const [showReportsDrawer, setShowReportsDrawer] = useState(false);
   const [selectedRole, setSelectedRole] = useState<UserRole>('student');
   const [name, setName] = useState('');
   const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('student123');
-  const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
+  const [phone, setPhone] = useState('+95 9 ');
+  const [password, setPassword] = useState('student123');
   const [title, setTitle] = useState('');
-  const [gender, setGender] = useState<'male' | 'female' | 'other'>('male');
+  const [gender, setGender] = useState<'male' | 'female'>('male');
   const [address, setAddress] = useState('');
+  const [avatar, setAvatar] = useState(PRESET_AVATARS[0].url);
+  const [showPassword, setShowPassword] = useState(true);
   const [selectedInitialCourses, setSelectedInitialCourses] = useState<string[]>(
     courses[0]?.id ? [courses[0].id] : []
   );
-  const [avatar, setAvatar] = useState(PRESET_AVATARS[0].url);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [userToDelete, setUserToDelete] = useState<User | null>(null);
+  const [isSyncingAll, setIsSyncingAll] = useState(false);
+  const [selectedCsvCourseId, setSelectedCsvCourseId] = useState<string>(courses[0]?.id || 'all');
+  const [auditFilterMode, setAuditFilterMode] = useState<'accepted_only' | 'all'>('accepted_only');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Success credential card
+  // Profile Picture Editing Modal state
+  const [editingAvatarUser, setEditingAvatarUser] = useState<User | null>(null);
+
+  // Revealed passwords in directory table
+  const [revealedPasswords, setRevealedPasswords] = useState<Record<string, boolean>>({});
+
+  // Admin password reset modal state
+  const [resettingUser, setResettingUser] = useState<User | null>(null);
+  const [newUserPassword, setNewUserPassword] = useState('');
+  const [showResetPassword, setShowResetPassword] = useState(false);
+
+  // Delete user confirmation state
+  const [userToDelete, setUserToDelete] = useState<User | null>(null);
+
+  // Step-by-step mobile Back button handlers for nested sub-dialogs
+  useBackHandler(!!editingAvatarUser, () => setEditingAvatarUser(null));
+  useBackHandler(!!resettingUser, () => setResettingUser(null));
+  useBackHandler(!!userToDelete, () => setUserToDelete(null));
+  useBackHandler(showNewForm, () => setShowNewForm(false));
+
+  //Newly created user credentials display
   const [createdCredentials, setCreatedCredentials] = useState<{
     name: string;
     username: string;
     password: string;
     role: UserRole;
+    courseName?: string;
     gender?: string;
     address?: string;
-    courseName?: string;
   } | null>(null);
   const [copiedSuccess, setCopiedSuccess] = useState(false);
-
-  // Inline password reset
-  const [resettingUser, setResettingUser] = useState<User | null>(null);
-  const [newUserPassword, setNewUserPassword] = useState('');
-  const [showResetPassword, setShowResetPassword] = useState(false);
-
-  // Editing profile picture of any user
-  const [editingAvatarUser, setEditingAvatarUser] = useState<User | null>(null);
-
-  // Revealed passwords state per user
-  const [revealedPasswords, setRevealedPasswords] = useState<Record<string, boolean>>({});
-  const [selectedCsvCourseId, setSelectedCsvCourseId] = useState<string>(courses[0]?.id || 'all');
-  const [auditFilterMode, setAuditFilterMode] = useState<'accepted_only' | 'all'>('accepted_only');
-  const [ruleStatusFilter, setRuleStatusFilter] = useState<'all' | 'accepted' | 'pending'>('all');
-  // High-concurrency DOM virtualization limit (renders 60 cards initially for 60fps with 2,000+ users)
-  const [visibleLimit, setVisibleLimit] = useState<number>(60);
 
   if (!isOpen) return null;
 
   const currentLoggedUser = ClassroomDB.getCurrentUser();
   const isCoAdminSession = currentLoggedUser?.role === 'co_admin';
 
-  const handleExportAttendanceCSV = (courseId: string) => {
-    if (courseId === 'all') {
-      const res = ClassroomDB.downloadAllClassesAttendanceCSV();
-      if (res.success) {
-        setToastMsg(
-          `📥 အတန်းအားလုံး၏ Attendance Report CSV (${res.filename}) ကို အောင်မြင်စွာ ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ!`
-        );
-        setTimeout(() => setToastMsg(null), 4000);
-      }
-      return;
-    }
-
-    const res = ClassroomDB.downloadClassAttendanceCSV(courseId);
-    if (res.success) {
-      setToastMsg(
-        `📥 Attendance Report CSV (${res.filename}) ကို အောင်မြင်စွာ ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ!`
-      );
-      setTimeout(() => setToastMsg(null), 4000);
-    }
-  };
-
-  const handleExportAcceptanceAudit = (mode: 'all' | 'accepted_only' = auditFilterMode) => {
-    const res = ClassroomDB.downloadRulesAcceptanceAuditCSV(mode);
-    if (res.success) {
-      setToastMsg(
-        `🛡️ စည်းကမ်းချက် လက်ခံပြီးကြောင်း စာရင်း Acceptance Audit CSV (${res.filename} — ကျောင်းသား ${res.acceptedCount} ဦး အတည်ပြုပြီး) ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ!`
-      );
-      setTimeout(() => setToastMsg(null), 4500);
-    }
-  };
-
   const allUsers = ClassroomDB.getAllUsers();
   const staffUsers = allUsers.filter((u) => u.role === 'admin' || u.role === 'co_admin');
   const studentUsers = allUsers.filter((u) => u.role === 'student');
-  const acceptedStudentsCount = studentUsers.filter((u) => u.rulesAccepted === true).length;
+  const acceptedStudentsCount = studentUsers.filter((s) => Boolean(s.rulesAccepted)).length;
   const pendingStudentsCount = studentUsers.length - acceptedStudentsCount;
 
-  const filteredUsers = allUsers.filter((u) => {
-    if (roleFilter === 'staff' && u.role !== 'admin' && u.role !== 'co_admin') return false;
-    if (roleFilter === 'student' && u.role !== 'student') return false;
+  const selectedFilterCourse =
+    courseFilterId !== 'all' ? courses.find((c) => c.id === courseFilterId) : null;
 
-    if (ruleStatusFilter === 'accepted') {
-      if (u.role !== 'student' || !u.rulesAccepted) return false;
-    } else if (ruleStatusFilter === 'pending') {
-      if (u.role !== 'student' || u.rulesAccepted) return false;
-    }
-
-    const q = searchQuery.toLowerCase().trim();
-    if (!q) return true;
-    return (
-      u.name.toLowerCase().includes(q) ||
-      u.username.toLowerCase().includes(q) ||
-      u.email.toLowerCase().includes(q) ||
-      (u.address && u.address.toLowerCase().includes(q)) ||
-      (u.title && u.title.toLowerCase().includes(q)) ||
-      u.role.toLowerCase().includes(q)
+  const filteredUsers = allUsers
+    .filter((u) => {
+      if (roleFilter === 'staff') return u.role === 'admin' || u.role === 'co_admin';
+      if (roleFilter === 'student') return u.role === 'student';
+      return true;
+    })
+    .filter((u) => {
+      if (ruleStatusFilter === 'accepted') {
+        return u.role === 'student' && Boolean(u.rulesAccepted);
+      }
+      if (ruleStatusFilter === 'pending') {
+        return u.role === 'student' && !u.rulesAccepted;
+      }
+      return true;
+    })
+    .filter((u) => {
+      if (!selectedFilterCourse) return true;
+      if (u.role !== 'student') return false;
+      return selectedFilterCourse.enrolledStudentIds.includes(u.id);
+    })
+    .filter(
+      (s) =>
+        s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        s.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        s.username.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (s.phone && s.phone.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        (s.address && s.address.toLowerCase().includes(searchQuery.toLowerCase()))
     );
-  });
 
   const handleRoleChange = (role: UserRole) => {
     setSelectedRole(role);
     if (role === 'admin') {
       setPassword('admin123');
-      if (!title) setTitle('Lead Instructor & Administrator');
+      setTitle('Instructor & Administrator');
     } else if (role === 'co_admin') {
       setPassword('coadmin123');
-      if (!title) setTitle('Course Coordinator & Assistant Instructor');
+      setTitle('Course Coordinator & Assistant Instructor');
     } else {
       setPassword('student123');
-      if (!title) setTitle('Undergraduate Student');
+      setTitle('Undergraduate Scholar');
     }
+  };
+
+  const generateRandomPassword = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+    let pass = '';
+    for (let i = 0; i < 8; i++) {
+      pass += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    setPassword(pass);
+  };
+
+  const handleAvatarFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setErrorMsg('ကျေးဇူးပြု၍ ပုံဖိုင် (JPG, PNG, WEBP) ကိုသာ ရွေးချယ်ပါ။');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_SIZE = 240;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_SIZE) {
+            height = Math.round((height * MAX_SIZE) / width);
+            width = MAX_SIZE;
+          }
+        } else {
+          if (height > MAX_SIZE) {
+            width = Math.round((width * MAX_SIZE) / height);
+            height = MAX_SIZE;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          setAvatar(dataUrl);
+          setErrorMsg(null);
+        }
+      };
+      if (typeof event.target?.result === 'string') {
+        img.src = event.target.result;
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   const toggleInitialCourseSelection = (courseId: string) => {
@@ -179,398 +252,512 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     );
   };
 
-  const generateRandomPassword = () => {
-    const prefix = selectedRole === 'admin' ? 'ad-' : selectedRole === 'co_admin' ? 'co-' : 'st-';
-    const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
-    let res = prefix;
-    for (let i = 0; i < 4; i++) {
-      res += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    setPassword(res);
-  };
-
-  const handleAvatarFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const compressed = await compressImageFile(file, 256, 0.85);
-      setAvatar(compressed);
-    } catch {
-      setErrorMsg('ဓာတ်ပုံဖိုင် ဖတ်ရှုရာတွင် ချို့ယွင်းချက်ဖြစ်ပေါ်ပါသည်');
-    }
-  };
-
-  const handleToggleCourseForStudent = (studentId: string, courseId: string, isEnrolled: boolean) => {
-    if (isEnrolled) {
-      ClassroomDB.unenrollStudent(courseId, studentId);
-      setToastMsg('အတန်းမှ ထုတ်ပယ်ပြီးပါပြီ (Unenrolled). RLS အရ အဆိုပါ Course ပုန်းကွယ်သွားပါမည်။');
-    } else {
-      ClassroomDB.enrollStudent(courseId, studentId);
-      setToastMsg('အတန်းထဲသို့ ထည့်သွင်းပြီးပါပြီ (Enrolled). ကျောင်းသား Dashboard တွင် ချက်ချင်း ပေါ်လာပါမည်။');
-    }
-    onRefresh();
-    setTimeout(() => setToastMsg(null), 3500);
-  };
-
   const handleCreateAccountSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !username.trim() || !email.trim()) {
-      setErrorMsg('ကျေးဇူးပြု၍ အမည်၊ Username နှင့် Email အားလုံး ဖြည့်သွင်းပေးပါ။');
+    if (!name.trim() || !username.trim() || !email.trim() || !password.trim()) {
+      setErrorMsg('အမည်၊ Username၊ Email နှင့် Password အားလုံး ပြည့်စုံစွာ ဖြည့်စွက်ပါ။');
       return;
     }
 
-    if (!password.trim() || password.trim().length < 4) {
-      setErrorMsg('Login Password သည် အနည်းဆုံး ၄ လုံး ရှိရပါမည်။');
-      return;
-    }
-
-    setErrorMsg(null);
     setIsSubmitting(true);
-    const chosenCourses = courses.filter((c) => selectedInitialCourses.includes(c.id));
+    setErrorMsg(null);
 
+    const cleanPwd = password.trim();
     const res = ClassroomDB.registerNewUser({
       name: name.trim(),
       username: username.trim(),
-      password: password.trim(),
       email: email.trim(),
-      phone: phone.trim() || '+95 9 790 000000',
+      phone: phone.trim(),
       role: selectedRole,
-      avatar,
+      password: cleanPwd,
+      avatar: selectedRole === 'student' ? '' : avatar,
       title: title.trim() || undefined,
       gender,
       address: address.trim() || undefined,
       initialCourseIds: selectedRole === 'student' ? selectedInitialCourses : undefined,
     });
 
-    if (res.error) {
+    if (res.error || !res.user) {
+      setErrorMsg(res.error || 'Failed to create user account.');
       setIsSubmitting(false);
-      setErrorMsg(res.error);
       return;
     }
 
-    // Direct sync with Supabase Auth & profiles table using the exact same user ID
-    let supabaseError: string | undefined;
-    try {
-      const supRes = await SupabaseService.signUpWithSupabase(email.trim(), password.trim(), {
-        id: res.user?.id,
-        name: name.trim(),
-        username: username.trim(),
-        role: selectedRole,
-        phone: phone.trim(),
-        avatar,
-        title: title.trim(),
-        gender,
-        address: address.trim(),
-      });
-      if (!supRes.profileSynced && supRes.error) {
-        supabaseError = supRes.error;
-      }
-      // Also sync the courses so enrolled_student_ids updates in Supabase
-      for (const c of ClassroomDB.getCourses(res.user || allUsers[0])) {
-        await SupabaseService.upsertCourse(c);
-      }
-    } catch {
-      // offline or pending schema setup
-    }
-
-    setIsSubmitting(false);
-
-    // Set created credentials card for immediate copying
-    setCreatedCredentials({
-      name: name.trim(),
-      username: username.trim(),
-      password: password.trim(),
-      role: selectedRole,
-      gender: gender === 'male' ? 'Male (ကျား)' : gender === 'female' ? 'Female (မ)' : 'Other',
-      address: address.trim() || undefined,
-      courseName:
-        selectedRole === 'student' && chosenCourses.length > 0
-          ? chosenCourses.map((c) => `${c.code} (${c.title})`).join(', ')
-          : undefined,
+    const supabaseRes = await SupabaseService.signUpWithSupabase(email.trim(), cleanPwd, {
+      id: res.user.id,
+      name: res.user.name,
+      username: res.user.username,
+      role: res.user.role,
+      phone: res.user.phone,
+      avatar: res.user.avatar,
+      title: res.user.title,
+      gender,
+      address: res.user.address,
     });
 
-    const roleLabel = selectedRole === 'admin' ? 'Admin' : selectedRole === 'co_admin' ? 'Co-Admin' : 'Student';
-    if (supabaseError) {
-      setToastMsg(
-        `${roleLabel} အကောင့် "${name}" (@${username}) ကို App ထဲတွင် ဖွင့်ပြီးပါပြီ။ (Supabase သတိပေးချက်: ${supabaseError} — Supabase Setup မှ SQL Script ကို Run ပေးပါ)`
-      );
-    } else {
-      setToastMsg(
-        `${roleLabel} အကောင့် "${name}" (@${username}) ကို App နှင့် Supabase "profiles" Table သို့ အောင်မြင်စွာ ထည့်သွင်းပြီးပါပြီ!`
-      );
-    }
+    const enrolledCoursesList =
+      selectedRole === 'student'
+        ? courses.filter((c) => selectedInitialCourses.includes(c.id))
+        : [];
+
+    const roleDisplay =
+      selectedRole === 'admin'
+        ? 'Admin (ဆရာ / စီမံခန့်ခွဲသူ)'
+        : selectedRole === 'co_admin'
+        ? 'Co-Admin (တွဲဖက် အက်ဒမင်)'
+        : 'Student (ကျောင်းသား)';
+
+    const enrolledLabel =
+      selectedRole === 'student'
+        ? enrolledCoursesList.length > 0
+          ? enrolledCoursesList.map((c) => c.code).join(', ')
+          : 'No initial course'
+        : 'All Courses (Staff Access)';
+
+    setCreatedCredentials({
+      name: res.user.name,
+      username: res.user.username,
+      password: cleanPwd,
+      role: selectedRole,
+      courseName: enrolledLabel,
+      gender: gender === 'male' ? 'Male (ကျား)' : 'Female (မ)',
+      address: res.user.address,
+    });
+
     setName('');
     setUsername('');
-    setPassword(selectedRole === 'admin' ? 'admin123' : selectedRole === 'co_admin' ? 'coadmin123' : 'student123');
     setEmail('');
-    setPhone('');
-    setTitle('');
-    setGender('male');
+    setPhone('+95 9 ');
     setAddress('');
-    setSelectedInitialCourses(courses[0]?.id ? [courses[0].id] : []);
-    setAvatar(PRESET_AVATARS[0].url);
     setShowNewForm(false);
-    onRefresh();
-  };
-
-  const handleCopyCredentials = (creds: {
-    username: string;
-    password: string;
-    name: string;
-    role: UserRole;
-    gender?: string;
-    address?: string;
-    courseName?: string;
-  }) => {
-    const roleTitle = creds.role === 'admin' ? 'Administrator (ဆရာ)' : creds.role === 'co_admin' ? 'Co-Admin (တွဲဖက်ဆရာ)' : 'Student (ကျောင်းသား)';
-    const loginUrl = 'https://www.swanarhclassroom.online/';
-    const text = `🎓 SwanArh Classroom Login Credentials\n👤 Name: ${creds.name}\n🛡️ Role: ${roleTitle}${
-      creds.gender ? `\n⚧ Gender: ${creds.gender}` : ''
-    }${creds.address ? `\n📍 Address: ${creds.address}` : ''}\n🔑 Username: ${creds.username}\n🔒 Password: ${creds.password}${
-      creds.courseName ? `\n📚 Assigned Classes: ${creds.courseName}` : ''
-    }\n🌐 Login URL: ${loginUrl}`;
-
-    navigator.clipboard.writeText(text);
-    setCopiedSuccess(true);
-    setTimeout(() => setCopiedSuccess(false), 2500);
-  };
-
-  const handleManualSyncToSupabase = async () => {
-    setIsSubmitting(true);
-    const syncRes = await ClassroomDB.syncWithSupabase();
     setIsSubmitting(false);
-    if (syncRes.error) {
-      setToastMsg(
-        `Supabase Sync သတိပေးချက်: ${syncRes.error} (Navbar ရှိ "Supabase Setup" ကိုနှိပ်ပြီး SQL Script ကို Supabase SQL Editor တွင် Run ပေးပါ)`
-      );
-    } else {
-      const cleanedNote =
-        syncRes.cleanedOrphans && syncRes.cleanedOrphans > 0
-          ? `, Auto-Cleaned Orphans: ${syncRes.cleanedOrphans} ခု`
+
+    const syncNote = supabaseRes.profileSynced
+      ? 'Supabase Cloud & Local Database သို့ ချိတ်ဆက်သိမ်းဆည်းပြီးပါပြီ။'
+      : 'Local Database သို့ သိမ်းဆည်းပြီးပါပြီ။';
+
+    setToastMsg(`${roleDisplay} အကောင့် "${res.user.name}" (@${res.user.username}) ကို ဖန်တီးပြီးပါပြီ! ${syncNote}`);
+    onRefresh();
+    setTimeout(() => setToastMsg(null), 6000);
+  };
+
+  const handleSyncAllToSupabase = async () => {
+    setIsSyncingAll(true);
+    await ClassroomDB.pullFromSupabase({ force: true });
+    const res = await ClassroomDB.syncWithSupabase();
+    onRefresh();
+    setIsSyncingAll(false);
+    if (res.success) {
+      const cleanNote =
+        res.cleanedOrphans && res.cleanedOrphans > 0
+          ? ` (Orphaned data ${res.cleanedOrphans} ခု အလိုအလျောက် ရှင်းလင်းပြီး)`
           : '';
       setToastMsg(
-        `✅ Supabase သို့ အောင်မြင်စွာ Sync လုပ်ပြီးပါပြီ! (Users: ${syncRes.syncedUsers} ဦး, Courses: ${syncRes.syncedCourses} ခု${cleanedNote})`
+        `✅ Supabase Cloud Sync အောင်မြင်ပါသည်! အကောင့် (${res.syncedUsers}) ခုနှင့် အတန်း (${res.syncedCourses}) ခု ချိတ်ဆက်ပြီးပါပြီ။${cleanNote}`
+      );
+    } else {
+      setToastMsg(
+        `⚠️ Supabase Sync သတိပေးချက်: ${res.error || 'Table မရှိသေးပါ။ Supabase SQL ခလုတ်နှိပ်၍ SQL Script ကို Run ပေးပါ။'}`
       );
     }
     setTimeout(() => setToastMsg(null), 6000);
   };
 
-  const handleSaveResetPassword = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleCopyCredentials = (creds: {
+    name: string;
+    username: string;
+    password: string;
+    role: UserRole;
+    courseName?: string;
+    gender?: string;
+    address?: string;
+  }) => {
+    const roleLabel =
+      creds.role === 'admin' ? 'Admin' : creds.role === 'co_admin' ? 'Co-Admin' : 'Student';
+    const text = `SwanArh Classroom (${roleLabel} Login)\nName: ${creds.name}\nGender: ${creds.gender || 'N/A'}\nUsername: ${creds.username}\nPassword: ${creds.password}${creds.address ? `\nAddress: ${creds.address}` : ''}${creds.courseName ? `\nAccess: ${creds.courseName}` : ''}`;
+    navigator.clipboard.writeText(text);
+    setCopiedSuccess(true);
+    setTimeout(() => setCopiedSuccess(false), 3000);
+  };
+
+  const toggleRevealPassword = (studentId: string) => {
+    setRevealedPasswords((prev) => ({
+      ...prev,
+      [studentId]: !prev[studentId],
+    }));
+  };
+
+  const handleSaveResetPassword = () => {
     if (!resettingUser) return;
-
-    if (!newUserPassword.trim() || newUserPassword.trim().length < 4) {
-      setToastMsg('⚠️ စကားဝှက်အသစ်သည် အနည်းဆုံး ၄ လုံး ရှိရပါမည်။');
-      setTimeout(() => setToastMsg(null), 3500);
-      return;
-    }
-
-    const res = ClassroomDB.adminUpdateStudentPassword(resettingUser.id, newUserPassword.trim());
+    const res = ClassroomDB.adminUpdateStudentPassword(resettingUser.id, newUserPassword);
     if (res.success) {
-      setToastMsg(`အကောင့် "${resettingUser.name}" ၏ Login Password ကို အောင်မြင်စွာ ပြောင်းလဲပြီးပါပြီ။`);
+      setToastMsg(
+        `အသုံးပြုသူ "${resettingUser.name}" (@${resettingUser.username}) ၏ စကားဝှက်အသစ်ကို ပြောင်းလဲသိမ်းဆည်းပြီးပါပြီ။`
+      );
       setResettingUser(null);
       setNewUserPassword('');
       onRefresh();
-      setTimeout(() => setToastMsg(null), 3500);
+      setTimeout(() => setToastMsg(null), 4000);
+    }
+  };
+
+  const handleToggleCourseForStudent = (
+    studentId: string,
+    courseId: string,
+    currentlyEnrolled: boolean
+  ) => {
+    if (currentlyEnrolled) {
+      ClassroomDB.unenrollStudent(courseId, studentId);
     } else {
-      setToastMsg(res.error || 'စကားဝှက် ပြောင်းလဲရာတွင် အမှားဖြစ်ပေါ်ခဲ့ပါသည်။');
-      setTimeout(() => setToastMsg(null), 3500);
+      ClassroomDB.enrollStudent(courseId, studentId);
+    }
+    onRefresh();
+  };
+
+  const handleEnrollStudentInAllCourses = (studentId: string, enrollAll: boolean) => {
+    courses.forEach((c) => {
+      if (enrollAll) {
+        ClassroomDB.enrollStudent(c.id, studentId);
+      } else {
+        ClassroomDB.unenrollStudent(c.id, studentId);
+      }
+    });
+    onRefresh();
+  };
+
+  const handleExportAttendanceCSV = (courseIdOrAll: string) => {
+    if (courseIdOrAll === 'all') {
+      const res = ClassroomDB.downloadAllClassesAttendanceCSV();
+      if (res.success) {
+        setToastMsg(
+          `📊 အတန်းအားလုံး၏ Attendance Report ဖိုင် (${res.filename}) ကို အောင်မြင်စွာ ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ!`
+        );
+        setTimeout(() => setToastMsg(null), 5000);
+      }
+    } else {
+      const res = ClassroomDB.downloadClassAttendanceCSV(courseIdOrAll);
+      if (res.success) {
+        setToastMsg(
+          `📊 Attendance CSV Report ဖိုင် (${res.filename}) ကို အောင်မြင်စွာ ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ!`
+        );
+        setTimeout(() => setToastMsg(null), 5000);
+      }
+    }
+  };
+
+  const handleExportAcceptanceAudit = (mode: 'all' | 'accepted_only') => {
+    const res = ClassroomDB.downloadRulesAcceptanceAuditCSV(mode);
+    if (res.success) {
+      setToastMsg(
+        `📋 စည်းကမ်းချက် လက်ခံပြီးကြောင်း စစ်ဆေးချက်ဖိုင် (${res.filename}) — ${res.acceptedCount}/${res.totalStudents} ဦး ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ!`
+      );
+      setTimeout(() => setToastMsg(null), 5000);
     }
   };
 
   const handleDeleteUser = (user: User) => {
+    if (isCoAdminSession && user.role === 'admin') {
+      setToastMsg('ခွင့်ပြုချက် မရှိပါ: Main Admin အကောင့်အား Co-Admin မှ ဖျက်ခွင့်မရှိပါ။');
+      setTimeout(() => setToastMsg(null), 4000);
+      return;
+    }
+    const adminCount = allUsers.filter((u) => u.role === 'admin').length;
+    if (user.role === 'admin' && adminCount <= 1) {
+      setToastMsg('တစ်ခုတည်းသော Primary Admin အကောင့်အား ဖျက်၍မရပါ။');
+      setTimeout(() => setToastMsg(null), 4000);
+      return;
+    }
     setUserToDelete(user);
   };
 
   const confirmDeleteUser = () => {
     if (!userToDelete) return;
-    const user = userToDelete;
-    setUserToDelete(null);
-    const res = ClassroomDB.deleteUser(user.id);
-    if (!res.success) {
-      setToastMsg(res.error || 'အသုံးပြုသူအား ဖျက်သိမ်း၍ မရပါ');
-      setTimeout(() => setToastMsg(null), 3500);
-      return;
+    const res = ClassroomDB.deleteUser(userToDelete.id);
+    if (res.success) {
+      setToastMsg(`အသုံးပြုသူ "${userToDelete.name}" ကို စနစ်နှင့် SQL Database ထဲမှ ဖယ်ရှားပြီးပါပြီ။`);
+      onRefresh();
+    } else if (res.error) {
+      setToastMsg(res.error);
     }
-    setToastMsg(`အကောင့် "${user.name}" ကို စနစ်နှင့် SQL Database မှ အောင်မြင်စွာ ဖျက်သိမ်းပြီးပါပြီ။`);
-    onRefresh();
-    setTimeout(() => setToastMsg(null), 3500);
-  };
-
-  const toggleRevealPassword = (userId: string) => {
-    setRevealedPasswords((prev) => ({
-      ...prev,
-      [userId]: !prev[userId],
-    }));
+    setUserToDelete(null);
+    setTimeout(() => setToastMsg(null), 4000);
   };
 
   return (
     <>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-slate-950/80 backdrop-blur-md overflow-y-auto">
-        <div className="relative w-full max-w-4xl bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden my-3 sm:my-6 max-h-[92vh] flex flex-col transition-colors">
-          {/* Modal Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 sm:px-6 py-3.5 sm:py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 shrink-0">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-xl bg-indigo-600 text-white shadow-xs">
-                <Users className="w-5 h-5" />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/75 backdrop-blur-sm">
+        <div className="relative w-full max-w-6xl bg-slate-50 dark:bg-slate-900 rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[94dvh] transition-colors">
+          {/* Clean, Uncluttered Modal Header */}
+          <div className="p-3.5 sm:px-6 sm:py-4 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-3 shrink-0">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Users className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white truncate">
+                      Manage Users & Class Enrollments
+                    </h2>
+                    <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                      {allUsers.length} Accounts
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 flex-wrap">
+                    <span>🛡️ Staff: <strong>{staffUsers.length}</strong></span>
+                    <span>·</span>
+                    <span>🎓 Students: <strong>{studentUsers.length}</strong></span>
+                    <span>·</span>
+                    <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
+                      ✓ Rules Accepted: {acceptedStudentsCount}/{studentUsers.length}
+                    </span>
+                  </div>
+                </div>
               </div>
-              <div>
-                <h3 className="font-bold text-slate-900 dark:text-white text-sm sm:text-base flex items-center gap-2">
-                  <span>User Accounts Directory (အကောင့်များ စီမံခန့်ခွဲမှု)</span>
-                  <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/80 px-2 py-0.5 rounded-full border border-emerald-300 dark:border-emerald-800">
-                    Supabase Connected
-                  </span>
-                </h3>
-                <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">
-                  Admin, Co-Admin နှင့် Students အကောင့်များ ဖန်တီးခြင်း၊ စကားဝှက်နှင့် အတန်းဝင်ခွင့်များ စီမံခြင်း
-                </p>
-              </div>
-            </div>
 
-            <div className="flex items-center gap-2 justify-end flex-wrap">
+              {/* Mobile Close Button */}
               <button
                 type="button"
-                onClick={handleManualSyncToSupabase}
-                disabled={isSubmitting}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer shrink-0 shadow-xs disabled:opacity-50"
-                title="လက်ရှိ ကျောင်းသားနှင့် အတန်းစာရင်း အားလုံးကို Supabase သို့ ချက်ချင်း ပို့မည်"
-              >
-                <Layers className="w-3.5 h-3.5" />
-                <span>{isSubmitting ? 'Syncing...' : 'Sync to Supabase'}</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  setShowNewForm(!showNewForm);
-                  if (!showNewForm) {
-                    setPassword(selectedRole === 'admin' ? 'admin123' : selectedRole === 'co_admin' ? 'coadmin123' : 'student123');
-                  }
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer shrink-0 shadow-xs"
-              >
-                <UserPlus className="w-4 h-4" />
-                <span>{showNewForm ? 'စာရင်းကြည့်မည်' : '+ Add User Account (အကောင့်သစ်)'}</span>
-              </button>
-
-              <button
                 onClick={onClose}
-                className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded-lg text-xs font-semibold cursor-pointer shrink-0"
+                className="lg:hidden p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500 hover:text-slate-900 dark:hover:text-white cursor-pointer shrink-0"
+                aria-label="Close"
               >
-                ✕ ပိတ်မည်
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Clean Top Action Bar */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowNewForm((prev) => !prev);
+                  if (!showNewForm) setShowReportsDrawer(false);
+                  setErrorMsg(null);
+                }}
+                className={`flex-1 sm:flex-initial px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-2xs ${
+                  showNewForm
+                    ? 'bg-slate-800 text-white dark:bg-slate-700'
+                    : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                }`}
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>{showNewForm ? 'စာရင်းပြန်ကြည့်မည်' : '+ အကောင့်သစ် ဖွင့်မည် (Add User)'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowReportsDrawer((prev) => !prev);
+                  if (!showReportsDrawer) setShowNewForm(false);
+                }}
+                className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  showReportsDrawer
+                    ? 'bg-emerald-600 text-white border-emerald-600'
+                    : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:border-emerald-400'
+                }`}
+                title="Attendance CSV နှင့် Rules Acceptance စာရင်းထုတ်ရန်"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                <span>CSV / Reports</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSyncAllToSupabase}
+                disabled={isSyncingAll}
+                className="px-3 py-2 rounded-xl text-xs font-bold bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
+                title="Sync all accounts & enrollments with Supabase Cloud"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-indigo-500 ${isSyncingAll ? 'animate-spin' : ''}`} />
+                <span>{isSyncingAll ? 'Syncing...' : 'Sync'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onClose}
+                className="hidden lg:inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/50 text-slate-600 dark:text-slate-300 hover:text-rose-600 text-xs font-bold cursor-pointer transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+                <span>ပိတ်မည်</span>
               </button>
             </div>
           </div>
 
           {/* Status Toast */}
           {toastMsg && (
-            <div className="m-4 mb-0 flex items-center gap-2 p-3 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs rounded-xl shadow-xs">
-              <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-              <span>{toastMsg}</span>
+            <div className="mx-4 mt-3 flex items-center justify-between gap-2 p-3 bg-emerald-50 dark:bg-emerald-950/70 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs rounded-xl shadow-2xs shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span className="truncate">{toastMsg}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setToastMsg(null)}
+                className="text-emerald-700 dark:text-emerald-300 hover:opacity-75 text-xs font-bold px-1 cursor-pointer"
+              >
+                ✕
+              </button>
             </div>
           )}
 
-          {/* Created Account Credentials Notice Card */}
+          {/* Newly Created Account Credentials Banner */}
           {createdCredentials && (
-            <div className="m-4 mb-0 p-4 bg-gradient-to-r from-indigo-50 via-purple-50 to-indigo-50 dark:from-indigo-950/40 dark:via-purple-950/40 dark:to-indigo-950/40 border-2 border-indigo-300 dark:border-indigo-700 rounded-2xl shadow-sm text-xs space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold">
+            <div className="mx-4 mt-3 p-3.5 sm:p-4 bg-indigo-50/90 dark:bg-indigo-950/50 border-2 border-indigo-300 dark:border-indigo-700 rounded-2xl shadow-xs text-xs space-y-2.5 shrink-0">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold shrink-0">
                     ✓
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-slate-900 dark:text-white text-sm">
-                      {createdCredentials.role === 'admin' ? 'Admin' : createdCredentials.role === 'co_admin' ? 'Co-Admin' : 'Student'} Login အကောင့် အောင်မြင်စွာ ဖန်တီးပြီးပါပြီ!
-                    </h4>
-                    <p className="text-slate-600 dark:text-slate-300 text-[11px]">
-                      အောက်ပါ အချက်အလက်များအား အသုံးပြုသူထံသို့ ပေးပို့နိုင်ရန် Copy ပြုလုပ်နိုင်ပါသည်:
-                    </p>
-                  </div>
+                  </span>
+                  <h4 className="font-bold text-slate-900 dark:text-white text-xs sm:text-sm truncate">
+                    {createdCredentials.role === 'admin'
+                      ? 'Admin'
+                      : createdCredentials.role === 'co_admin'
+                      ? 'Co-Admin'
+                      : 'Student'}{' '}
+                    အကောင့်သစ် ဖွင့်ပြီးပါပြီ — Login အချက်အလက် الكوبي ကူးယူနိုင်ပါသည်
+                  </h4>
                 </div>
-
                 <button
+                  type="button"
                   onClick={() => setCreatedCredentials(null)}
-                  className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-xs font-bold p-1 cursor-pointer"
-                  title="Dismiss"
+                  className="text-slate-400 hover:text-slate-700 dark:hover:text-white font-bold p-1 cursor-pointer"
                 >
                   ✕
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 bg-white dark:bg-slate-800 p-3 rounded-xl border border-indigo-200 dark:border-indigo-900/60 font-mono text-[11px]">
-                <div>
-                  <span className="text-slate-400 dark:text-slate-400 block text-[10px] uppercase font-sans font-semibold">
-                    Name & Role
-                  </span>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-white dark:bg-slate-800 p-2.5 rounded-xl border border-indigo-200 dark:border-indigo-900/60 font-mono text-[11px]">
+                <div className="min-w-0">
+                  <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">Name</span>
                   <span className="font-bold text-slate-900 dark:text-white truncate block">{createdCredentials.name}</span>
-                  <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold uppercase">{createdCredentials.role}</span>
                 </div>
-                <div>
-                  <span className="text-slate-400 dark:text-slate-400 block text-[10px] uppercase font-sans font-semibold">
-                    Username
-                  </span>
-                  <span className="font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/50 px-1.5 py-0.5 rounded">
-                    @{createdCredentials.username}
-                  </span>
+                <div className="min-w-0">
+                  <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">Username</span>
+                  <span className="font-bold text-indigo-600 dark:text-indigo-300 truncate block">@{createdCredentials.username}</span>
                 </div>
-                <div>
-                  <span className="text-slate-400 dark:text-slate-400 block text-[10px] uppercase font-sans font-semibold">
-                    Password
-                  </span>
-                  <span className="font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded">
-                    {createdCredentials.password}
-                  </span>
+                <div className="min-w-0">
+                  <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">Password</span>
+                  <span className="font-bold text-emerald-600 dark:text-emerald-400 truncate block">{createdCredentials.password}</span>
                 </div>
-                <div>
-                  <span className="text-slate-400 dark:text-slate-400 block text-[10px] uppercase font-sans font-semibold">
-                    Class / Status
-                  </span>
-                  <span className="text-slate-700 dark:text-slate-300 text-xs truncate block">
-                    {createdCredentials.courseName || 'All Courses Access'}
-                  </span>
+                <div className="min-w-0">
+                  <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">Classes</span>
+                  <span className="text-slate-700 dark:text-slate-300 truncate block">{createdCredentials.courseName}</span>
                 </div>
               </div>
 
-              <div className="flex items-center justify-between pt-1">
-                <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                  ⚡ Supabase Auth & Local Profiles သို့လည်း အလိုအလျောက် sync ပြုလုပ်ပေးထားပါသည်။
-                </span>
-
+              <div className="flex justify-end">
                 <button
+                  type="button"
                   onClick={() => handleCopyCredentials(createdCredentials)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold text-xs transition-colors cursor-pointer shadow-xs active:scale-98"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs cursor-pointer"
                 >
-                  {copiedSuccess ? (
-                    <>
-                      <Check className="w-3.5 h-3.5" />
-                      <span>Copied! (ကူးယူပြီးပါပြီ)</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3.5 h-3.5" />
-                      <span>Copy Credentials (အချက်အလက် ကူးယူမည်)</span>
-                    </>
-                  )}
+                  {copiedSuccess ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedSuccess ? 'Copied! (ကူးယူပြီးပါပြီ)' : 'Copy Login Info (ကူးယူမည်)'}</span>
                 </button>
               </div>
             </div>
           )}
 
-          {/* Content Body */}
-          <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-4">
-            {/* Form to Register New User (Admin, Co-Admin, Student) */}
-            {showNewForm ? (
+          {/* Main Scrollable Content Area */}
+          <div className="p-3.5 sm:p-5 overflow-y-auto flex-1 space-y-4 min-w-0">
+            {/* Collapsible Reports & CSV Export Drawer */}
+            {showReportsDrawer && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 p-3.5 rounded-2xl bg-white dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 shadow-xs animate-in fade-in duration-150">
+                {/* Attendance CSV Export */}
+                <div className="p-3 rounded-xl border border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/50 dark:bg-emerald-950/30 flex flex-col justify-between gap-2.5">
+                  <div className="flex items-start gap-2.5">
+                    <div className="p-2 rounded-lg bg-emerald-600 text-white shrink-0">
+                      <CalendarCheck className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900 dark:text-white">
+                        Export Class Attendance CSV (တက်ရောက်မှု မှတ်တမ်း)
+                      </h4>
+                      <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5">
+                        အတန်းအလိုက် ကျောင်းသားများ၏ Attendance (%) ကို Excel / CSV ဖိုင်ထုတ်ယူရန်
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                    <select
+                      value={selectedCsvCourseId}
+                      onChange={(e) => setSelectedCsvCourseId(e.target.value)}
+                      className="flex-1 min-w-0 px-2.5 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-emerald-300 dark:border-emerald-700 rounded-lg text-slate-900 dark:text-white"
+                    >
+                      {courses.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.code} — {c.title} ({c.enrolledStudentIds.length} ဦး)
+                        </option>
+                      ))}
+                      <option value="all">All Classes Combined Report</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => handleExportAttendanceCSV(selectedCsvCourseId)}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download CSV</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Rules Acceptance Audit CSV */}
+                <div className="p-3 rounded-xl border border-indigo-200 dark:border-indigo-800/60 bg-indigo-50/50 dark:bg-indigo-950/30 flex flex-col justify-between gap-2.5">
+                  <div className="flex items-start gap-2.5">
+                    <div className="p-2 rounded-lg bg-indigo-600 text-white shrink-0">
+                      <ShieldCheck className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900 dark:text-white">
+                        Export Rules Acceptance Audit ({acceptedStudentsCount}/{studentUsers.length} Accepted)
+                      </h4>
+                      <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5">
+                        စည်းကမ်းချက် ၁၄ ချက်ကို &ldquo;သိရှိ လိုက်နာပါမည်&rdquo; အတည်ပြုပြီးသူများ စာရင်းထုတ်ယူရန်
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                    <select
+                      value={auditFilterMode}
+                      onChange={(e) => setAuditFilterMode(e.target.value as 'accepted_only' | 'all')}
+                      className="flex-1 min-w-0 px-2.5 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700 rounded-lg text-slate-900 dark:text-white"
+                    >
+                      <option value="accepted_only">Accepted Only ({acceptedStudentsCount} ဦး)</option>
+                      <option value="all">All Students ({studentUsers.length} ဦး — {pendingStudentsCount} pending)</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => handleExportAcceptanceAudit(auditFilterMode)}
+                      className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download Audit</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Create New Account Form */}
+            {showNewForm && (
               <form
                 onSubmit={handleCreateAccountSubmit}
-                className="p-4 sm:p-5 rounded-2xl border-2 border-indigo-200 dark:border-indigo-800/80 bg-indigo-50/40 dark:bg-indigo-950/20 space-y-4 text-xs"
+                className="p-4 sm:p-5 rounded-2xl border-2 border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-800/90 space-y-4 text-xs shadow-sm"
               >
-                <div className="flex items-center justify-between border-b border-indigo-100 dark:border-indigo-900/50 pb-2">
-                  <div className="flex items-center gap-2 text-indigo-950 dark:text-indigo-200 font-bold text-sm">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-2.5">
+                  <div className="flex items-center gap-2 text-slate-900 dark:text-white font-extrabold text-sm">
                     <UserPlus className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                    <span>Create User Account (Admin, Co-Admin သို့မဟုတ် ကျောင်းသား အကောင့်သစ် ဖွင့်မည်)</span>
+                    <span>အကောင့်အသစ် ဖွင့်လှစ်ခြင်း (Create New Account)</span>
                   </div>
-                  <span className="text-[11px] font-medium text-indigo-600 dark:text-indigo-300 bg-indigo-100 dark:bg-indigo-900/50 px-2 py-0.5 rounded-full">
-                    Supabase + ClassroomDB
-                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowNewForm(false)}
+                    className="text-slate-400 hover:text-slate-700 dark:hover:text-white font-bold cursor-pointer"
+                  >
+                    ✕ ပိတ်မည်
+                  </button>
                 </div>
 
                 {errorMsg && (
@@ -580,41 +767,41 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                   </div>
                 )}
 
-                {/* Account Role Selector */}
+                {/* Role Selector */}
                 <div>
-                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                    ၁။ အကောင့်အမျိုးအစား ရွေးချယ်ပါ (Account Role) *
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                    ၁။ အကောင့်အမျိုးအစား (Account Role) *
                   </label>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     <button
                       type="button"
                       onClick={() => handleRoleChange('student')}
-                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex items-center gap-2.5 ${
+                      className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-center gap-2.5 ${
                         selectedRole === 'student'
-                          ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-500 text-emerald-900 dark:text-emerald-100 ring-2 ring-emerald-500/20 shadow-xs'
-                          : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-slate-300'
+                          ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-500 text-emerald-900 dark:text-emerald-100 ring-2 ring-emerald-500/20'
+                          : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
                       }`}
                     >
                       <GraduationCap className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                       <div>
                         <div className="font-bold text-xs">🎓 Student (ကျောင်းသား)</div>
-                        <div className="text-[10px] text-slate-500 dark:text-slate-400">အတန်းတက်၊ အိမ်စာတင်၊ စာမေးပွဲဖြေ</div>
+                        <div className="text-[10px] text-slate-500 dark:text-slate-400">1 Device Only · No Profile Photo</div>
                       </div>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => handleRoleChange('co_admin')}
-                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex items-center gap-2.5 ${
+                      className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-center gap-2.5 ${
                         selectedRole === 'co_admin'
-                          ? 'bg-purple-50 dark:bg-purple-950/60 border-purple-500 text-purple-900 dark:text-purple-100 ring-2 ring-purple-500/20 shadow-xs'
-                          : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-slate-300'
+                          ? 'bg-purple-50 dark:bg-purple-950/60 border-purple-500 text-purple-900 dark:text-purple-100 ring-2 ring-purple-500/20'
+                          : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
                       }`}
                     >
                       <Users className="w-5 h-5 text-purple-600 dark:text-purple-400 shrink-0" />
                       <div>
                         <div className="font-bold text-xs">👥 Co-Admin (တွဲဖက်ဆရာ)</div>
-                        <div className="text-[10px] text-slate-500 dark:text-slate-400">Post တင်၊ Schedule၊ အမှတ်ပေး</div>
+                        <div className="text-[10px] text-slate-500 dark:text-slate-400">Multi-Device · Post & Manage</div>
                       </div>
                     </button>
 
@@ -622,34 +809,34 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                       <button
                         type="button"
                         onClick={() => handleRoleChange('admin')}
-                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex items-center gap-2.5 ${
+                        className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-center gap-2.5 ${
                           selectedRole === 'admin'
-                            ? 'bg-indigo-50 dark:bg-indigo-950/60 border-indigo-500 text-indigo-900 dark:text-indigo-100 ring-2 ring-indigo-500/20 shadow-xs'
-                            : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-slate-300'
+                            ? 'bg-indigo-50 dark:bg-indigo-950/60 border-indigo-500 text-indigo-900 dark:text-indigo-100 ring-2 ring-indigo-500/20'
+                            : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
                         }`}
                       >
                         <ShieldCheck className="w-5 h-5 text-indigo-600 dark:text-indigo-400 shrink-0" />
                         <div>
                           <div className="font-bold text-xs">🛡️ Admin (ပင်မ အက်ဒမင်)</div>
-                          <div className="text-[10px] text-slate-500 dark:text-slate-400">အတန်းဖန်တီး၊ User စီမံ၊ အကုန်လုပ်ပိုင်ခွင့်</div>
+                          <div className="text-[10px] text-slate-500 dark:text-slate-400">Multi-Device · Full Access</div>
                         </div>
                       </button>
                     )}
                   </div>
                 </div>
 
-                {/* Profile Picture Selection (Only for Admin & Co-Admin accounts) */}
+                {/* Profile Picture Selection (Only for Admin & Co-Admin) */}
                 {(selectedRole === 'admin' || selectedRole === 'co_admin') && (
-                  <div className="p-3 bg-white dark:bg-slate-800 rounded-xl border border-indigo-100 dark:border-slate-700 space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <label className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                  <div className="p-3 bg-slate-50 dark:bg-slate-900/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2.5">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <label className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
                         <Camera className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                        <span>Profile Picture (Admin / Co-Admin ကိုယ်ရေးဓာတ်ပုံ ရွေးချယ်ပါ)</span>
+                        <span>Profile Picture (Admin / Co-Admin ကိုယ်ရေးဓာတ်ပုံ)</span>
                       </label>
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 rounded-lg text-[11px] font-medium cursor-pointer"
+                        className="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 rounded-lg text-[11px] font-semibold cursor-pointer"
                       >
                         <Upload className="w-3 h-3" />
                         <span>ပုံတင်မည် (Upload)</span>
@@ -662,79 +849,58 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                         className="hidden"
                       />
                     </div>
-
                     <div className="flex items-center gap-3">
                       <img
                         src={avatar}
-                        alt="Selected preview"
-                        className="w-14 h-14 rounded-full object-cover border-2 border-indigo-500 shadow-xs shrink-0"
+                        alt="Preview"
+                        className="w-12 h-12 rounded-full object-cover border-2 border-indigo-500 shrink-0"
                       />
-                      <div className="flex-1 overflow-x-auto pb-1">
-                        <div className="flex items-center gap-2">
-                          {PRESET_AVATARS.map((p) => (
-                            <button
-                              type="button"
-                              key={p.id}
-                              onClick={() => setAvatar(p.url)}
-                              className={`relative rounded-full p-0.5 transition-all shrink-0 cursor-pointer ${
-                                avatar === p.url
-                                  ? 'ring-2 ring-indigo-600 scale-105'
-                                  : 'opacity-70 hover:opacity-100'
-                              }`}
-                              title={p.name}
-                            >
-                              <img
-                                src={p.url}
-                                alt={p.name}
-                                className="w-9 h-9 rounded-full object-cover"
-                              />
-                              {avatar === p.url && (
-                                <div className="absolute inset-0 bg-indigo-600/30 rounded-full flex items-center justify-center">
-                                  <Check className="w-3.5 h-3.5 text-white stroke-[3]" />
-                                </div>
-                              )}
-                            </button>
-                          ))}
-                        </div>
+                      <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                        {PRESET_AVATARS.map((p) => (
+                          <button
+                            type="button"
+                            key={p.id}
+                            onClick={() => setAvatar(p.url)}
+                            className={`relative rounded-full p-0.5 transition-all shrink-0 cursor-pointer ${
+                              avatar === p.url ? 'ring-2 ring-indigo-600 scale-105' : 'opacity-70 hover:opacity-100'
+                            }`}
+                          >
+                            <img src={p.url} alt={p.name} className="w-8 h-8 rounded-full object-cover" />
+                          </button>
+                        ))}
                       </div>
                     </div>
                   </div>
                 )}
 
-                {/* Name & Username */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Core Account Fields */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                       ၂။ အမည် (Full Name) *
                     </label>
                     <input
                       type="text"
-                      placeholder={selectedRole === 'admin' ? 'e.g., Dr. Zaw Min' : selectedRole === 'co_admin' ? 'e.g., Daw Hla Hla' : 'e.g., မောင်မင်းခန့်'}
+                      placeholder="e.g., မောင်မင်းခန့်"
                       value={name}
                       onChange={(e) => {
                         setName(e.target.value);
                         if (!username && e.target.value) {
-                          const suggested = e.target.value
-                            .toLowerCase()
-                            .replace(/[^a-z0-9]/g, '');
-                          if (suggested) {
-                            setUsername(suggested);
-                          }
+                          const suggested = e.target.value.toLowerCase().replace(/[^a-z0-9]/g, '');
+                          if (suggested) setUsername(suggested);
                         }
                       }}
-                      className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl focus:outline-none focus:border-indigo-500 text-slate-900 dark:text-white shadow-2xs"
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
                       required
                     />
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      ၃။ Login အကောင့်အမည် (Username) *
+                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      ၃။ Username (Login ID) *
                     </label>
                     <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-mono">
-                        @
-                      </span>
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-mono">@</span>
                       <input
                         type="text"
                         placeholder="username"
@@ -742,171 +908,143 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                         onChange={(e) =>
                           setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_.]/g, ''))
                         }
-                        className="w-full pl-7 pr-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl focus:outline-none focus:border-indigo-500 font-mono text-slate-900 dark:text-white shadow-2xs"
+                        className="w-full pl-7 pr-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-mono text-slate-900 dark:text-white"
                         required
                       />
                     </div>
                   </div>
-                </div>
 
-                {/* Password Setting with Generator */}
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="font-semibold text-slate-700 dark:text-slate-300">
-                      ၄။ App Login စကားဝှက် (Password) *
-                    </label>
-                    <button
-                      type="button"
-                      onClick={generateRandomPassword}
-                      className="text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
-                    >
-                      <Sparkles className="w-3 h-3" />
-                      <span>စကားဝှက် အလိုအလျောက် သတ်မှတ်မည်</span>
-                    </button>
-                  </div>
-
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
-                      <Lock className="w-4 h-4" />
-                    </span>
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="Password"
-                      className="w-full pl-9 pr-16 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl focus:outline-none focus:border-indigo-500 font-mono text-slate-900 dark:text-white shadow-2xs"
-                      required
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
-                    >
-                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Email, Phone & Title */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      ၅။ အီးမေးလ် (Email Address) *
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300">
+                        ၄။ Password (စကားဝှက်) *
+                      </label>
+                      <button
+                        type="button"
+                        onClick={generateRandomPassword}
+                        className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-0.5 cursor-pointer font-semibold"
+                      >
+                        <Sparkles className="w-3 h-3" />
+                        <span>Auto</span>
+                      </button>
+                    </div>
+                    <div className="relative">
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className="w-full pl-3 pr-9 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-mono text-slate-900 dark:text-white"
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer"
+                      >
+                        {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Contact & Demographics */}
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      ၅။ Email *
                     </label>
                     <input
                       type="email"
-                      placeholder="user@classroomos.edu"
+                      placeholder="user@swanarh.edu"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl focus:outline-none focus:border-indigo-500 font-mono text-slate-900 dark:text-white shadow-2xs"
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-mono text-slate-900 dark:text-white"
                       required
                     />
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      ၆။ ဖုန်းနံပါတ် (Phone Number)
+                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      ၆။ ဖုန်းနံပါတ် (Phone)
                     </label>
                     <input
                       type="text"
-                      placeholder="+95 9 123 456789"
+                      placeholder="+95 9..."
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
-                      className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl focus:outline-none focus:border-indigo-500 font-mono text-slate-900 dark:text-white shadow-2xs"
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-mono text-slate-900 dark:text-white"
                     />
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      ၇။ ရာထူး / ပညာအရည်အချင်း (Title)
+                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      ၇။ ကျား / မ (Gender)
                     </label>
-                    <input
-                      type="text"
-                      placeholder={selectedRole === 'admin' ? 'Dean / Lead Instructor' : selectedRole === 'co_admin' ? 'Course Coordinator' : 'Computer Science Scholar'}
-                      value={title}
-                      onChange={(e) => setTitle(e.target.value)}
-                      className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl focus:outline-none focus:border-indigo-500 text-slate-900 dark:text-white shadow-2xs"
-                    />
-                  </div>
-                </div>
-
-                {/* Gender (Male / Female) & Address */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      ၈။ ကျား / မ ရွေးချယ်ရန် (Gender: Male or Female) *
-                    </label>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 gap-1.5">
                       <button
                         type="button"
                         onClick={() => setGender('male')}
-                        className={`py-2 px-3 rounded-xl border font-semibold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                        className={`py-2 px-2 rounded-xl border font-bold text-xs cursor-pointer ${
                           gender === 'male'
-                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
-                            : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700 hover:border-indigo-400'
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : 'bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
                         }`}
                       >
-                        <span>♂ Male (ကျား)</span>
+                        ♂ ကျား
                       </button>
                       <button
                         type="button"
                         onClick={() => setGender('female')}
-                        className={`py-2 px-3 rounded-xl border font-semibold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                        className={`py-2 px-2 rounded-xl border font-bold text-xs cursor-pointer ${
                           gender === 'female'
-                            ? 'bg-pink-600 text-white border-pink-600 shadow-xs'
-                            : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700 hover:border-pink-400'
+                            ? 'bg-pink-600 text-white border-pink-600'
+                            : 'bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
                         }`}
                       >
-                        <span>♀ Female (မ)</span>
+                        ♀ မ
                       </button>
                     </div>
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      ၉။ နေရပ်လိပ်စာ (Address)
+                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      ၈။ နေရပ်လိပ်စာ (Address)
                     </label>
                     <input
                       type="text"
-                      placeholder="ဥပမာ - အမှတ် (၁၂)၊ ပြည်လမ်း၊ ကမာရွတ်မြို့နယ်၊ ရန်ကုန်မြို့"
+                      placeholder="မြို့နယ် / လိပ်စာ"
                       value={address}
                       onChange={(e) => setAddress(e.target.value)}
-                      className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl focus:outline-none focus:border-indigo-500 text-slate-900 dark:text-white shadow-2xs"
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
                     />
                   </div>
                 </div>
 
-                {/* Multi-Course Initial Class Enrollment for Students */}
+                {/* Initial Class Enrollment for Students */}
                 {selectedRole === 'student' && (
-                  <div className="p-3.5 bg-white dark:bg-slate-800 rounded-xl border border-indigo-100 dark:border-slate-700 space-y-2.5">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div>
-                        <label className="block font-semibold text-slate-800 dark:text-slate-200">
-                          ၁၀။ စတင်ထည့်သွင်းမည့် သင်တန်းများ (Enroll in Multiple Courses at Once)
-                        </label>
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                          သင်တန်း တစ်ခုထက်ပို၍ တစ်ခါတည်း ရွေးချယ်ထည့်သွင်းနိုင်ပါသည် ({selectedInitialCourses.length} ခု ရွေးချယ်ထားသည်)
-                        </p>
-                      </div>
+                  <div className="p-3 bg-slate-50 dark:bg-slate-900/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <label className="font-bold text-slate-800 dark:text-slate-200">
+                        ၉။ တက်ရောက်ခွင့်ပြုမည့် အတန်းများ ({selectedInitialCourses.length} တန်း ရွေးထားသည်)
+                      </label>
                       <div className="flex items-center gap-1.5">
                         <button
                           type="button"
                           onClick={() => setSelectedInitialCourses(courses.map((c) => c.id))}
-                          className="px-2.5 py-1 text-[11px] font-semibold bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 rounded-lg hover:bg-indigo-100 cursor-pointer"
+                          className="px-2 py-1 text-[11px] font-bold bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 rounded-lg cursor-pointer"
                         >
-                          အားလုံးရွေးမည် (Select All)
+                          Select All
                         </button>
                         <button
                           type="button"
                           onClick={() => setSelectedInitialCourses([])}
-                          className="px-2.5 py-1 text-[11px] font-semibold bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg hover:bg-slate-200 cursor-pointer"
+                          className="px-2 py-1 text-[11px] font-bold bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg cursor-pointer"
                         >
-                          ရှင်းမည် (Clear)
+                          Clear
                         </button>
                       </div>
                     </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                       {courses.map((c) => {
                         const isChecked = selectedInitialCourses.includes(c.id);
                         return (
@@ -914,14 +1052,14 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                             key={c.id}
                             type="button"
                             onClick={() => toggleInitialCourseSelection(c.id)}
-                            className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-start gap-2.5 ${
+                            className={`p-2 rounded-xl border text-left transition-all cursor-pointer flex items-center gap-2 ${
                               isChecked
-                                ? 'bg-emerald-50/90 dark:bg-emerald-950/60 border-emerald-500 text-emerald-950 dark:text-emerald-100 ring-1 ring-emerald-500/30'
-                                : 'bg-slate-50 dark:bg-slate-850 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-indigo-400'
+                                ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-500 text-emerald-950 dark:text-emerald-100'
+                                : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
                             }`}
                           >
                             <div
-                              className={`w-4 h-4 rounded mt-0.5 flex items-center justify-center shrink-0 border ${
+                              className={`w-4 h-4 rounded flex items-center justify-center shrink-0 border ${
                                 isChecked
                                   ? 'bg-emerald-600 border-emerald-600 text-white'
                                   : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-600'
@@ -930,12 +1068,8 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                               {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
                             </div>
                             <div className="min-w-0 flex-1">
-                              <div className="font-bold text-xs truncate">
-                                {c.code} · {c.title}
-                              </div>
-                              <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
-                                {c.batch} · {c.section}
-                              </div>
+                              <div className="font-bold text-xs truncate">{c.code} · {c.title}</div>
+                              <div className="text-[10px] text-slate-500 truncate">{c.batch}</div>
                             </div>
                           </button>
                         );
@@ -944,503 +1078,454 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                   </div>
                 )}
 
-                {/* Form Action Buttons */}
-                <div className="flex items-center justify-end gap-2 pt-2 border-t border-indigo-100 dark:border-indigo-900/50">
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-700">
                   <button
                     type="button"
                     onClick={() => setShowNewForm(false)}
-                    className="px-3.5 py-2 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white cursor-pointer font-medium"
+                    className="px-3.5 py-2 text-slate-600 dark:text-slate-300 font-semibold cursor-pointer"
                   >
-                    Cancel
+                    မလုပ်တော့ပါ
                   </button>
                   <button
                     type="submit"
                     disabled={isSubmitting}
-                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
                   >
                     <UserPlus className="w-4 h-4" />
-                    <span>{isSubmitting ? 'Creating...' : `Create ${selectedRole === 'admin' ? 'Admin' : selectedRole === 'co_admin' ? 'Co-Admin' : 'Student'} Account`}</span>
+                    <span>{isSubmitting ? 'Creating...' : 'အကောင့်သစ် သိမ်းဆည်းမည်'}</span>
                   </button>
                 </div>
               </form>
-            ) : null}
+            )}
 
-            {/* Class Attendance Report CSV Export Bar & Rules Acceptance Audit Bar (For Admins & Co-Admins) */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-              {/* Attendance Report CSV Export */}
-              <div className="p-3.5 sm:p-4 rounded-xl border border-emerald-200 dark:border-emerald-800/70 bg-emerald-50/60 dark:bg-emerald-950/30 flex flex-col justify-between gap-3">
-                <div className="flex items-start gap-2.5">
-                  <div className="p-2 rounded-lg bg-emerald-600 text-white shrink-0">
-                    <CalendarCheck className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
-                      Export Class Attendance Report (CSV ဖိုင်ထုတ်ယူရန်)
-                    </h4>
-                    <p className="text-[11px] text-slate-600 dark:text-slate-300">
-                      အတန်းတစ်ခုချင်းစီအလိုက် ကျောင်းသားများ၏ တက်ရောက်မှု ရာခိုင်နှုန်း (%) နှင့် နေ့စွဲအလိုက် Attendance မှတ်တမ်းအပြည့်အစုံကို CSV (Excel) ဖိုင်အဖြစ် ဒေါင်းလုဒ်ဆွဲနိုင်ပါသည်။
-                    </p>
-                  </div>
+            {/* Clean Unified Search & Filter Control Bar */}
+            <div className="p-3 bg-white dark:bg-slate-800/80 rounded-2xl border border-slate-200/80 dark:border-slate-800 space-y-2.5 shadow-2xs">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+                {/* Search Input */}
+                <div className="relative flex-1 min-w-0">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      setVisibleLimit(60);
+                    }}
+                    placeholder="အမည်၊ @username၊ ဖုန်းနံပါတ် သို့မဟုတ် လိပ်စာဖြင့် အမြန်ရှာရန်..."
+                    className="w-full pl-9 pr-8 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:border-indigo-500 text-slate-900 dark:text-white"
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  )}
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <select
-                    value={selectedCsvCourseId}
-                    onChange={(e) => setSelectedCsvCourseId(e.target.value)}
-                    className="flex-1 min-w-[180px] px-3 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-emerald-300 dark:border-emerald-700 rounded-lg text-slate-900 dark:text-white focus:outline-hidden"
-                  >
-                    {courses.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.code} — {c.title} ({c.enrolledStudentIds.length} students)
-                      </option>
-                    ))}
-                    <option value="all">All Classes Combined Report</option>
-                  </select>
-
-                  <button
-                    type="button"
-                    onClick={() => handleExportAttendanceCSV(selectedCsvCourseId)}
-                    className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Export Attendance CSV</span>
-                  </button>
+                {/* Course Enrollment Filter Dropdown */}
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className="relative flex-1 sm:flex-initial">
+                    <BookOpen className="w-3.5 h-3.5 text-indigo-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <select
+                      value={courseFilterId}
+                      onChange={(e) => {
+                        setCourseFilterId(e.target.value);
+                        if (e.target.value !== 'all') {
+                          setRoleFilter('student');
+                        }
+                        setVisibleLimit(60);
+                      }}
+                      className="w-full sm:w-auto pl-8 pr-3 py-2 text-xs font-bold bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 cursor-pointer focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="all">အတန်းအားလုံး (All Classes)</option>
+                      {courses.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.code} — {c.title} ({c.enrolledStudentIds.length} ဦး)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
 
-              {/* Onboarding Rules Acceptance Audit Export */}
-              <div className="p-3.5 sm:p-4 rounded-xl border border-indigo-200 dark:border-indigo-800/70 bg-indigo-50/60 dark:bg-indigo-950/30 flex flex-col justify-between gap-3">
-                <div className="flex items-start justify-between gap-2.5">
-                  <div className="flex items-start gap-2.5">
-                    <div className="p-2 rounded-lg bg-indigo-600 text-white shrink-0">
-                      <ShieldCheck className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
-                          Export Acceptance Audit (စည်းကမ်းချက် လက်ခံပြီးစာရင်း)
-                        </h4>
-                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700">
-                          <ShieldCheck className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-                          <span>
-                            {acceptedStudentsCount} / {studentUsers.length} Accepted
-                          </span>
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5">
-                        သင်တန်းစည်းကမ်းချက် ၁၄ ချက်ကို &ldquo;သိရှိ လိုက်နာပါမည်&rdquo; ဟု အတည်ပြုပြီးသော ကျောင်းသားများနှင့် အချိန်မှတ်တမ်း (Timestamp) ကို CSV ဖိုင်ထုတ်ယူနိုင်ပါသည်။
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <select
-                    value={auditFilterMode}
-                    onChange={(e) => setAuditFilterMode(e.target.value as 'accepted_only' | 'all')}
-                    className="flex-1 min-w-[180px] px-3 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700 rounded-lg text-slate-900 dark:text-white focus:outline-hidden"
-                  >
-                    <option value="accepted_only">
-                      Accepted Students Only ({acceptedStudentsCount} completed onboarding)
-                    </option>
-                    <option value="all">
-                      All Students Audit Report ({studentUsers.length} total — {pendingStudentsCount} pending)
-                    </option>
-                  </select>
-
-                  <button
-                    type="button"
-                    onClick={() => handleExportAcceptanceAudit(auditFilterMode)}
-                    className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Export Acceptance Audit</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Filter Tabs & Search bar */}
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2">
-                {/* Role Filter Tabs */}
-                <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-xs font-semibold">
+              {/* Role & Rule Status Segmented Pills */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-100 dark:border-slate-700/60">
+                <div className="flex flex-wrap items-center gap-1.5">
                   <button
                     type="button"
                     onClick={() => {
                       setRoleFilter('all');
                       setRuleStatusFilter('all');
+                      setCourseFilterId('all');
                     }}
-                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                      roleFilter === 'all' && ruleStatusFilter === 'all'
-                        ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-2xs font-bold'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      roleFilter === 'all' && ruleStatusFilter === 'all' && courseFilterId === 'all'
+                        ? 'bg-indigo-600 text-white shadow-2xs'
+                        : 'bg-slate-100 dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                     }`}
                   >
-                    All Accounts ({allUsers.length})
+                    အားလုံး ({allUsers.length})
                   </button>
+
                   <button
                     type="button"
                     onClick={() => {
                       setRoleFilter('staff');
                       setRuleStatusFilter('all');
+                      setCourseFilterId('all');
                     }}
-                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                       roleFilter === 'staff'
-                        ? 'bg-white dark:bg-slate-900 text-purple-600 dark:text-purple-400 shadow-2xs font-bold'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                        ? 'bg-purple-600 text-white shadow-2xs'
+                        : 'bg-slate-100 dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                     }`}
                   >
-                    🛡️ Admins & Co-Admins ({staffUsers.length})
+                    🛡️ Admin & Co-Admin ({staffUsers.length})
                   </button>
+
                   <button
                     type="button"
                     onClick={() => {
                       setRoleFilter('student');
                       setRuleStatusFilter('all');
                     }}
-                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                       roleFilter === 'student' && ruleStatusFilter === 'all'
-                        ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-2xs font-bold'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                        ? 'bg-emerald-600 text-white shadow-2xs'
+                        : 'bg-slate-100 dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
                     }`}
                   >
-                    🎓 Students ({studentUsers.length})
+                    🎓 ကျောင်းသားများ ({studentUsers.length})
                   </button>
-                </div>
 
-                {/* Quick Rule Status Filter Pills */}
-                <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-[11px] font-semibold">
                   <button
                     type="button"
                     onClick={() => {
                       setRoleFilter('student');
                       setRuleStatusFilter(ruleStatusFilter === 'accepted' ? 'all' : 'accepted');
                     }}
-                    className={`px-2.5 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                    className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
                       ruleStatusFilter === 'accepted'
-                        ? 'bg-emerald-600 text-white shadow-2xs font-bold'
-                        : 'text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/50'
+                        ? 'bg-emerald-700 text-white'
+                        : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60'
                     }`}
-                    title="Filter students who accepted Academy Rules"
                   >
                     <ShieldCheck className="w-3.5 h-3.5" />
                     <span>Rule Accepted ({acceptedStudentsCount})</span>
                   </button>
+
                   <button
                     type="button"
                     onClick={() => {
                       setRoleFilter('student');
                       setRuleStatusFilter(ruleStatusFilter === 'pending' ? 'all' : 'pending');
                     }}
-                    className={`px-2.5 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                    className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
                       ruleStatusFilter === 'pending'
-                        ? 'bg-amber-600 text-white shadow-2xs font-bold'
-                        : 'text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/50'
+                        ? 'bg-amber-600 text-white'
+                        : 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60'
                     }`}
-                    title="Filter students pending Academy Rules acceptance"
                   >
                     <span>⏳ Pending ({pendingStudentsCount})</span>
                   </button>
                 </div>
-              </div>
 
-              {/* Search Bar */}
-              <div className="relative w-full lg:w-64">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => {
-                    setSearchQuery(e.target.value);
-                    setVisibleLimit(60);
-                  }}
-                  placeholder="အမည်၊ Username၊ လိပ်စာ ရှာရန်..."
-                  className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:border-indigo-500 text-slate-900 dark:text-white"
-                />
+                <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                  ပြသထားသည်: <strong>{Math.min(visibleLimit, filteredUsers.length)}</strong> / {filteredUsers.length} ဦး
+                </span>
               </div>
             </div>
 
-            {/* Users Directory Cards (Paginated for 2,000+ Concurrent Users Performance) */}
-            <div className="space-y-3">
+            {/* Clean, Easy-to-Scan User Directory List */}
+            <div className="space-y-2.5">
               {filteredUsers.length === 0 ? (
-                <div className="p-8 text-center text-xs text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-800">
+                <div className="p-10 text-center text-xs text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-800">
                   ရှာဖွေမှုနှင့် ကိုက်ညီသော အကောင့် မတွေ့ရှိပါ။
                 </div>
               ) : (
-                filteredUsers.slice(0, visibleLimit).map((user) => {
+                filteredUsers.slice(0, visibleLimit).map((user, index) => {
                   const isProtectedPrimaryAdmin = isCoAdminSession && user.role === 'admin';
                   const isRevealed = !isProtectedPrimaryAdmin && revealedPasswords[user.id];
-                  const userPassword =
-                    user.password || (user.role === 'admin' ? 'admin123' : user.role === 'co_admin' ? 'coadmin123' : 'student123');
+                  const userPassword = ClassroomDB.getDecryptedPassword(user);
+                  const pwdFingerprint = ClassroomDB.getPasswordFingerprint(user);
                   const normalizedGender = user.gender?.toLowerCase();
+                  const enrolledCount =
+                    user.role === 'student'
+                      ? courses.filter((c) => c.enrolledStudentIds.includes(user.id)).length
+                      : courses.length;
 
                   return (
                     <div
                       key={user.id}
-                      className="p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-850 hover:border-slate-300 dark:hover:border-slate-700 transition-colors shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-3.5"
+                      className="p-3.5 sm:p-4 rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-800/90 hover:border-indigo-300 dark:hover:border-slate-700 transition-all shadow-2xs space-y-3"
                     >
-                      {/* User Info & Credentials */}
-                      <div className="flex items-start gap-3 min-w-0">
-                        {(user.role === 'admin' || user.role === 'co_admin') && (
-                          <div className="relative group/avatar shrink-0">
-                            <img
-                              src={user.avatar || PRESET_AVATARS[0].url}
-                              alt={user.name}
-                              loading="lazy"
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).src = PRESET_AVATARS[0].url;
-                              }}
-                              className="w-11 h-11 rounded-full object-cover border border-slate-200 dark:border-slate-700"
-                            />
-                            {!isProtectedPrimaryAdmin && (
-                              <button
-                                type="button"
-                                onClick={() => setEditingAvatarUser(user)}
-                                className="absolute inset-0 bg-slate-900/60 rounded-full opacity-0 group-hover/avatar:opacity-100 flex items-center justify-center text-white transition-opacity cursor-pointer"
-                                title="Edit Profile Picture (Admin / Co-Admin Only)"
-                              >
-                                <Camera className="w-4 h-4" />
-                              </button>
-                            )}
-                          </div>
-                        )}
-
-                        <div className="min-w-0 space-y-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-sm font-bold text-slate-900 dark:text-white inline-flex items-center gap-1.5">
-                              <span>{user.name}</span>
-                              {user.role === 'student' && (
-                                <span
-                                  className="inline-flex items-center"
-                                  title={
-                                    user.rulesAccepted
-                                      ? `Rule Accepted: သိရှိ လိုက်နာပါမည်${user.rulesAcceptedAt ? ` (${user.rulesAcceptedAt})` : ''}`
-                                      : 'Rule Pending: စည်းကမ်းချက် လက်ခံရန်ကျန်'
-                                  }
+                      {/* Top Row: User Identity + Quick Credentials Strip + Delete */}
+                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                        {/* Left: Identity & Contact */}
+                        <div className="flex items-start gap-3 min-w-0">
+                          {user.role === 'admin' || user.role === 'co_admin' ? (
+                            <div className="relative group/avatar shrink-0">
+                              <img
+                                src={user.avatar || PRESET_AVATARS[0].url}
+                                alt={user.name}
+                                loading="lazy"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).src = PRESET_AVATARS[0].url;
+                                }}
+                                className="w-11 h-11 rounded-full object-cover border-2 border-indigo-200 dark:border-indigo-800"
+                              />
+                              {!isProtectedPrimaryAdmin && (
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingAvatarUser(user)}
+                                  className="absolute inset-0 bg-slate-900/60 rounded-full opacity-0 group-hover/avatar:opacity-100 flex items-center justify-center text-white transition-opacity cursor-pointer"
+                                  title="Change Profile Photo"
                                 >
-                                  <Shield
-                                    className={`w-4 h-4 shrink-0 transition-colors ${
-                                      user.rulesAccepted
-                                        ? 'text-emerald-500 fill-emerald-500/25 dark:text-emerald-400 dark:fill-emerald-400/25'
-                                        : 'text-slate-300 dark:text-slate-600'
-                                    }`}
-                                  />
-                                </span>
+                                  <Camera className="w-4 h-4" />
+                                </button>
                               )}
-                            </span>
-                            <span className="text-[11px] font-mono text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded border border-indigo-200/50 dark:border-indigo-800/40">
-                              @{user.username}
-                            </span>
-
-                            {/* Role Badge */}
-                            <span
-                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                                user.role === 'admin'
-                                  ? 'bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800'
-                                  : user.role === 'co_admin'
-                                  ? 'bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800'
-                                  : 'bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
-                              }`}
-                            >
-                              {user.role === 'admin' ? '🛡️ Admin' : user.role === 'co_admin' ? '👥 Co-Admin' : '🎓 Student'}
-                            </span>
-
-                            {/* Visual Rule Status Indicator for Students */}
-                            {user.role === 'student' && (
-                              user.rulesAccepted ? (
-                                <span
-                                  className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 shadow-2xs"
-                                  title={
-                                    user.rulesAcceptedAt
-                                      ? `Rule Status: Accepted — သိရှိ လိုက်နာပါမည် (${user.rulesAcceptedAt})`
-                                      : 'Rule Status: Accepted — သိရှိ လိုက်နာပါမည်'
-                                  }
-                                >
-                                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                                  <span>Rule Status: ✓ သိရှိ လိုက်နာပါမည်</span>
-                                  {user.rulesAcceptedAt && (
-                                    <span className="text-[9px] font-semibold text-emerald-700/90 dark:text-emerald-300/80 pl-1 border-l border-emerald-300 dark:border-emerald-700">
-                                      {user.rulesAcceptedAt}
-                                    </span>
-                                  )}
-                                </span>
-                              ) : (
-                                <span
-                                  className="inline-flex items-center gap-1 text-[10px] font-semibold px-2.5 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/70 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800"
-                                  title="Rule Status: Pending Onboarding Acceptance"
-                                >
-                                  <span>⏳ Rule Status: စည်းကမ်းချက် လက်ခံရန်ကျန်</span>
-                                </span>
-                              )
-                            )}
-
-                            {/* Gender Badge */}
-                            {normalizedGender && (
-                              <span
-                                className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
-                                  normalizedGender === 'female'
-                                    ? 'bg-pink-50 dark:bg-pink-950/60 text-pink-700 dark:text-pink-300 border-pink-200 dark:border-pink-800'
-                                    : 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800'
-                                }`}
-                              >
-                                {normalizedGender === 'female' ? '♀ Female (မ)' : '♂ Male (ကျား)'}
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono truncate">
-                            {user.email} · {user.phone}
-                            {user.title && ` · ${user.title}`}
-                          </div>
-
-                          {user.address && (
-                            <div className="text-[11px] text-slate-600 dark:text-slate-300 truncate">
-                              📍 လိပ်စာ: {user.address}
+                            </div>
+                          ) : (
+                            /* Clean Numbered Index Badge for Students (Zero Student Profile Photo) */
+                            <div className="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-700/80 text-slate-700 dark:text-slate-200 font-mono text-xs font-extrabold flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-600">
+                              #{index + 1}
                             </div>
                           )}
 
-                          {/* Login Credentials Pill (Protected for Primary Admin when viewed by Co-Admin) */}
-                          <div className="flex items-center gap-2 pt-0.5 flex-wrap">
-                            <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
-                              Login Password:
-                            </span>
-                            {isProtectedPrimaryAdmin ? (
-                              <span className="text-[10px] font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
-                                🔒 Protected (Primary Admin Only)
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-sm font-extrabold text-slate-900 dark:text-white inline-flex items-center gap-1">
+                                <span>{user.name}</span>
+                                {user.role === 'student' && (
+                                  <Shield
+                                    className={`w-3.5 h-3.5 shrink-0 ${
+                                      user.rulesAccepted
+                                        ? 'text-emerald-500 fill-emerald-500/20'
+                                        : 'text-slate-300 dark:text-slate-600'
+                                    }`}
+                                  />
+                                )}
                               </span>
-                            ) : (
-                              <>
-                                <span className="font-mono text-xs font-semibold text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded">
-                                  {isRevealed ? userPassword : '••••••••'}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => toggleRevealPassword(user.id)}
-                                  className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer p-0.5"
-                                  title={isRevealed ? 'Hide Password' : 'Show Password'}
-                                >
-                                  {isRevealed ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    handleCopyCredentials({
-                                      name: user.name,
-                                      username: user.username,
-                                      password: userPassword,
-                                      role: user.role,
-                                      gender: normalizedGender === 'female' ? 'Female (မ)' : 'Male (ကျား)',
-                                      address: user.address,
-                                    });
-                                    setToastMsg(`အကောင့် "${user.name}" ၏ Login အချက်အလက်များကို ကူးယူပြီးပါပြီ။`);
-                                    setTimeout(() => setToastMsg(null), 3000);
-                                  }}
-                                  className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 cursor-pointer p-0.5"
-                                  title="Copy Credentials to Clipboard"
-                                >
-                                  <Copy className="w-3.5 h-3.5" />
-                                </button>
 
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setResettingUser(user);
-                                    setNewUserPassword(userPassword);
-                                    setShowResetPassword(false);
-                                  }}
-                                  className="text-[10px] text-amber-700 dark:text-amber-400 hover:underline font-medium cursor-pointer ml-1"
+                              <span className="text-[11px] font-mono font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/70 px-2 py-0.5 rounded-md border border-indigo-200/60 dark:border-indigo-800/50">
+                                @{user.username}
+                              </span>
+
+                              <span
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                                  user.role === 'admin'
+                                    ? 'bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800'
+                                    : user.role === 'co_admin'
+                                    ? 'bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800'
+                                    : 'bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                                }`}
+                              >
+                                {user.role === 'admin'
+                                  ? '🛡️ Admin'
+                                  : user.role === 'co_admin'
+                                  ? '👥 Co-Admin'
+                                  : '🎓 Student'}
+                              </span>
+
+                              {normalizedGender && (
+                                <span
+                                  className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                                    normalizedGender === 'female'
+                                      ? 'bg-pink-50 dark:bg-pink-950/60 text-pink-700 dark:text-pink-300'
+                                      : 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300'
+                                  }`}
                                 >
-                                  Reset Password
-                                </button>
-                              </>
-                            )}
+                                  {normalizedGender === 'female' ? '♀ မ' : '♂ ကျား'}
+                                </span>
+                              )}
+
+                              {user.role === 'student' &&
+                                (user.rulesAccepted ? (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300">
+                                    <ShieldCheck className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                                    <span>သိရှိ လိုက်နာပါမည်</span>
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/70 text-amber-700 dark:text-amber-300">
+                                    <span>⏳ စည်းကမ်းချက် လက်ခံရန်ကျန်</span>
+                                  </span>
+                                ))}
+                            </div>
+
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                              <span>{user.phone || 'No phone'}</span>
+                              <span>·</span>
+                              <span className="truncate">{user.email}</span>
+                              {user.address && (
+                                <>
+                                  <span>·</span>
+                                  <span className="font-sans text-slate-600 dark:text-slate-300">
+                                    📍 {user.address}
+                                  </span>
+                                </>
+                              )}
+                            </div>
                           </div>
+                        </div>
+
+                        {/* Right: Clean Compact Credentials Strip & Actions */}
+                        <div className="flex flex-wrap items-center justify-between lg:justify-end gap-2 pt-2 lg:pt-0 border-t lg:border-t-0 border-slate-100 dark:border-slate-700/50 shrink-0">
+                          {isProtectedPrimaryAdmin ? (
+                            <span className="text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-2.5 py-1 rounded-xl border border-indigo-200 dark:border-indigo-800">
+                              🔒 Protected (Primary Admin)
+                            </span>
+                          ) : (
+                            <div className="flex flex-wrap items-center gap-1.5 bg-slate-50 dark:bg-slate-900/90 px-2.5 py-1.5 rounded-xl border border-slate-200/80 dark:border-slate-700">
+                              <span
+                                className="inline-flex items-center gap-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/70 px-1.5 py-0.5 rounded-md border border-emerald-200/70 dark:border-emerald-800/60"
+                                title={`Encrypted in DB & LocalStorage (${pwdFingerprint})`}
+                              >
+                                🔒 ENC
+                              </span>
+                              <span className="font-mono text-xs font-bold text-slate-800 dark:text-slate-200 min-w-[64px]">
+                                {isRevealed ? userPassword : '••••••••'}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => toggleRevealPassword(user.id)}
+                                className="p-1 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 cursor-pointer"
+                                title={isRevealed ? 'Hide Password' : 'Decrypt & Show Password'}
+                              >
+                                {isRevealed ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  handleCopyCredentials({
+                                    name: user.name,
+                                    username: user.username,
+                                    password: userPassword,
+                                    role: user.role,
+                                    gender: normalizedGender === 'female' ? 'Female (မ)' : 'Male (ကျား)',
+                                    address: user.address,
+                                  });
+                                  setToastMsg(`📋 "${user.name}" (@${user.username}) ၏ Login အချက်အလက် الكوبي ကူးယူပြီးပါပြီ။`);
+                                  setTimeout(() => setToastMsg(null), 3000);
+                                }}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/80 hover:bg-indigo-100 text-indigo-700 dark:text-indigo-300 text-[11px] font-bold cursor-pointer"
+                                title="Copy Username & Password"
+                              >
+                                <Copy className="w-3 h-3" />
+                                <span>Copy</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setResettingUser(user);
+                                  setNewUserPassword(userPassword);
+                                  setShowResetPassword(true);
+                                }}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/70 hover:bg-amber-100 text-amber-700 dark:text-amber-300 text-[11px] font-bold cursor-pointer"
+                                title="Reset Password"
+                              >
+                                <KeyRound className="w-3 h-3" />
+                                <span>Reset</span>
+                              </button>
+                            </div>
+                          )}
+
+                          {!isProtectedPrimaryAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteUser(user)}
+                              className="p-2 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-xl transition-colors cursor-pointer"
+                              title="Delete Account"
+                              aria-label="Delete user"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </div>
 
-                      {/* Class Enrolment Toggles (for Students) or Privileges Note (for Admin/Co-Admin) */}
-                      <div className="flex flex-col sm:flex-row sm:items-center gap-3 shrink-0">
-                        {user.role === 'student' ? (
-                          <div className="space-y-1">
-                            <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider block">
-                              Course Enrollments (အတန်းများ)
+                      {/* Bottom Row: 1-Click Classroom Enrollment Manager (For Students) */}
+                      {user.role === 'student' && courses.length > 0 && (
+                        <div className="pt-2.5 border-t border-slate-100 dark:border-slate-700/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 mr-1">
+                              အတန်းများ ({enrolledCount}/{courses.length}):
                             </span>
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              {courses.map((course) => {
-                                const isEnrolled = course.enrolledStudentIds.includes(user.id);
-                                const attPct = isEnrolled
-                                  ? ClassroomDB.calculateTotalAttendancePercentage(
-                                      course.id,
-                                      user.id
-                                    )
-                                  : null;
+                            {courses.map((course) => {
+                              const isEnrolled = course.enrolledStudentIds.includes(user.id);
+                              const attPct = isEnrolled
+                                ? ClassroomDB.calculateTotalAttendancePercentage(course.id, user.id)
+                                : null;
 
-                                return (
-                                  <button
-                                    key={course.id}
-                                    onClick={() =>
-                                      handleToggleCourseForStudent(user.id, course.id, isEnrolled)
-                                    }
-                                    className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer flex items-center gap-1 ${
-                                      isEnrolled
-                                        ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 hover:bg-rose-50 dark:hover:bg-rose-950/60 hover:text-rose-700 hover:border-rose-300'
-                                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 hover:text-indigo-600 border border-slate-200 dark:border-slate-700'
-                                    }`}
-                                    title={
-                                      isEnrolled
-                                        ? `Attendance: ${attPct}% — Click to remove from ${course.code}`
-                                        : `Click to enroll in ${course.code}`
-                                    }
-                                  >
-                                    {isEnrolled ? (
-                                      <>
-                                        <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-                                        <span>
-                                          {course.code} ({attPct}%)
-                                        </span>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <span>+ {course.code}</span>
-                                      </>
-                                    )}
-                                  </button>
-                                );
-                              })}
+                              return (
+                                <button
+                                  key={course.id}
+                                  type="button"
+                                  onClick={() =>
+                                    handleToggleCourseForStudent(user.id, course.id, isEnrolled)
+                                  }
+                                  className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                                    isEnrolled
+                                      ? 'bg-emerald-50 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-200 border border-emerald-300 dark:border-emerald-700 hover:bg-rose-50 dark:hover:bg-rose-950/60 hover:text-rose-700 hover:border-rose-300'
+                                      : 'bg-slate-100 dark:bg-slate-900 text-slate-500 dark:text-slate-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 hover:text-indigo-600 border border-slate-200 dark:border-slate-700'
+                                  }`}
+                                  title={
+                                    isEnrolled
+                                      ? `${course.title} (${attPct}% Attendance) — နှိပ်ပါက ဤအတန်းမှ ထုတ်ပယ်မည်`
+                                      : `${course.title} အတန်းသို့ ထည့်သွင်းရန် နှိပ်ပါ`
+                                  }
+                                >
+                                  {isEnrolled ? (
+                                    <>
+                                      <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400 stroke-[3]" />
+                                      <span>
+                                        {course.code} ({attPct}%)
+                                      </span>
+                                    </>
+                                  ) : (
+                                    <span>+ {course.code}</span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          {courses.length > 1 && (
+                            <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
+                              {enrolledCount < courses.length && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleEnrollStudentInAllCourses(user.id, true)}
+                                  className="text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-900 hover:bg-emerald-50 text-slate-600 dark:text-slate-300 hover:text-emerald-700 cursor-pointer"
+                                >
+                                  + အားလုံးထည့်မည်
+                                </button>
+                              )}
+                              {enrolledCount > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleEnrollStudentInAllCourses(user.id, false)}
+                                  className="text-[10px] font-bold px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-900 hover:bg-rose-50 text-slate-500 dark:text-slate-400 hover:text-rose-600 cursor-pointer"
+                                >
+                                  အားလုံးဖြုတ်မည်
+                                </button>
+                              )}
                             </div>
-                          </div>
-                        ) : (
-                          <div className="text-right">
-                            <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider block">
-                              Platform Access
-                            </span>
-                            <span className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded">
-                              {user.role === 'admin' ? 'All Classes & Faculty Privileges' : 'Assistant Instructor Privileges'}
-                            </span>
-                          </div>
-                        )}
-
-                        {/* Delete User Action (Hidden for Primary Admin when viewed by Co-Admin) */}
-                        {!isProtectedPrimaryAdmin && (
-                          <button
-                            onClick={() => handleDeleteUser(user)}
-                            className="p-2 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg transition-colors cursor-pointer self-end sm:self-center"
-                            title="Delete user from platform"
-                            aria-label="Delete user"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        )}
-                      </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })
               )}
 
-              {/* Progressive Load More Bar for 2,000+ Student Directory */}
+              {/* Progressive Load More Bar */}
               {filteredUsers.length > visibleLimit && (
-                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row items-center justify-between gap-2.5 text-xs">
+                <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row items-center justify-between gap-2.5 text-xs">
                   <span className="text-slate-600 dark:text-slate-300 font-medium">
                     ပြသထားသည်: <strong>{visibleLimit}</strong> / စုစုပေါင်း <strong>{filteredUsers.length}</strong> ဦး
                   </span>
@@ -1448,14 +1533,14 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                     <button
                       type="button"
                       onClick={() => setVisibleLimit((prev) => prev + 100)}
-                      className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold cursor-pointer transition-colors"
+                      className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold cursor-pointer"
                     >
-                      + နောက်ထပ် ၁၀၀ ဦး ပြမည် (Load +100)
+                      + နောက်ထပ် ၁၀၀ ဦး ပြမည်
                     </button>
                     <button
                       type="button"
                       onClick={() => setVisibleLimit(filteredUsers.length)}
-                      className="px-3 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-semibold cursor-pointer transition-colors"
+                      className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold cursor-pointer"
                     >
                       အားလုံးပြမည် ({filteredUsers.length})
                     </button>
@@ -1490,7 +1575,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                   <button
                     type="button"
                     onClick={() => setShowResetPassword(!showResetPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer"
                   >
                     {showResetPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
@@ -1500,14 +1585,14 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                   <button
                     type="button"
                     onClick={() => setResettingUser(null)}
-                    className="px-3 py-1.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white font-medium cursor-pointer"
+                    className="px-3 py-1.5 text-slate-600 dark:text-slate-300 font-semibold cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
                     type="button"
                     onClick={handleSaveResetPassword}
-                    className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-semibold cursor-pointer shadow-xs"
+                    className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold cursor-pointer shadow-xs"
                   >
                     Save Password
                   </button>
@@ -1544,7 +1629,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                   <button
                     type="button"
                     onClick={confirmDeleteUser}
-                    className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-semibold cursor-pointer shadow-xs"
+                    className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer shadow-xs"
                   >
                     သေချာပါသည်၊ ဖျက်မည်
                   </button>
