@@ -81,7 +81,9 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
   const [selectedRole, setSelectedRole] = useState<UserRole>('student');
   const [name, setName] = useState('');
   const [username, setUsername] = useState('');
+  const [isUsernameManuallyEdited, setIsUsernameManuallyEdited] = useState(false);
   const [email, setEmail] = useState('');
+  const [isEmailManuallyEdited, setIsEmailManuallyEdited] = useState(false);
   const [phone, setPhone] = useState('+95 9 ');
   const [password, setPassword] = useState('student123');
   const [title, setTitle] = useState('');
@@ -121,17 +123,29 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
   useBackHandler(!!userToDelete, () => setUserToDelete(null));
   useBackHandler(showNewForm, () => setShowNewForm(false));
 
-  //Newly created user credentials display
+  // Newly created user credentials display
   const [createdCredentials, setCreatedCredentials] = useState<{
     name: string;
     username: string;
     password: string;
     role: UserRole;
+    occupation?: string;
     courseName?: string;
     gender?: string;
     address?: string;
+    loginUrl: string;
   } | null>(null);
   const [copiedSuccess, setCopiedSuccess] = useState(false);
+
+  const getOfficialLoginUrl = () => {
+    if (typeof window !== 'undefined') {
+      const host = window.location.hostname;
+      if (host && !host.includes('.run.app') && host !== 'localhost' && host !== '127.0.0.1') {
+        return window.location.origin;
+      }
+    }
+    return 'https://www.swanarhclassroom.online';
+  };
 
   if (!isOpen) return null;
 
@@ -173,6 +187,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
         s.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
         s.username.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (s.phone && s.phone.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        (s.title && s.title.toLowerCase().includes(searchQuery.toLowerCase())) ||
         (s.address && s.address.toLowerCase().includes(searchQuery.toLowerCase()))
     );
 
@@ -180,13 +195,196 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     setSelectedRole(role);
     if (role === 'admin') {
       setPassword('admin123');
-      setTitle('Instructor & Administrator');
     } else if (role === 'co_admin') {
       setPassword('coadmin123');
-      setTitle('Course Coordinator & Assistant Instructor');
     } else {
       setPassword('student123');
-      setTitle('Undergraduate Scholar');
+    }
+  };
+
+  const generateUsernameFromName = (rawName: string): string => {
+    const trimmed = rawName.trim();
+    if (!trimmed) return '';
+
+    // 1. Common Myanmar name syllables & words dictionary for natural romanization
+    const mmWordMap: Array<[RegExp, string]> = [
+      [/မောင်/g, 'mg'],
+      [/ကို/g, 'ko'],
+      [/ဒေါ်/g, 'daw'],
+      [/ဦး/g, 'u'],
+      [/အောင်/g, 'aung'],
+      [/မင်း/g, 'min'],
+      [/ခန့်/g, 'khant'],
+      [/ကျော်/g, 'kyaw'],
+      [/စွာ/g, 'swar'],
+      [/ထွန်း/g, 'htun'],
+      [/နေ/g, 'nay'],
+      [/ဝင်း/g, 'win'],
+      [/စု/g, 'su'],
+      [/သူရ/g, 'thura'],
+      [/သူ/g, 'thu'],
+      [/စိုး/g, 'soe'],
+      [/နိုင်/g, 'naing'],
+      [/လင်း/g, 'lin'],
+      [/ထက်/g, 'htet'],
+      [/ဖြိုး/g, 'phyo'],
+      [/ပိုင်/g, 'paing'],
+      [/သက်/g, 'thet'],
+      [/ဇော်/g, 'zaw'],
+      [/မြတ်/g, 'myat'],
+      [/နွယ်/g, 'nwe'],
+      [/မေ/g, 'may'],
+      [/သဇင်/g, 'thazin'],
+      [/နှင်း/g, 'hnin'],
+      [/ရတနာ/g, 'yadanar'],
+      [/ကေသီ/g, 'kaythi'],
+      [/မိုး/g, 'moe'],
+      [/တိုး/g, 'toe'],
+      [/လှိုင်/g, 'hlaing'],
+      [/သန်း/g, 'than'],
+      [/သိန်း/g, 'thein'],
+      [/ချို/g, 'cho'],
+      [/ဖြူ/g, 'phyu'],
+      [/ဝေ/g, 'wai'],
+      [/ယမင်း/g, 'yamin'],
+      [/ချမ်း/g, 'chan'],
+      [/မြင့်/g, 'myint'],
+      [/ဇင်/g, 'zin'],
+      [/ခင်/g, 'khin'],
+      [/မျိုး/g, 'myo'],
+      [/သီရိ/g, 'thiri'],
+      [/ရွှေ/g, 'shwe'],
+      [/စန်း/g, 'san'],
+      [/ထူး/g, 'htoo'],
+      [/လွင်/g, 'lwin'],
+      [/ဦး/g, 'oo'],
+    ];
+
+    let processed = trimmed;
+    for (const [pattern, replacement] of mmWordMap) {
+      processed = processed.replace(pattern, ` ${replacement} `);
+    }
+
+    // 2. Fallback character-by-character Myanmar consonant & digit romanization
+    const mmCharMap: Record<string, string> = {
+      က: 'k',
+      ခ: 'kh',
+      ဂ: 'g',
+      ဃ: 'gh',
+      င: 'ng',
+      စ: 's',
+      ဆ: 'hs',
+      ဇ: 'z',
+      ဈ: 'zh',
+      ည: 'ny',
+      ဉ: 'ny',
+      ဋ: 't',
+      ဌ: 'ht',
+      ဍ: 'd',
+      ဎ: 'dh',
+      ဏ: 'n',
+      တ: 't',
+      ထ: 'ht',
+      ဒ: 'd',
+      ဓ: 'dh',
+      န: 'n',
+      ပ: 'p',
+      ဖ: 'ph',
+      ဗ: 'b',
+      ဘ: 'bh',
+      မ: 'm',
+      ယ: 'y',
+      ရ: 'y',
+      လ: 'l',
+      ဝ: 'w',
+      သ: 'th',
+      ဟ: 'h',
+      ဠ: 'l',
+      အ: 'a',
+      'ါ': 'a',
+      'ာ': 'a',
+      'ိ': 'i',
+      'ီ': 'i',
+      'ု': 'u',
+      'ူ': 'u',
+      'ေ': 'ay',
+      'ဲ': 'e',
+      'ော': 'aw',
+      'ော်': 'aw',
+      'ို': 'o',
+      'က်': 'et',
+      'င်': 'in',
+      'င့်': 'int',
+      'င်း': 'in',
+      'စ်': 'it',
+      'ည်': 'i',
+      'ဉ်': 'in',
+      'တ်': 'at',
+      'န်': 'an',
+      'န့်': 'ant',
+      'န်း': 'an',
+      'ပ်': 'at',
+      'မ်': 'am',
+      'မ်း': 'am',
+      'ံ': 'an',
+      '့': '',
+      'း': '',
+      '်': '',
+      'ျ': 'y',
+      'ြ': 'y',
+      'ွ': 'w',
+      'ှ': 'h',
+      '၀': '0',
+      '၁': '1',
+      '၂': '2',
+      '၃': '3',
+      '၄': '4',
+      '၅': '5',
+      '၆': '6',
+      '၇': '7',
+      '၈': '8',
+      '၉': '9',
+    };
+
+    let romanized = '';
+    for (const ch of processed) {
+      if (mmCharMap[ch] !== undefined) {
+        romanized += mmCharMap[ch];
+      } else {
+        romanized += ch;
+      }
+    }
+
+    // 3. Normalize to clean lowercase username characters
+    let base = romanized
+      .toLowerCase()
+      .replace(/^(dr\.|mr\.|mrs\.|ms\.)\s*/i, '')
+      .replace(/[^a-z0-9]+/g, '');
+
+    if (!base) {
+      base = `user${Math.floor(100 + Math.random() * 900)}`;
+    }
+
+    // 4. Ensure uniqueness against existing accounts
+    const existingUsernames = new Set(allUsers.map((u) => u.username.toLowerCase()));
+    if (!existingUsernames.has(base)) {
+      return base;
+    }
+    let counter = 1;
+    while (existingUsernames.has(`${base}${counter}`)) {
+      counter++;
+    }
+    return `${base}${counter}`;
+  };
+
+  const handleNameInputChange = (newName: string) => {
+    setName(newName);
+    if (!isUsernameManuallyEdited) {
+      const autoUser = generateUsernameFromName(newName);
+      setUsername(autoUser);
+      if (!isEmailManuallyEdited) {
+        setEmail(autoUser ? `${autoUser}@swanarh.edu` : '');
+      }
     }
   };
 
@@ -314,20 +512,27 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
           : 'No initial course'
         : 'All Courses (Staff Access)';
 
+    const loginLink = getOfficialLoginUrl();
+
     setCreatedCredentials({
       name: res.user.name,
       username: res.user.username,
       password: cleanPwd,
       role: selectedRole,
+      occupation: title.trim() || res.user.title,
       courseName: enrolledLabel,
       gender: gender === 'male' ? 'Male (ကျား)' : 'Female (မ)',
       address: res.user.address,
+      loginUrl: loginLink,
     });
 
     setName('');
     setUsername('');
+    setIsUsernameManuallyEdited(false);
     setEmail('');
+    setIsEmailManuallyEdited(false);
     setPhone('+95 9 ');
+    setTitle('');
     setAddress('');
     setShowNewForm(false);
     setIsSubmitting(false);
@@ -368,14 +573,38 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     username: string;
     password: string;
     role: UserRole;
+    occupation?: string;
     courseName?: string;
     gender?: string;
     address?: string;
+    loginUrl?: string;
   }) => {
     const roleLabel =
-      creds.role === 'admin' ? 'Admin' : creds.role === 'co_admin' ? 'Co-Admin' : 'Student';
-    const text = `SwanArh Classroom (${roleLabel} Login)\nName: ${creds.name}\nGender: ${creds.gender || 'N/A'}\nUsername: ${creds.username}\nPassword: ${creds.password}${creds.address ? `\nAddress: ${creds.address}` : ''}${creds.courseName ? `\nAccess: ${creds.courseName}` : ''}`;
-    navigator.clipboard.writeText(text);
+      creds.role === 'admin'
+        ? 'Admin (ဆရာ)'
+        : creds.role === 'co_admin'
+        ? 'Co-Admin (တွဲဖက်ဆရာ)'
+        : 'Student (ကျောင်းသား)';
+    const loginLink = creds.loginUrl || getOfficialLoginUrl();
+
+    const lines = [
+      `🎓 SwanArh Digital Academy (${roleLabel} Login)`,
+      `━━━━━━━━━━━━━━━━━━━━`,
+      `👤 အမည် (Name): ${creds.name}`,
+      `🔑 Username: ${creds.username}`,
+      `🔒 Password: ${creds.password}`,
+    ];
+    if (creds.occupation) {
+      lines.push(`💼 အလုပ်အကိုင်/ပညာအရည်အချင်း: ${creds.occupation}`);
+    }
+    if (creds.courseName) {
+      lines.push(`📚 တက်ရောက်ခွင့်ရသည့်အတန်း: ${creds.courseName}`);
+    }
+    lines.push(`🌐 Login ဝင်ရန် လင့်ခ် (Login Link):`);
+    lines.push(loginLink);
+    lines.push(`━━━━━━━━━━━━━━━━━━━━`);
+
+    navigator.clipboard.writeText(lines.join('\n'));
     setCopiedSuccess(true);
     setTimeout(() => setCopiedSuccess(false), 3000);
   };
@@ -615,7 +844,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                       : createdCredentials.role === 'co_admin'
                       ? 'Co-Admin'
                       : 'Student'}{' '}
-                    အကောင့်သစ် ဖွင့်ပြီးပါပြီ — Login အချက်အလက် الكوبي ကူးယူနိုင်ပါသည်
+                    အကောင့်သစ် ဖွင့်ပြီးပါပြီ — Copy နှိပ်၍ Login လင့်ခ်နှင့် အချက်အလက်အားလုံး ကူးယူပေးပို့နိုင်ပါသည်
                   </h4>
                 </div>
                 <button
@@ -627,33 +856,44 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-white dark:bg-slate-800 p-2.5 rounded-xl border border-indigo-200 dark:border-indigo-900/60 font-mono text-[11px]">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 bg-white dark:bg-slate-800 p-3 rounded-xl border border-indigo-200 dark:border-indigo-900/60 font-mono text-[11px]">
                 <div className="min-w-0">
-                  <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">Name</span>
+                  <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">အမည် (Name)</span>
                   <span className="font-bold text-slate-900 dark:text-white truncate block">{createdCredentials.name}</span>
                 </div>
                 <div className="min-w-0">
                   <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">Username</span>
-                  <span className="font-bold text-indigo-600 dark:text-indigo-300 truncate block">@{createdCredentials.username}</span>
+                  <span className="font-bold text-indigo-600 dark:text-indigo-300 truncate block">{createdCredentials.username}</span>
                 </div>
                 <div className="min-w-0">
                   <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">Password</span>
                   <span className="font-bold text-emerald-600 dark:text-emerald-400 truncate block">{createdCredentials.password}</span>
                 </div>
                 <div className="min-w-0">
-                  <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">Classes</span>
-                  <span className="text-slate-700 dark:text-slate-300 truncate block">{createdCredentials.courseName}</span>
+                  <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">အလုပ်အကိုင်/ပညာအရည်အချင်း</span>
+                  <span className="text-slate-700 dark:text-slate-300 truncate block font-sans">{createdCredentials.occupation || '—'}</span>
+                </div>
+                <div className="min-w-0">
+                  <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">Login ဝင်ရန် လင့်ခ်</span>
+                  <span className="font-bold text-indigo-600 dark:text-indigo-400 truncate block">{createdCredentials.loginUrl}</span>
                 </div>
               </div>
 
-              <div className="flex justify-end">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-0.5">
+                <span className="text-[11px] text-slate-600 dark:text-slate-300">
+                  📋 Copy နှိပ်ပါက <strong>Login Link, အမည်, Username, Password</strong> အားလုံး တစ်ခါတည်း ကူးယူပေးပါမည်။
+                </span>
                 <button
                   type="button"
                   onClick={() => handleCopyCredentials(createdCredentials)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs cursor-pointer"
+                  className="flex items-center justify-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs cursor-pointer shadow-xs shrink-0"
                 >
-                  {copiedSuccess ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedSuccess ? 'Copied! (ကူးယူပြီးပါပြီ)' : 'Copy Login Info (ကူးယူမည်)'}</span>
+                  {copiedSuccess ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  <span>
+                    {copiedSuccess
+                      ? 'Copied! (Login Link + အချက်အလက် الكوبي ကူးပြီးပါပြီ)'
+                      : 'Copy Login Info (Login လင့်ခ်နှင့် အချက်အလက်အားလုံး ကူးမည်)'}
+                  </span>
                 </button>
               </div>
             </div>
@@ -881,33 +1121,49 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                     </label>
                     <input
                       type="text"
-                      placeholder="e.g., မောင်မင်းခန့်"
+                      placeholder="e.g., မောင်မင်းခန့် / Aung Min"
                       value={name}
-                      onChange={(e) => {
-                        setName(e.target.value);
-                        if (!username && e.target.value) {
-                          const suggested = e.target.value.toLowerCase().replace(/[^a-z0-9]/g, '');
-                          if (suggested) setUsername(suggested);
-                        }
-                      }}
+                      onChange={(e) => handleNameInputChange(e.target.value)}
                       className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
                       required
                     />
                   </div>
 
                   <div>
-                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      ၃။ Username (Login ID) *
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300">
+                        ၃။ Username (Login ID) *
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsUsernameManuallyEdited(false);
+                          const autoUser = generateUsernameFromName(name);
+                          if (autoUser) {
+                            setUsername(autoUser);
+                            if (!isEmailManuallyEdited) {
+                              setEmail(`${autoUser}@swanarh.edu`);
+                            }
+                          }
+                        }}
+                        className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-0.5 cursor-pointer font-semibold"
+                        title="အမည်မှ Username အလိုအလျောက် ပြန်ထုတ်ပေးရန်"
+                      >
+                        <Sparkles className="w-3 h-3" />
+                        <span>Auto</span>
+                      </button>
+                    </div>
                     <div className="relative">
                       <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-mono">@</span>
                       <input
                         type="text"
-                        placeholder="username"
+                        placeholder="အမည်ရိုက်ထည့်ပါက Auto ပေါ်ပါမည်"
                         value={username}
-                        onChange={(e) =>
-                          setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_.]/g, ''))
-                        }
+                        onChange={(e) => {
+                          const val = e.target.value.toLowerCase().replace(/[^a-z0-9_.]/g, '');
+                          setUsername(val);
+                          setIsUsernameManuallyEdited(Boolean(val));
+                        }}
                         className="w-full pl-7 pr-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-mono text-slate-900 dark:text-white"
                         required
                       />
@@ -947,8 +1203,8 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                   </div>
                 </div>
 
-                {/* Contact & Demographics */}
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                {/* Contact, Occupation/Education & Demographics */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
                   <div>
                     <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                       ၅။ Email *
@@ -957,7 +1213,10 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                       type="email"
                       placeholder="user@swanarh.edu"
                       value={email}
-                      onChange={(e) => setEmail(e.target.value)}
+                      onChange={(e) => {
+                        setEmail(e.target.value);
+                        setIsEmailManuallyEdited(Boolean(e.target.value));
+                      }}
                       className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-mono text-slate-900 dark:text-white"
                       required
                     />
@@ -978,7 +1237,20 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
 
                   <div>
                     <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      ၇။ ကျား / မ (Gender)
+                      ၇။ အလုပ်အကိုင် / ပညာအရည်အချင်း
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="ဥပမာ - ကျောင်းသား / B.C.Sc / ဝန်ထမ်း"
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      ၈။ ကျား / မ (Gender)
                     </label>
                     <div className="grid grid-cols-2 gap-1.5">
                       <button
@@ -1008,7 +1280,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
 
                   <div>
                     <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      ၈။ နေရပ်လိပ်စာ (Address)
+                      ၉။ နေရပ်လိပ်စာ (Address)
                     </label>
                     <input
                       type="text"
@@ -1025,7 +1297,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                   <div className="p-3 bg-slate-50 dark:bg-slate-900/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2">
                     <div className="flex items-center justify-between flex-wrap gap-2">
                       <label className="font-bold text-slate-800 dark:text-slate-200">
-                        ၉။ တက်ရောက်ခွင့်ပြုမည့် အတန်းများ ({selectedInitialCourses.length} တန်း ရွေးထားသည်)
+                        ၁၀။ တက်ရောက်ခွင့်ပြုမည့် အတန်းများ ({selectedInitialCourses.length} တန်း ရွေးထားသည်)
                       </label>
                       <div className="flex items-center gap-1.5">
                         <button
@@ -1359,6 +1631,14 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                               <span>{user.phone || 'No phone'}</span>
                               <span>·</span>
                               <span className="truncate">{user.email}</span>
+                              {user.title && (
+                                <>
+                                  <span>·</span>
+                                  <span className="font-sans font-semibold text-indigo-700 dark:text-indigo-300">
+                                    💼 {user.title}
+                                  </span>
+                                </>
+                              )}
                               {user.address && (
                                 <>
                                   <span>·</span>
@@ -1400,19 +1680,31 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                               <button
                                 type="button"
                                 onClick={() => {
+                                  const userEnrolledCourses =
+                                    user.role === 'student'
+                                      ? courses
+                                          .filter((c) => c.enrolledStudentIds.includes(user.id))
+                                          .map((c) => c.code)
+                                          .join(', ')
+                                      : 'All Courses (Staff Access)';
                                   handleCopyCredentials({
                                     name: user.name,
                                     username: user.username,
                                     password: userPassword,
                                     role: user.role,
+                                    occupation: user.title,
+                                    courseName: userEnrolledCourses || undefined,
                                     gender: normalizedGender === 'female' ? 'Female (မ)' : 'Male (ကျား)',
                                     address: user.address,
+                                    loginUrl: getOfficialLoginUrl(),
                                   });
-                                  setToastMsg(`📋 "${user.name}" (@${user.username}) ၏ Login အချက်အလက် الكوبي ကူးယူပြီးပါပြီ။`);
+                                  setToastMsg(
+                                    `📋 "${user.name}" (@${user.username}) ၏ Login Link, Username နှင့် Password အချက်အလက်အားလုံး ကူးယူပြီးပါပြီ။`
+                                  );
                                   setTimeout(() => setToastMsg(null), 3000);
                                 }}
                                 className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/80 hover:bg-indigo-100 text-indigo-700 dark:text-indigo-300 text-[11px] font-bold cursor-pointer"
-                                title="Copy Username & Password"
+                                title="Copy Login Link, Name, Username & Password"
                               >
                                 <Copy className="w-3 h-3" />
                                 <span>Copy</span>

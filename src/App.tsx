@@ -147,6 +147,7 @@ export default function App() {
     // Allow first paint of LoginView or Dashboard to complete immediately before running network sync
     const initTimer = setTimeout(() => {
       ClassroomDB.init();
+      ClassroomDB.purgeExpiredAuditLogs(true);
       refreshData();
       const loggedUser = ClassroomDB.getCurrentUser();
       if (loggedUser) {
@@ -168,6 +169,7 @@ export default function App() {
     // immediately pull authoritative remote state (courses, posts, deletions, and 1-device session lock)
     const handleWakeUp = () => {
       if (document.visibilityState === 'visible') {
+        ClassroomDB.purgeExpiredAuditLogs(false);
         refreshData();
         const loggedUser = ClassroomDB.getCurrentUser();
         if (loggedUser) {
@@ -202,9 +204,11 @@ export default function App() {
       }
     }, jitteredIntervalMs);
 
-    // 20-second timer to auto-delete notifications older than 30 minutes locally & in Supabase
+    // 20-second background timer to auto-delete notifications (>30 mins) and Audit Logs (>2 days / 48 hours) locally & in Supabase
     const notifCleanupInterval = setInterval(() => {
-      if (ClassroomDB.purgeExpiredNotifications()) {
+      const purgedNotifs = ClassroomDB.purgeExpiredNotifications();
+      const purgedAudit = ClassroomDB.purgeExpiredAuditLogs();
+      if (purgedNotifs || purgedAudit) {
         refreshData();
       }
     }, 20000);

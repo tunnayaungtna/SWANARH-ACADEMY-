@@ -7,6 +7,7 @@ import {
   AuditLogSeverity,
 } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
+import { AUDIT_LOG_TTL_MS } from '../services/supabase';
 import {
   ShieldAlert,
   ShieldCheck,
@@ -55,7 +56,7 @@ export const AdminAuditLogModal: React.FC<AdminAuditLogModalProps> = ({
   const [selectedSeverity, setSelectedSeverity] = useState<'all' | AuditLogSeverity>('all');
   const [selectedActorFilter, setSelectedActorFilter] = useState<string>('all'); // 'all' | 'co_admin_only' | 'admin_only' | specific userId
   const [selectedCourseFilter, setSelectedCourseFilter] = useState<string>('all');
-  const [selectedTimeRange, setSelectedTimeRange] = useState<'all' | 'today' | '7d' | '30d'>('all');
+  const [selectedTimeRange, setSelectedTimeRange] = useState<'all' | 'today' | '24h' | '48h'>('all');
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [bannerFeedback, setBannerFeedback] = useState<string | null>(null);
@@ -68,6 +69,7 @@ export const AdminAuditLogModal: React.FC<AdminAuditLogModalProps> = ({
   const handleSyncLogs = async () => {
     setIsSyncing(true);
     try {
+      ClassroomDB.purgeExpiredAuditLogs(true);
       const synced = await ClassroomDB.syncAuditLogsFromCloud();
       setLogs(synced);
     } finally {
@@ -76,10 +78,19 @@ export const AdminAuditLogModal: React.FC<AdminAuditLogModalProps> = ({
   };
 
   useEffect(() => {
-    if (isOpen && currentUser.role === 'admin') {
-      setLogs(ClassroomDB.getAuditLogs());
-      handleSyncLogs();
-    }
+    if (!isOpen || currentUser.role !== 'admin') return;
+    ClassroomDB.purgeExpiredAuditLogs(true);
+    setLogs(ClassroomDB.getAuditLogs());
+    handleSyncLogs();
+
+    // Background sweep every 15s while modal is open to auto-delete logs older than 2 days (48 hours)
+    const timer = setInterval(() => {
+      if (ClassroomDB.purgeExpiredAuditLogs(false)) {
+        setLogs(ClassroomDB.getAuditLogs());
+      }
+    }, 15000);
+
+    return () => clearInterval(timer);
   }, [isOpen, currentUser.id, currentUser.role]);
 
   const formatRelativeTime = (ms: number): string => {
@@ -92,6 +103,20 @@ export const AdminAuditLogModal: React.FC<AdminAuditLogModalProps> = ({
     if (diffHr < 24) return `${diffHr} နာရီခန့်က (${diffHr}h ago)`;
     const diffDay = Math.floor(diffHr / 24);
     return `${diffDay} ရက်ခန့်က (${diffDay}d ago)`;
+  };
+
+  const formatRemainingTTL = (createdAtMs: number): string => {
+    if (!createdAtMs) return '2d remaining';
+    const remainingMs = Math.max(0, createdAtMs + AUDIT_LOG_TTL_MS - Date.now());
+    const totalMins = Math.floor(remainingMs / 60000);
+    if (totalMins <= 0) return 'Deleting...';
+    if (totalMins < 60) return `${totalMins}m left`;
+    const hours = Math.floor(totalMins / 60);
+    const mins = totalMins % 60;
+    if (hours < 24) return `${hours}h ${mins}m left`;
+    const days = Math.floor(hours / 24);
+    const remHours = hours % 24;
+    return `${days}d ${remHours}h left`;
   };
 
   const filteredLogs = useMemo(() => {
@@ -132,14 +157,17 @@ export const AdminAuditLogModal: React.FC<AdminAuditLogModalProps> = ({
         return false;
       }
 
-      // Time range filter
+      // Time range filter (2-day max retention window)
+      if (now - log.createdAtMs >= AUDIT_LOG_TTL_MS) {
+        return false;
+      }
       if (selectedTimeRange === 'today' && log.createdAtMs < todayMs) {
         return false;
       }
-      if (selectedTimeRange === '7d' && now - log.createdAtMs > 7 * 24 * 3600 * 1000) {
+      if (selectedTimeRange === '24h' && now - log.createdAtMs > 24 * 3600 * 1000) {
         return false;
       }
-      if (selectedTimeRange === '30d' && now - log.createdAtMs > 30 * 24 * 3600 * 1000) {
+      if (selectedTimeRange === '48h' && now - log.createdAtMs > AUDIT_LOG_TTL_MS) {
         return false;
       }
 
@@ -301,9 +329,12 @@ export const AdminAuditLogModal: React.FC<AdminAuditLogModalProps> = ({
                 <span className="px-2.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 text-[10px] font-extrabold uppercase tracking-wider">
                   Primary Admin Oversight
                 </span>
+                <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 text-[10px] font-extrabold tracking-wide">
+                  ⏱️ 2-Day Auto-Delete Active
+                </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                မည်သည့် Co-Admin သို့မဟုတ် Admin က မည်သည့်အချိန်တွင် ကျောင်းသားအသစ်ထည့်သည်၊ အတန်းပြင်သည်၊ Post တင်/ဖျက်သည်ကို အသေးစိတ် ပြန်လည်စစ်ဆေးနိုင်ပါသည်
+                Admin နှင့် Co-Admin တို့၏ လုပ်ဆောင်ချက်မှတ်တမ်းများကို စစ်ဆေးနိုင်ပြီး ၂ ရက် (၄၈ နာရီ) ကြာပြီးသော မှတ်တမ်းဟောင်းများကို Background မှ အလိုအလျောက် ဖျက်သိမ်းပေးပါသည်
               </p>
             </div>
           </div>
@@ -510,14 +541,14 @@ export const AdminAuditLogModal: React.FC<AdminAuditLogModalProps> = ({
                 <select
                   value={selectedTimeRange}
                   onChange={(e) =>
-                    setSelectedTimeRange(e.target.value as 'all' | 'today' | '7d' | '30d')
+                    setSelectedTimeRange(e.target.value as 'all' | 'today' | '24h' | '48h')
                   }
                   className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-800 dark:text-slate-200 cursor-pointer"
                 >
-                  <option value="all">🕒 အချိန် အားလုံး</option>
+                  <option value="all">🕒 ၂ ရက်အတွင်း အားလုံး</option>
                   <option value="today">📅 ယနေ့ (Today)</option>
-                  <option value="7d">📅 ၇ ရက်အတွင်း (7 Days)</option>
-                  <option value="30d">📅 ရက် ၃၀ အတွင်း (30 Days)</option>
+                  <option value="24h">⏱️ ၂၄ နာရီအတွင်း (24h)</option>
+                  <option value="48h">📅 ၄၈ နာရီ / ၂ ရက်အတွင်း</option>
                 </select>
               </div>
             </div>
@@ -705,7 +736,7 @@ export const AdminAuditLogModal: React.FC<AdminAuditLogModalProps> = ({
                             {log.createdAt}
                           </div>
                           <div className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold">
-                            {formatRelativeTime(log.createdAtMs)}
+                            {formatRelativeTime(log.createdAtMs)} · ⏱️ {formatRemainingTTL(log.createdAtMs)}
                           </div>
                         </div>
                       </div>
@@ -724,6 +755,10 @@ export const AdminAuditLogModal: React.FC<AdminAuditLogModalProps> = ({
                         <div>
                           <span className="text-slate-400">Actor:</span> {log.actorName} (@
                           {log.actorUsername} · ID: {log.actorId} · Role: {log.actorRole})
+                        </div>
+                        <div>
+                          <span className="text-slate-400">Auto-Delete Policy:</span> 2 Days (48 Hours) —{' '}
+                          {formatRemainingTTL(log.createdAtMs)}
                         </div>
                         {log.details && (
                           <div>
@@ -744,7 +779,7 @@ export const AdminAuditLogModal: React.FC<AdminAuditLogModalProps> = ({
           <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
             <span>
-              မှတ်တမ်းအားလုံးကို Supabase Cloud နှင့် အလိုအလျောက် ချိတ်ဆက်သိမ်းဆည်းထားပြီး Primary Admin သာ ကြည့်ရှုနိုင်ပါသည်။
+              ၂ ရက် (၄၈ နာရီ) ကြာပြီးသော Audit Log မှတ်တမ်းများကို LocalStorage နှင့် Supabase Cloud နှစ်ခုလုံးမှ Background တွင် အလိုအလျောက် ဖျက်သိမ်းပေးပါသည်။
             </span>
           </div>
 

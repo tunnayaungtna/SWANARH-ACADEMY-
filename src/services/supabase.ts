@@ -14,7 +14,7 @@ import {
 import { encryptPassword } from '../utils/passwordCrypto';
 
 export const NOTIFICATION_TTL_MS = 30 * 60 * 1000; // 30 minutes auto-delete window
-export const AUDIT_LOG_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days security audit retention window
+export const AUDIT_LOG_TTL_MS = 2 * 24 * 60 * 60 * 1000; // 2 days (48 hours) security audit auto-delete window
 const AUDIT_LOG_SYSTEM_USER_ID = 'SYSTEM_AUDIT_LOG';
 
 // Supabase Project Credentials provided by user
@@ -493,6 +493,7 @@ export class SupabaseService {
   // In-memory payload signature cache so identical records are never re-uploaded to Supabase
   private static lastUpsertSignatures = new Map<string, string>();
   private static lastExpiredCleanupAt = 0;
+  private static lastAuditLogCleanupAt = 0;
   private static lastOrphanCleanupAt = 0;
   // In-flight GET request deduplication map for 2,000+ concurrent user scalability
   private static inflightGetRequests = new Map<string, Promise<unknown>>();
@@ -1032,7 +1033,7 @@ export class SupabaseService {
   }
 
   /**
-   * Auto-delete notifications older than 30 minutes (or specific expired IDs) from Supabase SQL database
+   * Auto-delete notifications older than 30 minutes (and also trigger 2-day Audit Log cleanup) from Supabase SQL database
    */
   static async purgeExpiredNotifications(expiredIds: string[] = [], force: boolean = false): Promise<boolean> {
     if (this.notificationsTableStatus === 'missing') {
@@ -1040,6 +1041,10 @@ export class SupabaseService {
     }
     const now = Date.now();
     const shouldRunTimeSweep = force || now - this.lastExpiredCleanupAt >= 45_000;
+
+    // Also run the 2-day Audit Log background auto-delete sweep
+    this.purgeExpiredAuditLogs([], force).catch(() => {});
+
     if (!shouldRunTimeSweep && expiredIds.length === 0) {
       return true;
     }
@@ -1075,6 +1080,53 @@ export class SupabaseService {
   }
 
   /**
+   * Auto-delete Security Audit Logs older than 2 days (48 hours) from Supabase SQL database in the background
+   */
+  static async purgeExpiredAuditLogs(expiredIds: string[] = [], force: boolean = false): Promise<boolean> {
+    if (this.notificationsTableStatus === 'missing') {
+      return false;
+    }
+    const now = Date.now();
+    const shouldRunSweep = force || now - this.lastAuditLogCleanupAt >= 60_000;
+    if (!shouldRunSweep && expiredIds.length === 0) {
+      return true;
+    }
+
+    try {
+      if (shouldRunSweep) {
+        this.lastAuditLogCleanupAt = now;
+        const cutoffIso = new Date(now - AUDIT_LOG_TTL_MS).toISOString();
+        const nowIso = new Date(now).toISOString();
+        const { error } = await supabase
+          .from('notifications')
+          .delete()
+          .eq('user_id', AUDIT_LOG_SYSTEM_USER_ID)
+          .or(`created_at.lt.${cutoffIso},expires_at.lte.${nowIso}`);
+
+        if (error) {
+          if (error.code === '42P01' || error.message?.includes('notifications')) {
+            this.notificationsTableStatus = 'missing';
+            return false;
+          }
+        } else {
+          this.notificationsTableStatus = 'available';
+        }
+      }
+
+      if (expiredIds.length > 0) {
+        await supabase
+          .from('notifications')
+          .delete()
+          .eq('user_id', AUDIT_LOG_SYSTEM_USER_ID)
+          .in('id', expiredIds.slice(0, 100));
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Delete notifications associated with a deleted post or course in Supabase
    */
   static async deleteNotificationsByPostId(postId: string): Promise<boolean> {
@@ -1096,6 +1148,7 @@ export class SupabaseService {
 
   /**
    * Fetch Security Audit Logs (Admin & Co-Admin activity records) from Supabase
+   * while automatically purging any logs older than 2 days (48 hours).
    */
   static async getRemoteAuditLogs(limit: number = 250): Promise<AuditLogEntry[] | null> {
     if (this.notificationsTableStatus === 'missing') {
@@ -1103,12 +1156,19 @@ export class SupabaseService {
     }
     return this.dedupeGet(`audit_logs:${limit}`, async () => {
       try {
+        // Trigger background 2-day auto-purge in Supabase
+        this.purgeExpiredAuditLogs([], false).catch(() => {});
+
+        const now = Date.now();
+        const cutoffIso = new Date(now - AUDIT_LOG_TTL_MS).toISOString();
+
         const { data, error } = await supabase
           .from('notifications')
           .select(
-            'id,user_id,course_id,course_code,course_title,post_id,author_name,author_role,title,message,type,created_at'
+            'id,user_id,course_id,course_code,course_title,post_id,author_name,author_role,title,message,type,created_at,expires_at'
           )
           .eq('user_id', AUDIT_LOG_SYSTEM_USER_ID)
+          .gte('created_at', cutoffIso)
           .order('created_at', { ascending: false })
           .limit(limit);
 
@@ -1122,11 +1182,24 @@ export class SupabaseService {
         if (!data) return [];
 
         const logs: AuditLogEntry[] = [];
+        const expiredCloudIds: string[] = [];
+
         for (const row of data) {
+          const rowCreatedMs = row.created_at ? new Date(row.created_at).getTime() : now;
+          if (now - rowCreatedMs >= AUDIT_LOG_TTL_MS) {
+            expiredCloudIds.push(String(row.id));
+            continue;
+          }
+
           try {
             if (row.message && String(row.message).trim().startsWith('{')) {
               const parsed = JSON.parse(String(row.message)) as AuditLogEntry;
               if (parsed && parsed.id && parsed.actionCode) {
+                const entryMs = parsed.createdAtMs || rowCreatedMs;
+                if (now - entryMs >= AUDIT_LOG_TTL_MS) {
+                  expiredCloudIds.push(String(row.id));
+                  continue;
+                }
                 logs.push(parsed);
                 continue;
               }
@@ -1134,7 +1207,6 @@ export class SupabaseService {
           } catch {
             // Fallback to column reconstruction below
           }
-          const createdMs = row.created_at ? new Date(row.created_at).getTime() : Date.now();
           logs.push({
             id: String(row.id),
             actorId: 'admin',
@@ -1148,7 +1220,7 @@ export class SupabaseService {
             courseId: row.course_id && row.course_id !== 'GLOBAL' ? String(row.course_id) : undefined,
             summary: String(row.title || ''),
             details: String(row.message || ''),
-            createdAt: new Date(createdMs).toLocaleString('en-US', {
+            createdAt: new Date(rowCreatedMs).toLocaleString('en-US', {
               month: 'short',
               day: 'numeric',
               year: 'numeric',
@@ -1156,9 +1228,14 @@ export class SupabaseService {
               minute: '2-digit',
               second: '2-digit',
             }),
-            createdAtMs: createdMs,
+            createdAtMs: rowCreatedMs,
           });
         }
+
+        if (expiredCloudIds.length > 0) {
+          this.purgeExpiredAuditLogs(expiredCloudIds, true).catch(() => {});
+        }
+
         return logs;
       } catch {
         return null;
@@ -1167,7 +1244,7 @@ export class SupabaseService {
   }
 
   /**
-   * Upsert Security Audit Log entries to Supabase (stored automatically in public.notifications with 30-day retention)
+   * Upsert Security Audit Log entries to Supabase (stored automatically in public.notifications with 2-day auto-delete retention)
    */
   static async upsertAuditLogs(entries: AuditLogEntry[]): Promise<boolean> {
     if (this.notificationsTableStatus === 'missing' || entries.length === 0) {

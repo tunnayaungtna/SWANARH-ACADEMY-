@@ -18,7 +18,7 @@ import {
   AuditLogCategory,
   AuditLogSeverity,
 } from '../types/classroom';
-import { SupabaseService, NOTIFICATION_TTL_MS } from './supabase';
+import { SupabaseService, NOTIFICATION_TTL_MS, AUDIT_LOG_TTL_MS } from './supabase';
 import {
   encryptPassword,
   decryptPassword,
@@ -457,9 +457,15 @@ export class ClassroomDB {
       createdAtMs: nowMs,
     };
 
+    // Automatically purge any audit logs older than 2 days (48 hours) before storing
+    this.purgeExpiredAuditLogs(false);
+
     const existing = this.getItem<AuditLogEntry[]>(STORAGE_KEYS.AUDIT_LOGS, []);
-    // Keep up to 600 most recent audit log entries locally sorted newest-first
-    const updated = [entry, ...existing.filter((e) => e.id !== entry.id)]
+    // Keep up to 600 most recent audit log entries within the 2-day retention window sorted newest-first
+    const updated = [
+      entry,
+      ...existing.filter((e) => e.id !== entry.id && nowMs - (e.createdAtMs || nowMs) < AUDIT_LOG_TTL_MS),
+    ]
       .sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0))
       .slice(0, 600);
 
@@ -475,19 +481,76 @@ export class ClassroomDB {
     return entry;
   }
 
-  static getAuditLogs(): AuditLogEntry[] {
+  /**
+   * Background Auto-Delete: Purges any Security Audit Logs older than 2 days (48 hours)
+   * from both LocalStorage and Supabase SQL database automatically.
+   */
+  static purgeExpiredAuditLogs(forceCloudCleanup: boolean = false): boolean {
     const logs = this.getItem<AuditLogEntry[]>(STORAGE_KEYS.AUDIT_LOGS, []);
-    return [...logs].sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
+    const now = Date.now();
+    const expiredIds: string[] = [];
+    const activeLogs: AuditLogEntry[] = [];
+    let mutated = false;
+
+    for (const log of logs) {
+      let createdMs = log.createdAtMs;
+      if (!createdMs) {
+        createdMs = this.extractTimestampFromId(log.id) || now;
+        mutated = true;
+      }
+
+      if (now - createdMs >= AUDIT_LOG_TTL_MS) {
+        expiredIds.push(log.id);
+        mutated = true;
+      } else {
+        activeLogs.push(
+          log.createdAtMs === createdMs ? log : { ...log, createdAtMs: createdMs }
+        );
+      }
+    }
+
+    if (mutated) {
+      this.setItem(STORAGE_KEYS.AUDIT_LOGS, activeLogs);
+    }
+
+    if (expiredIds.length > 0 || forceCloudCleanup) {
+      try {
+        SupabaseService.purgeExpiredAuditLogs(expiredIds, forceCloudCleanup).catch(() => {});
+      } catch {
+        // ignore
+      }
+    }
+
+    return expiredIds.length > 0;
+  }
+
+  static getAuditLogs(): AuditLogEntry[] {
+    this.purgeExpiredAuditLogs(false);
+    const now = Date.now();
+    const logs = this.getItem<AuditLogEntry[]>(STORAGE_KEYS.AUDIT_LOGS, []);
+    return logs
+      .filter((l) => now - (l.createdAtMs || now) < AUDIT_LOG_TTL_MS)
+      .sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
   }
 
   static async syncAuditLogsFromCloud(): Promise<AuditLogEntry[]> {
     try {
+      this.purgeExpiredAuditLogs(true);
       const remoteLogs = await SupabaseService.getRemoteAuditLogs(300);
       if (remoteLogs && remoteLogs.length > 0) {
+        const now = Date.now();
         const localLogs = this.getItem<AuditLogEntry[]>(STORAGE_KEYS.AUDIT_LOGS, []);
         const map = new Map<string, AuditLogEntry>();
-        localLogs.forEach((l) => map.set(l.id, l));
-        remoteLogs.forEach((rl) => map.set(rl.id, rl));
+        localLogs.forEach((l) => {
+          if (now - (l.createdAtMs || now) < AUDIT_LOG_TTL_MS) {
+            map.set(l.id, l);
+          }
+        });
+        remoteLogs.forEach((rl) => {
+          if (now - (rl.createdAtMs || now) < AUDIT_LOG_TTL_MS) {
+            map.set(rl.id, rl);
+          }
+        });
         const merged = Array.from(map.values())
           .sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0))
           .slice(0, 600);
@@ -1111,7 +1174,9 @@ export class ClassroomDB {
       targetId: newUser.id,
       targetName: `${newUser.name} (@${newUser.username})`,
       summary: `${roleLabel} အကောင့်အသစ် "${newUser.name}" (@${newUser.username}) ကို ဖန်တီးပေးခဲ့ပါသည်။`,
-      details: `Email: ${newUser.email} | Phone: ${newUser.phone} | Role: ${roleLabel}${
+      details: `Email: ${newUser.email} | Phone: ${newUser.phone}${
+        newUser.title ? ` | အလုပ်အကိုင်/ပညာအရည်အချင်း: ${newUser.title}` : ''
+      } | Role: ${roleLabel}${
         enrolledLabels ? ` | Enrolled Classes: ${enrolledLabels}` : ''
       }`,
     });
@@ -2277,8 +2342,8 @@ export class ClassroomDB {
       return false;
     }
 
-    // Always run 30-minute notification cleanup first
-    const purgedLocalNotifs = this.purgeExpiredNotifications();
+    // Always run 30-minute notification cleanup & 2-day Audit Log cleanup first in the background
+    const purgedLocalNotifs = this.purgeExpiredNotifications() || this.purgeExpiredAuditLogs();
 
     const force = Boolean(options?.force);
     const onlyProfiles = Boolean(options?.onlyProfiles);
