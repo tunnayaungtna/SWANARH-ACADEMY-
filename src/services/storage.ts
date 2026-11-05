@@ -208,14 +208,14 @@ export class ClassroomDB {
     const map = this.getItem<Record<string, number>>(STORAGE_KEYS.RECENT_WRITES, {});
     const next: Record<string, number> = { [id]: now };
     for (const [k, ts] of Object.entries(map)) {
-      if (now - ts < 30_000) {
+      if (now - ts < 180_000) {
         next[k] = ts;
       }
     }
     this.setItem(STORAGE_KEYS.RECENT_WRITES, next);
   }
 
-  private static isRecentLocalWrite(id: string, maxAgeMs: number = 25_000): boolean {
+  private static isRecentLocalWrite(id: string, maxAgeMs: number = 120_000): boolean {
     if (!id) return false;
     const map = this.getItem<Record<string, number>>(STORAGE_KEYS.RECENT_WRITES, {});
     const ts = map[id];
@@ -823,15 +823,33 @@ export class ClassroomDB {
     this.setKickReason(reason);
   }
 
+  private static normalizeLoginIdentifier(raw: string): { cleanId: string; compactId: string } {
+    const cleanId = (raw || '')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/^(🔑\s*)?(username|email|id|အမည်|name)\s*[:：]\s*/i, '')
+      .trim()
+      .replace(/^@+/, '')
+      .toLowerCase();
+    const compactId = cleanId.replace(/\s+/g, '');
+    return { cleanId, compactId };
+  }
+
+  private static normalizeLoginPassword(raw: string): string {
+    return (raw || '')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/^(🔒\s*)?(password|စကားဝှက်)\s*[:：]\s*/i, '')
+      .trim();
+  }
+
   private static verifyCredentialsOnly(
     identifier: string,
     password: string,
-    expectedRole?: UserRole
+    _expectedRole?: UserRole
   ): { user: User | null; error?: string } {
     this.init();
 
-    const cleanId = (identifier || '').trim().toLowerCase();
-    const cleanPwd = (password || '').trim();
+    const { cleanId, compactId } = this.normalizeLoginIdentifier(identifier);
+    const cleanPwd = this.normalizeLoginPassword(password);
 
     if (!cleanId || !cleanPwd) {
       return {
@@ -841,9 +859,22 @@ export class ClassroomDB {
     }
 
     const allUsers = this.getAllUsers();
-    const matched = allUsers.find(
-      (u) => u.email.toLowerCase() === cleanId || u.username.toLowerCase() === cleanId
-    );
+    const matched =
+      allUsers.find((u) => {
+        const uName = (u.username || '').trim().toLowerCase();
+        const uEmail = (u.email || '').trim().toLowerCase();
+        return (
+          uName === cleanId ||
+          uName === compactId ||
+          uEmail === cleanId ||
+          uEmail === compactId
+        );
+      }) ||
+      allUsers.find((u) => {
+        const fullName = (u.name || '').trim().toLowerCase();
+        const compactName = fullName.replace(/\s+/g, '');
+        return fullName === cleanId || (compactId.length >= 3 && compactName === compactId);
+      });
 
     const genericAuthError =
       'Username သို့မဟုတ် Password မှားယွင်းနေပါသည်။ ကျေးဇူးပြု၍ သေချာစွာ ပြန်လည်စစ်ဆေးပြီး ဝင်ရောက်ပါ။ (Invalid username or password)';
@@ -855,18 +886,21 @@ export class ClassroomDB {
       };
     }
 
-    if (! verifyPassword(cleanPwd, matched.password, matched.role)) {
+    // Handle mobile keyboard auto-capitalization of the first letter (e.g., "Student123" -> "student123")
+    const firstLowerPwd =
+      cleanPwd.length > 1 ? cleanPwd.charAt(0).toLowerCase() + cleanPwd.slice(1) : cleanPwd.toLowerCase();
+
+    const isPasswordValid =
+      verifyPassword(cleanPwd, matched.password, matched.role) ||
+      (firstLowerPwd !== cleanPwd && verifyPassword(firstLowerPwd, matched.password, matched.role)) ||
+      (cleanPwd.toLowerCase() !== cleanPwd &&
+        decryptPassword(matched.password, matched.role) === decryptPassword(matched.password, matched.role).toLowerCase() &&
+        verifyPassword(cleanPwd.toLowerCase(), matched.password, matched.role));
+
+    if (!isPasswordValid) {
       return {
         user: null,
         error: genericAuthError,
-      };
-    }
-
-    if (expectedRole && matched.role !== expectedRole) {
-      return {
-        user: null,
-        error:
-          'ရွေးချယ်ထားသော အကောင့်အမျိုးအစား (Role Tab) နှင့် ကိုက်ညီမှု မရှိပါ။ သက်ဆိုင်ရာ Login Tab ကို ပြောင်းလဲရွေးချယ်ပြီး ဝင်ရောက်ပါ။',
       };
     }
 
@@ -893,8 +927,8 @@ export class ClassroomDB {
     expectedRole?: UserRole,
     forceTakeover: boolean = false
   ): { user: User | null; deviceLocked?: boolean; error?: string } {
-    const cleanId = (identifier || '').trim().toLowerCase();
-    const rateCheck = this.checkRateLimit('auth_login', cleanId || 'ip', 8, 60);
+    const { cleanId } = this.normalizeLoginIdentifier(identifier);
+    const rateCheck = this.checkRateLimit('auth_login', cleanId || 'ip', 15, 60);
     if (!rateCheck.allowed) {
       return {
         user: null,
@@ -912,9 +946,11 @@ export class ClassroomDB {
     const activeDev = matched.activeDeviceId || '';
 
     // Enforce Single-Device Policy (1 Account = 1 Device Only) STRICTLY FOR STUDENTS ONLY.
-    // Admin and Co-Admin accounts are allowed to log in on multiple devices simultaneously.
+    // Note: If a newly created student account has NOT accepted the rules yet (!matched.rulesAccepted),
+    // allow the student's phone to claim the session automatically even if the Admin tested the login on a computer first.
     if (
       matched.role === 'student' &&
+      Boolean(matched.rulesAccepted) &&
       activeDev &&
       activeDev !== 'LOGGED_OUT' &&
       activeDev !== localDeviceId &&
@@ -945,8 +981,10 @@ export class ClassroomDB {
     const idx = allUsers.findIndex((u) => u.id === stampedUser.id);
     if (idx >= 0) {
       allUsers[idx] = stampedUser;
-      this.setItem(STORAGE_KEYS.USERS, allUsers);
+    } else {
+      allUsers.push(stampedUser);
     }
+    this.setItem(STORAGE_KEYS.USERS, allUsers);
 
     this.markLocalWrite(stampedUser.id);
     this.setCurrentUser(stampedUser);
@@ -974,10 +1012,42 @@ export class ClassroomDB {
     return { user: stampedUser };
   }
 
+  private static mergeRemoteUserIntoLocal(remoteUser: User, deletedSet: Set<string>): void {
+    if (!remoteUser || deletedSet.has(remoteUser.id)) return;
+    const localUsers = this.getAllUsers();
+    const idx = localUsers.findIndex(
+      (u) =>
+        u.id === remoteUser.id ||
+        u.username.toLowerCase() === remoteUser.username.toLowerCase()
+    );
+    const existing = idx >= 0 ? localUsers[idx] : undefined;
+    const mergedUser: User = {
+      ...(existing || {}),
+      ...remoteUser,
+      activeDeviceId: remoteUser.activeDeviceId,
+      activeSessionToken: remoteUser.activeSessionToken,
+      sessionUpdatedAtMs: remoteUser.sessionUpdatedAtMs,
+      rulesAccepted: Boolean(remoteUser.rulesAccepted || existing?.rulesAccepted),
+      rulesAcceptedAt: remoteUser.rulesAcceptedAt || existing?.rulesAcceptedAt,
+      password: encryptPassword(
+        remoteUser.password || existing?.password,
+        remoteUser.role,
+        remoteUser.id
+      ),
+    };
+    if (idx >= 0) {
+      localUsers[idx] = mergedUser;
+    } else {
+      localUsers.push(mergedUser);
+    }
+    this.setItem(STORAGE_KEYS.USERS, localUsers);
+  }
+
   /**
-   * High-Concurrency Login with Authoritative Single-Device Verification:
-   * Queries the single matching profile row from Supabase (~0.3KB) to verify live credentials
-   * and check whether the account is already active on another device (1 Account = 1 Device Only).
+   * High-Concurrency Login with Authoritative Single-Device Verification & Full Cloud Fallback:
+   * 1. Queries the matching profile row from Supabase (~0.3KB) to verify live credentials and device lock.
+   * 2. If single-row lookup misses (or credentials were updated), falls back to pulling all remote profiles
+   *    so newly created accounts on another computer ALWAYS log in on mobile phones on the first try.
    */
   static async loginWithRemoteFallback(
     identifier: string,
@@ -985,8 +1055,8 @@ export class ClassroomDB {
     expectedRole?: UserRole,
     forceTakeover: boolean = false
   ): Promise<{ user: User | null; deviceLocked?: boolean; error?: string }> {
-    const cleanId = (identifier || '').trim().toLowerCase();
-    const cleanPwd = (password || '').trim();
+    const { cleanId, compactId } = this.normalizeLoginIdentifier(identifier);
+    const cleanPwd = this.normalizeLoginPassword(password);
     if (!cleanId || !cleanPwd) {
       return {
         user: null,
@@ -994,7 +1064,7 @@ export class ClassroomDB {
       };
     }
 
-    const rateCheck = this.checkRateLimit('auth_login_remote', cleanId || 'ip', 10, 60);
+    const rateCheck = this.checkRateLimit('auth_login_remote', cleanId || 'ip', 15, 60);
     if (!rateCheck.allowed) {
       return {
         user: null,
@@ -1002,46 +1072,52 @@ export class ClassroomDB {
       };
     }
 
-    // 1. Always fetch the latest single-row profile from Supabase (when online) so we see live password & activeDeviceId
     const deletedSet = new Set(this.getDeletedIds());
     if (typeof navigator === 'undefined' || navigator.onLine !== false) {
-      const remoteUser = await SupabaseService.getRemoteProfileByIdentifier(cleanId, true);
+      // 1. Fast single-row lookup by username, email, or name
+      let remoteUser = await SupabaseService.getRemoteProfileByIdentifier(cleanId, true);
+      if (!remoteUser && compactId && compactId !== cleanId) {
+        remoteUser = await SupabaseService.getRemoteProfileByIdentifier(compactId, true);
+      }
+
       if (remoteUser && !deletedSet.has(remoteUser.id)) {
-        const localUsers = this.getAllUsers();
-        const idx = localUsers.findIndex((u) => u.id === remoteUser.id);
-        const mergedUser: User = {
-          ...(idx >= 0 ? localUsers[idx] : {}),
-          ...remoteUser,
-          activeDeviceId: remoteUser.activeDeviceId,
-          activeSessionToken: remoteUser.activeSessionToken,
-          sessionUpdatedAtMs: remoteUser.sessionUpdatedAtMs,
-          rulesAccepted: Boolean(remoteUser.rulesAccepted || (idx >= 0 && localUsers[idx].rulesAccepted)),
-          rulesAcceptedAt: remoteUser.rulesAcceptedAt || (idx >= 0 ? localUsers[idx].rulesAcceptedAt : undefined),
-          password: encryptPassword(
-            remoteUser.password || (idx >= 0 ? localUsers[idx].password : undefined),
-            remoteUser.role,
-            remoteUser.id
-          ),
-        };
-        if (idx >= 0) {
-          localUsers[idx] = mergedUser;
-        } else {
-          localUsers.push(mergedUser);
+        this.mergeRemoteUserIntoLocal(remoteUser, deletedSet);
+      }
+
+      // 2. If user still not found or password check fails against cached local data, pull full remote profiles list
+      const preCheck = this.verifyCredentialsOnly(cleanId, cleanPwd, expectedRole);
+      if (!preCheck.user) {
+        const allRemoteProfiles = await SupabaseService.getRemoteProfiles(true);
+        if (allRemoteProfiles && allRemoteProfiles.length > 0) {
+          const localUsers = this.getAllUsers().filter((u) => !deletedSet.has(u.id));
+          const userMap = new Map<string, User>();
+          localUsers.forEach((u) => userMap.set(u.id, u));
+          allRemoteProfiles.forEach((ru) => {
+            if (deletedSet.has(ru.id)) return;
+            const existing = userMap.get(ru.id);
+            userMap.set(ru.id, {
+              ...(existing || {}),
+              ...ru,
+              activeDeviceId: ru.activeDeviceId,
+              activeSessionToken: ru.activeSessionToken,
+              sessionUpdatedAtMs: ru.sessionUpdatedAtMs,
+              rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
+              rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
+              avatar: ru.role === 'student' ? '' : ru.avatar || existing?.avatar || '',
+              password: encryptPassword(
+                ru.password || existing?.password,
+                ru.role,
+                ru.id
+              ),
+            });
+          });
+          this.setItem(STORAGE_KEYS.USERS, Array.from(userMap.values()));
         }
-        this.setItem(STORAGE_KEYS.USERS, localUsers);
       }
     }
 
-    // 2. Verify credentials and Single-Device Lock against updated user record
-    const res = this.login(cleanId, cleanPwd, expectedRole, forceTakeover);
-    if (res.user) {
-      try {
-        await SupabaseService.upsertProfile(res.user);
-      } catch {
-        // ignore
-      }
-    }
-    return res;
+    // 3. Verify credentials and Single-Device Lock against updated user record
+    return this.login(cleanId, cleanPwd, expectedRole, forceTakeover);
   }
 
   static getAllUsers(): User[] {
@@ -1062,6 +1138,7 @@ export class ClassroomDB {
     address?: string;
     initialCourseId?: string;
     initialCourseIds?: string[];
+    skipCloudUpsert?: boolean;
   }): { user: User | null; error?: string } {
     const currentLogged = this.getCurrentUser();
     if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
@@ -1078,7 +1155,7 @@ export class ClassroomDB {
     }
 
     const users = this.getAllUsers();
-    const cleanUsername = data.username.trim().toLowerCase();
+    const cleanUsername = data.username.trim().replace(/^@+/, '').toLowerCase();
     const cleanEmail = data.email.trim().toLowerCase();
     const defaultPwd = data.role === 'admin' ? 'admin123' : data.role === 'co_admin' ? 'coadmin123' : 'student123';
     const cleanPassword = data.password?.trim() || defaultPwd;
@@ -1140,11 +1217,13 @@ export class ClassroomDB {
       this.enrollStudent(cId, newUser.id, true);
     });
 
-    // Background sync to Supabase if configured
-    try {
-      SupabaseService.upsertProfile(newUser).catch(() => {});
-    } catch {
-      // ignore
+    // Background sync to Supabase unless caller awaits signUpWithSupabase directly
+    if (!data.skipCloudUpsert) {
+      try {
+        SupabaseService.upsertProfile(newUser, true).catch(() => {});
+      } catch {
+        // ignore
+      }
     }
 
     const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);

@@ -53,6 +53,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
       if (kickReason) {
         setErrorMessage(kickReason);
       }
+      // Prefetch latest cloud user accounts immediately when LoginView opens on mobile/desktop
+      ClassroomDB.pullFromSupabase({ force: true, onlyProfiles: true }).catch(() => {});
     } catch {
       // ignore
     }
@@ -74,16 +76,34 @@ export const LoginView: React.FC<LoginViewProps> = ({
     setIsDeviceLocked(false);
     setIsLoading(true);
 
-    // Always verify against Supabase first (when online) so 1-Account-1-Device lock is strictly enforced
-    const res = await Promise.race([
-      ClassroomDB.loginWithRemoteFallback(identifier, password, activeRole, forceTakeover),
-      new Promise<{ user: User | null; deviceLocked?: boolean; error?: string }>((resolve) =>
-        setTimeout(
-          () => resolve(ClassroomDB.login(identifier, password, activeRole, forceTakeover)),
-          3500
-        )
-      ),
-    ]);
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+
+    const remotePromise = ClassroomDB.loginWithRemoteFallback(
+      identifier,
+      password,
+      activeRole,
+      forceTakeover
+    ).then((result) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      return result;
+    });
+
+    const timeoutPromise = new Promise<{
+      user: User | null;
+      deviceLocked?: boolean;
+      error?: string;
+    }>((resolve) => {
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        resolve(ClassroomDB.login(identifier, password, activeRole, forceTakeover));
+      }, 12000);
+    });
+
+    const res = await Promise.race([remotePromise, timeoutPromise]);
+    if (timeoutId && !timedOut) {
+      clearTimeout(timeoutId);
+    }
     setIsLoading(false);
 
     if (res.deviceLocked) {
@@ -95,6 +115,9 @@ export const LoginView: React.FC<LoginViewProps> = ({
     if (res.error) {
       setErrorMessage(res.error);
     } else if (res.user) {
+      if (res.user.role !== activeRole) {
+        setActiveRole(res.user.role);
+      }
       onLoginSuccess(res.user);
       ClassroomDB.pullFromSupabase({ force: true }).catch(() => {});
     }
@@ -358,6 +381,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
                       type="text"
                       value={identifier}
                       onChange={(e) => setIdentifier(e.target.value)}
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      autoComplete="username"
                       placeholder={
                         activeRole === 'student'
                           ? 'Enter your student username or email'
@@ -381,6 +408,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
                       type={showPassword ? 'text' : 'password'}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      autoComplete="current-password"
                       placeholder="Enter password..."
                       className="neu-input w-full pl-10 pr-12 py-3.5 text-xs sm:text-sm rounded-2xl text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 font-mono"
                       required

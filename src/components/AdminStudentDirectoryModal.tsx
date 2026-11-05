@@ -463,8 +463,8 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     const cleanPwd = password.trim();
     const res = ClassroomDB.registerNewUser({
       name: name.trim(),
-      username: username.trim(),
-      email: email.trim(),
+      username: username.trim().toLowerCase(),
+      email: email.trim().toLowerCase(),
       phone: phone.trim(),
       role: selectedRole,
       password: cleanPwd,
@@ -473,6 +473,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
       gender,
       address: address.trim() || undefined,
       initialCourseIds: selectedRole === 'student' ? selectedInitialCourses : undefined,
+      skipCloudUpsert: true,
     });
 
     if (res.error || !res.user) {
@@ -481,7 +482,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
       return;
     }
 
-    const supabaseRes = await SupabaseService.signUpWithSupabase(email.trim(), cleanPwd, {
+    const supabaseRes = await SupabaseService.signUpWithSupabase(email.trim().toLowerCase(), cleanPwd, {
       id: res.user.id,
       name: res.user.name,
       username: res.user.username,
@@ -497,6 +498,17 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
       selectedRole === 'student'
         ? courses.filter((c) => selectedInitialCourses.includes(c.id))
         : [];
+
+    if (enrolledCoursesList.length > 0) {
+      await Promise.all(
+        enrolledCoursesList.map((course) =>
+          SupabaseService.upsertCourse({
+            ...course,
+            enrolledStudentIds: Array.from(new Set([...course.enrolledStudentIds, res.user!.id])),
+          })
+        )
+      ).catch(() => {});
+    }
 
     const roleDisplay =
       selectedRole === 'admin'

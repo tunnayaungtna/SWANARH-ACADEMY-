@@ -603,31 +603,55 @@ export class SupabaseService {
   }
 
   /**
-   * Fast single-row lookup by username or email for Login (0.3KB egress instead of pulling 2,000 profiles on Login view)
+   * Fast single-row lookup by username, email, or name for Login (handles mobile @ prefix, spaces, and copy-paste formatting)
    */
   static async getRemoteProfileByIdentifier(
     identifier: string,
     skipDedupe: boolean = false
   ): Promise<User | null> {
-    const cleanId = (identifier || '').trim().toLowerCase();
-    if (!cleanId) return null;
+    const rawClean = (identifier || '')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/^(username|email|id)\s*[:：]\s*/i, '')
+      .trim()
+      .replace(/^@+/, '')
+      .toLowerCase();
+    if (!rawClean) return null;
+
     // Sanitize against PostgREST filter syntax characters
-    const safeId = cleanId.replace(/[,()"'\\]/g, '');
-    if (!safeId) return null;
+    const safeId = rawClean.replace(/[,()"'\\]/g, '').trim();
+    const compactId = safeId.replace(/\s+/g, '');
+    if (!safeId && !compactId) return null;
 
     const fetcher = async () => {
       try {
+        const orFilters = [
+          `username.ilike.${compactId || safeId}`,
+          `email.ilike.${compactId || safeId}`,
+        ];
+        if (safeId !== compactId && safeId.length > 0) {
+          orFilters.push(`name.ilike.${safeId}`);
+          orFilters.push(`username.ilike.${safeId}`);
+        } else {
+          orFilters.push(`name.ilike.${safeId}`);
+        }
+
         const { data, error } = await supabase
           .from('profiles')
           .select('*')
-          .or(`username.ilike.${safeId},email.ilike.${safeId}`)
-          .limit(1)
-          .maybeSingle();
+          .or(orFilters.join(','))
+          .limit(5);
 
-        if (error || !data) {
-          return null;
+        if (!error && Array.isArray(data) && data.length > 0) {
+          // Prefer exact username or email match first
+          const exactRow =
+            data.find((r) => {
+              const u = String(r.username || '').trim().toLowerCase();
+              const e = String(r.email || '').trim().toLowerCase();
+              return u === compactId || u === safeId || e === compactId || e === safeId;
+            }) || data[0];
+          return this.mapProfileRowToUser(exactRow as Record<string, unknown>);
         }
-        return this.mapProfileRowToUser(data as Record<string, unknown>);
+        return null;
       } catch {
         return null;
       }
@@ -636,14 +660,14 @@ export class SupabaseService {
     if (skipDedupe) {
       return fetcher();
     }
-    return this.dedupeGet(`profile_login:${safeId}`, fetcher);
+    return this.dedupeGet(`profile_login:${compactId || safeId}`, fetcher);
   }
 
   /**
    * Fetch all profiles from Supabase if table exists (supports up to 3,000 concurrent classroom users)
    */
-  static async getRemoteProfiles(): Promise<User[] | null> {
-    return this.dedupeGet('profiles:all', async () => {
+  static async getRemoteProfiles(skipDedupe: boolean = false): Promise<User[] | null> {
+    const fetcher = async () => {
       try {
         const { data, error } = await supabase
           .from('profiles')
@@ -658,7 +682,12 @@ export class SupabaseService {
       } catch {
         return null;
       }
-    });
+    };
+
+    if (skipDedupe) {
+      return fetcher();
+    }
+    return this.dedupeGet('profiles:all', fetcher);
   }
 
   /**
@@ -1362,13 +1391,21 @@ export class SupabaseService {
    * Create or update a profile in Supabase with cached schema mode & signature deduplication
    * so Free Plan never wastes extra HTTP calls.
    */
-  static async upsertProfile(user: User): Promise<{ success: boolean; error?: string }> {
+  static async upsertProfile(
+    user: User,
+    forceUpload: boolean = false
+  ): Promise<{ success: boolean; error?: string }> {
     try {
-      const payload = this.buildProfilePayload(user, this.profileSchemaMode);
-      const sigKey = `profile:${user.id}`;
+      const normalizedUser: User = {
+        ...user,
+        username: (user.username || '').trim().toLowerCase(),
+        email: (user.email || '').trim().toLowerCase(),
+      };
+      const payload = this.buildProfilePayload(normalizedUser, this.profileSchemaMode);
+      const sigKey = `profile:${normalizedUser.id}`;
       // Compare without updated_at timestamp so identical profiles aren't re-uploaded
       const { updated_at: _ignoreTs, ...comparablePayload } = payload;
-      if (!this.hasChangedSignature(sigKey, comparablePayload)) {
+      if (!forceUpload && !this.hasChangedSignature(sigKey, comparablePayload)) {
         return { success: true };
       }
 
@@ -1379,9 +1416,46 @@ export class SupabaseService {
         return { success: true };
       }
 
-      // Fallback 1: without password column
-      if (this.profileSchemaMode === 'full') {
-        const noPwdPayload = this.buildProfilePayload(user, 'no_password');
+      // Handle unique constraint violation (23505) on username or email when an account is recreated with a new ID
+      if (
+        error.code === '23505' ||
+        (error.message && error.message.toLowerCase().includes('duplicate key'))
+      ) {
+        try {
+          if (normalizedUser.username) {
+            await supabase
+              .from('profiles')
+              .delete()
+              .ilike('username', normalizedUser.username)
+              .neq('id', normalizedUser.id);
+          }
+          if (normalizedUser.email) {
+            await supabase
+              .from('profiles')
+              .delete()
+              .ilike('email', normalizedUser.email)
+              .neq('id', normalizedUser.id);
+          }
+          const { error: retryErr } = await supabase
+            .from('profiles')
+            .upsert(payload, { onConflict: 'id' });
+          if (!retryErr) {
+            this.recordSignature(sigKey, comparablePayload);
+            return { success: true };
+          }
+        } catch {
+          // continue to fallback if needed
+        }
+      }
+
+      const isMissingColumnError =
+        error.code === '42703' ||
+        error.code === 'PGRST204' ||
+        (error.message && error.message.toLowerCase().includes('column'));
+
+      // Fallback 1: without password column (only downgrade schema mode if column is genuinely missing)
+      if (this.profileSchemaMode === 'full' && isMissingColumnError) {
+        const noPwdPayload = this.buildProfilePayload(normalizedUser, 'no_password');
         const { error: errNoPwd } = await supabase
           .from('profiles')
           .upsert(noPwdPayload, { onConflict: 'id' });
@@ -1393,13 +1467,15 @@ export class SupabaseService {
       }
 
       // Fallback 2: core columns only
-      const corePayload = this.buildProfilePayload(user, 'core');
+      const corePayload = this.buildProfilePayload(normalizedUser, 'core');
       const { error: fallbackError } = await supabase
         .from('profiles')
         .upsert(corePayload, { onConflict: 'id' });
 
       if (!fallbackError) {
-        this.profileSchemaMode = 'core';
+        if (isMissingColumnError) {
+          this.profileSchemaMode = 'core';
+        }
         this.recordSignature(sigKey, comparablePayload);
         return { success: true };
       }
@@ -2271,7 +2347,7 @@ export class SupabaseService {
   }
 
   /**
-   * Sign Up a new user with Supabase Auth & Profile
+   * Sign Up a new user with Supabase Profile (Authoritative Cloud Sync)
    */
   static async signUpWithSupabase(
     email: string,
@@ -2291,42 +2367,23 @@ export class SupabaseService {
     const userId = userData.id || `user-${userData.role}-${Date.now()}`;
     const newUser: User = {
       id: userId,
-      name: userData.name,
-      username: userData.username,
-      email: email.trim(),
+      name: userData.name.trim(),
+      username: userData.username.trim().toLowerCase(),
+      email: email.trim().toLowerCase(),
       password: encryptPassword(password.trim(), userData.role, userId),
       role: userData.role,
       phone: userData.phone || '+95 9 000 000000',
-      avatar: userData.role === 'student' ? '' : (userData.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'),
+      avatar:
+        userData.role === 'student'
+          ? ''
+          : userData.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
       title: userData.title || undefined,
       gender: userData.gender || 'male',
       address: userData.address || undefined,
     };
 
-    // 1. Always upsert directly to public.profiles table first so Table Editor immediately shows the row
-    const profileRes = await this.upsertProfile(newUser);
-
-    // 2. Also register in Supabase Auth (non-blocking if email confirmation / rate limit is active)
-    try {
-      await supabase.auth.signUp({
-        email: email.trim(),
-        password: password.trim(),
-        options: {
-          data: {
-            id: userId,
-            name: userData.name,
-            username: userData.username,
-            role: userData.role,
-            phone: userData.phone || '',
-            title: userData.title || '',
-            gender: userData.gender || 'male',
-            address: userData.address || '',
-          },
-        },
-      });
-    } catch {
-      // Ignore auth signup errors if profile table insert succeeded
-    }
+    // Always force upsert directly to public.profiles table so mobile devices immediately see the new account
+    const profileRes = await this.upsertProfile(newUser, true);
 
     if (!profileRes.success) {
       return { user: newUser, error: profileRes.error, profileSynced: false };
