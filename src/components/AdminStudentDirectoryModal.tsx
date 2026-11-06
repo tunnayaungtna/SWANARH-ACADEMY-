@@ -123,7 +123,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
   useBackHandler(!!userToDelete, () => setUserToDelete(null));
   useBackHandler(showNewForm, () => setShowNewForm(false));
 
-  // Newly created user credentials display
+  // Newly created user credentials display (Single Mode)
   const [createdCredentials, setCreatedCredentials] = useState<{
     name: string;
     username: string;
@@ -136,6 +136,35 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     loginUrl: string;
   } | null>(null);
   const [copiedSuccess, setCopiedSuccess] = useState(false);
+
+  // Quick Text Paste Mode & Smart Student Form Auto-Fill
+  const [createEntryMode, setCreateEntryMode] = useState<'single' | 'paste'>('single');
+  const [singleSmartPasteText, setSingleSmartPasteText] = useState('');
+  const [singleAutoFilledNotice, setSingleAutoFilledNotice] = useState<string | null>(null);
+  const [copiedTemplateNotice, setCopiedTemplateNotice] = useState(false);
+  const [autoCopyAfterSingleCreate, setAutoCopyAfterSingleCreate] = useState(false);
+  const [pasteRawText, setPasteRawText] = useState('');
+  const [pastePasswordMode, setPastePasswordMode] = useState<'shared' | 'random'>('shared');
+  const [pasteSharedPassword, setPasteSharedPassword] = useState('student123');
+  const [pasteDefaultOccupation, setPasteDefaultOccupation] = useState('');
+  const [batchCreatedCredentials, setBatchCreatedCredentials] = useState<
+    Array<{
+      id: string;
+      name: string;
+      username: string;
+      password: string;
+      role: UserRole;
+      email?: string;
+      occupation?: string;
+      phone?: string;
+      gender?: string;
+      address?: string;
+      courseName?: string;
+      loginUrl: string;
+    }>
+  >([]);
+  const [copiedBatchIds, setCopiedBatchIds] = useState<Record<string, boolean>>({});
+  const [copiedAllBatchSuccess, setCopiedAllBatchSuccess] = useState(false);
 
   const getOfficialLoginUrl = () => {
     if (typeof window !== 'undefined') {
@@ -202,7 +231,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     }
   };
 
-  const generateUsernameFromName = (rawName: string): string => {
+  const generateUsernameFromName = (rawName: string, extraTaken?: Set<string>): string => {
     const trimmed = rawName.trim();
     if (!trimmed) return '';
 
@@ -365,8 +394,11 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
       base = `user${Math.floor(100 + Math.random() * 900)}`;
     }
 
-    // 4. Ensure uniqueness against existing accounts
+    // 4. Ensure uniqueness against existing accounts and current batch
     const existingUsernames = new Set(allUsers.map((u) => u.username.toLowerCase()));
+    if (extraTaken) {
+      extraTaken.forEach((u) => existingUsernames.add(u.toLowerCase()));
+    }
     if (!existingUsernames.has(base)) {
       return base;
     }
@@ -526,7 +558,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
 
     const loginLink = getOfficialLoginUrl();
 
-    setCreatedCredentials({
+    const newCredsObj = {
       name: res.user.name,
       username: res.user.username,
       password: cleanPwd,
@@ -536,7 +568,37 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
       gender: gender === 'male' ? 'Male (ကျား)' : 'Female (မ)',
       address: res.user.address,
       loginUrl: loginLink,
-    });
+    };
+
+    setCreatedCredentials(newCredsObj);
+
+    if (autoCopyAfterSingleCreate) {
+      const roleLabel =
+        selectedRole === 'admin'
+          ? 'Admin (ဆရာ)'
+          : selectedRole === 'co_admin'
+          ? 'Co-Admin (တွဲဖက်ဆရာ)'
+          : 'Student (ကျောင်းသား)';
+      const copyLines = [
+        `🎓 SwanArh Digital Academy (${roleLabel} Login)`,
+        `━━━━━━━━━━━━━━━━━━━━`,
+        `👤 အမည် (Name): ${newCredsObj.name}`,
+        `🔑 Username: ${newCredsObj.username}`,
+        `🔒 Password: ${newCredsObj.password}`,
+      ];
+      if (newCredsObj.occupation) {
+        copyLines.push(`💼 အလုပ်အကိုင်/ပညာအရည်အချင်း: ${newCredsObj.occupation}`);
+      }
+      if (newCredsObj.courseName) {
+        copyLines.push(`📚 တက်ရောက်ခွင့်ရသည့်အတန်း: ${newCredsObj.courseName}`);
+      }
+      copyLines.push(`🌐 Login ဝင်ရန် လင့်ခ် (Login Link):`);
+      copyLines.push(loginLink);
+      copyLines.push(`━━━━━━━━━━━━━━━━━━━━`);
+      navigator.clipboard.writeText(copyLines.join('\n')).catch(() => {});
+      setCopiedSuccess(true);
+      setTimeout(() => setCopiedSuccess(false), 4000);
+    }
 
     setName('');
     setUsername('');
@@ -546,6 +608,9 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     setPhone('+95 9 ');
     setTitle('');
     setAddress('');
+    setSingleSmartPasteText('');
+    setSingleAutoFilledNotice(null);
+    setAutoCopyAfterSingleCreate(false);
     setShowNewForm(false);
     setIsSubmitting(false);
 
@@ -553,7 +618,11 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
       ? 'Supabase Cloud & Local Database သို့ ချိတ်ဆက်သိမ်းဆည်းပြီးပါပြီ။'
       : 'Local Database သို့ သိမ်းဆည်းပြီးပါပြီ။';
 
-    setToastMsg(`${roleDisplay} အကောင့် "${res.user.name}" (@${res.user.username}) ကို ဖန်တီးပြီးပါပြီ! ${syncNote}`);
+    setToastMsg(
+      `${roleDisplay} အကောင့် "${res.user.name}" (@${res.user.username}) ကို ဖန်တီးပြီးပါပြီ! ${
+        autoCopyAfterSingleCreate ? '📋 Login အချက်အလက်ကိုလည်း Auto-Copy ကူးပေးပြီးပါပြီ!' : syncNote
+      }`
+    );
     onRefresh();
     setTimeout(() => setToastMsg(null), 6000);
   };
@@ -580,7 +649,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     setTimeout(() => setToastMsg(null), 6000);
   };
 
-  const handleCopyCredentials = (creds: {
+  const formatCredentialMessage = (creds: {
     name: string;
     username: string;
     password: string;
@@ -590,7 +659,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     gender?: string;
     address?: string;
     loginUrl?: string;
-  }) => {
+  }): string => {
     const roleLabel =
       creds.role === 'admin'
         ? 'Admin (ဆရာ)'
@@ -615,10 +684,494 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     lines.push(`🌐 Login ဝင်ရန် လင့်ခ် (Login Link):`);
     lines.push(loginLink);
     lines.push(`━━━━━━━━━━━━━━━━━━━━`);
+    return lines.join('\n');
+  };
 
-    navigator.clipboard.writeText(lines.join('\n'));
+  const handleCopyCredentials = (creds: {
+    name: string;
+    username: string;
+    password: string;
+    role: UserRole;
+    occupation?: string;
+    courseName?: string;
+    gender?: string;
+    address?: string;
+    loginUrl?: string;
+  }) => {
+    navigator.clipboard.writeText(formatCredentialMessage(creds));
     setCopiedSuccess(true);
     setTimeout(() => setCopiedSuccess(false), 3000);
+  };
+
+  // Official Student Registration Form Template to send to students
+  const STUDENT_FORM_TEMPLATE = [
+    'အမည်(Full Name): ',
+    'Email: ',
+    'ဖုန်းနံပါတ်(Phone): ',
+    'အလုပ်အကိုင်/ပညာအရည်အချင်း: ',
+    'ကျား/မ(Gender): ',
+    'နေရပ်လိပ်စာ(Address): ',
+  ].join('\n');
+
+  const handleCopyStudentFormTemplate = () => {
+    navigator.clipboard.writeText(STUDENT_FORM_TEMPLATE);
+    setCopiedTemplateNotice(true);
+    setTimeout(() => setCopiedTemplateNotice(false), 3500);
+  };
+
+  const normalizeMyanmarDigits = (str: string): string => {
+    const mmDigits: Record<string, string> = {
+      '၀': '0',
+      '၁': '1',
+      '၂': '2',
+      '၃': '3',
+      '၄': '4',
+      '၅': '5',
+      '၆': '6',
+      '၇': '7',
+      '၈': '8',
+      '၉': '9',
+    };
+    return str.replace(/[၀-၉]/g, (d) => mmDigits[d] || d);
+  };
+
+  const parseGenderValue = (rawGender: string): 'male' | 'female' => {
+    const cleaned = rawGender.trim().toLowerCase();
+    if (!cleaned) return 'male';
+    if (
+      cleaned === 'မ' ||
+      cleaned.includes('မ (') ||
+      cleaned.includes('(မ)') ||
+      cleaned.includes('အမျိုးသမီး') ||
+      cleaned.includes('မိန်းကလေး') ||
+      cleaned.includes('female') ||
+      cleaned === 'f' ||
+      cleaned.includes('woman') ||
+      cleaned.includes('girl')
+    ) {
+      return 'female';
+    }
+    return 'male';
+  };
+
+  // Smart Multi-Format Parser: Supports both labeled Student Registration Form blocks AND 1-line entries
+  const parseQuickPasteLines = (raw: string) => {
+    if (!raw || !raw.trim()) return [];
+
+    const rawLines = raw.split(/\r?\n/);
+
+    // Check if text contains labeled form fields like "အမည်(Full Name):", "ဖုန်းနံပါတ်(Phone):", etc.
+    const labelLineRegex =
+      /^(?:[\d၀-၉]+[.)။\s]*|[-•*]\s*)?(အမည်\s*\(\s*full\s*name\s*\)|အမည်|နာမည်|full\s*name|name|email|e-mail|အီးမေးလ်|gmail|ဖုန်းနံပါတ်\s*\(\s*phone\s*\)|ဖုန်းနံပါတ်|ဖုန်း|phone\s*no|phone|ph|အလုပ်အကိုင်\s*\/\s*ပညာအရည်အချင်း|အလုပ်အကိုင်|ပညာအရည်အချင်း|occupation|education|title|ကျား\s*\/\s*မ\s*\(\s*gender\s*\)|ကျား\s*\/\s*မ|လိင်|gender|sex|နေရပ်လိပ်စာ\s*\(\s*address\s*\)|နေရပ်လိပ်စာ|နေရပ်|လိပ်စာ|address)\s*[:：=\-]\s*(.*)$/i;
+
+    const hasLabeledLines = rawLines.some((l) => labelLineRegex.test(l.trim()));
+
+    const assignedInPreview = new Set<string>();
+
+    if (hasLabeledLines) {
+      interface DraftBlock {
+        name: string;
+        email: string;
+        phone: string;
+        occupation: string;
+        gender: 'male' | 'female';
+        address: string;
+      }
+
+      const blocks: DraftBlock[] = [];
+      let current: DraftBlock | null = null;
+
+      const ensureCurrent = (): DraftBlock => {
+        if (!current) {
+          current = {
+            name: '',
+            email: '',
+            phone: '',
+            occupation: pasteDefaultOccupation.trim(),
+            gender: 'male',
+            address: '',
+          };
+          blocks.push(current);
+        }
+        return current;
+      };
+
+      for (const rawLine of rawLines) {
+        const trimmed = rawLine.trim();
+        if (!trimmed) continue;
+
+        const match = trimmed.match(labelLineRegex);
+        if (match) {
+          const rawKey = match[1].toLowerCase().replace(/\s+/g, '');
+          const val = match[2].trim();
+
+          if (rawKey.includes('အမည်') || rawKey.includes('နာမည်') || rawKey.includes('name')) {
+            // If current block already has a name, start a new student block!
+            if (current && current.name) {
+              current = {
+                name: val,
+                email: '',
+                phone: '',
+                occupation: pasteDefaultOccupation.trim(),
+                gender: 'male',
+                address: '',
+              };
+              blocks.push(current);
+            } else {
+              const blk = ensureCurrent();
+              blk.name = val;
+            }
+          } else if (rawKey.includes('email') || rawKey.includes('e-mail') || rawKey.includes('အီးမေးလ်') || rawKey.includes('gmail')) {
+            const blk = ensureCurrent();
+            blk.email = val;
+          } else if (rawKey.includes('ဖုန်း') || rawKey.includes('phone') || rawKey === 'ph') {
+            const blk = ensureCurrent();
+            blk.phone = normalizeMyanmarDigits(val);
+          } else if (
+            rawKey.includes('အလုပ်အကိုင်') ||
+            rawKey.includes('ပညာအရည်အချင်း') ||
+            rawKey.includes('occupation') ||
+            rawKey.includes('education') ||
+            rawKey.includes('title')
+          ) {
+            const blk = ensureCurrent();
+            if (val) blk.occupation = val;
+          } else if (rawKey.includes('ကျား') || rawKey.includes('လိင်') || rawKey.includes('gender') || rawKey.includes('sex')) {
+            const blk = ensureCurrent();
+            blk.gender = parseGenderValue(val);
+          } else if (rawKey.includes('လိပ်စာ') || rawKey.includes('နေရပ်') || rawKey.includes('address')) {
+            const blk = ensureCurrent();
+            blk.address = val;
+          }
+        }
+      }
+
+      return blocks
+        .filter((b) => b.name.trim().length > 0)
+        .map((b, idx) => {
+          const cleanName = b.name.trim();
+          const autoUsername = generateUsernameFromName(cleanName, assignedInPreview);
+          assignedInPreview.add(autoUsername);
+
+          const rawEmail = b.email.trim().toLowerCase();
+          const hasValidEmail = rawEmail.includes('@') && rawEmail.includes('.');
+          const finalEmail = hasValidEmail ? rawEmail : `${autoUsername}@swanarh.edu`;
+
+          return {
+            index: idx + 1,
+            name: cleanName,
+            username: autoUsername,
+            email: finalEmail,
+            phone: b.phone.trim(),
+            occupation: b.occupation.trim() || pasteDefaultOccupation.trim(),
+            gender: b.gender,
+            address: b.address.trim(),
+          };
+        });
+    }
+
+    // Fallback: 1-line-per-student format (e.g. "မောင်မင်းခန့်, 0912345678, B.C.Sc, ရန်ကုန်")
+    const lines = rawLines
+      .map((l) =>
+        l
+          .trim()
+          .replace(/^(?:[\d၀-၉]+[.)။:\-\s]+|\([\d၀-၉]+\)\s*|[-•*]\s*)/, '')
+          .trim()
+      )
+      .filter(Boolean);
+
+    return lines
+      .map((line, idx) => {
+        const parts = line
+          .split(/[,|\t]+/)
+          .map((p) => p.trim())
+          .filter(Boolean);
+        const rawStudentName = parts[0] || '';
+        if (!rawStudentName) return null;
+
+        let parsedEmail = '';
+        let parsedPhone = '';
+        let parsedOccupation = pasteDefaultOccupation.trim();
+        let parsedGender: 'male' | 'female' = 'male';
+        let parsedAddress = '';
+
+        for (let i = 1; i < parts.length; i++) {
+          const part = parts[i];
+          const normalizedDigits = normalizeMyanmarDigits(part);
+          if (part.includes('@') && part.includes('.')) {
+            parsedEmail = part.toLowerCase();
+          } else if (/^[+\d\s\-()]{6,}$/.test(normalizedDigits)) {
+            parsedPhone = normalizedDigits;
+          } else if (
+            part === 'ကျား' ||
+            part === 'မ' ||
+            part.toLowerCase() === 'male' ||
+            part.toLowerCase() === 'female'
+          ) {
+            parsedGender = parseGenderValue(part);
+          } else if (!parsedOccupation || parsedOccupation === pasteDefaultOccupation.trim()) {
+            parsedOccupation = part;
+          } else if (!parsedAddress) {
+            parsedAddress = part;
+          }
+        }
+
+        const autoUsername = generateUsernameFromName(rawStudentName, assignedInPreview);
+        assignedInPreview.add(autoUsername);
+
+        return {
+          index: idx + 1,
+          name: rawStudentName,
+          username: autoUsername,
+          email: parsedEmail || `${autoUsername}@swanarh.edu`,
+          phone: parsedPhone,
+          occupation: parsedOccupation,
+          gender: parsedGender,
+          address: parsedAddress,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null);
+  };
+
+  const parsedPastePreview = parseQuickPasteLines(pasteRawText);
+
+  // Apply pasted Student Form directly into Single Account fields (or switch to Batch Mode if 2+ students)
+  const applySmartAutoFillToSingleForm = (raw: string) => {
+    setSingleSmartPasteText(raw);
+    if (!raw.trim()) {
+      setSingleAutoFilledNotice(null);
+      return;
+    }
+
+    const parsedList = parseQuickPasteLines(raw);
+    if (parsedList.length === 0) {
+      return;
+    }
+
+    if (parsedList.length > 1) {
+      // Automatically switch to Quick Paste Mode if Admin pasted 2 or more students!
+      setPasteRawText(raw);
+      setCreateEntryMode('paste');
+      setSingleSmartPasteText('');
+      setErrorMsg(null);
+      setToastMsg(
+        `✨ ကျောင်းသား (${parsedList.length}) ဦး၏ အချက်အလက်ကို တွေ့ရှိသဖြင့် အများအပြား အမြန်သွင်းသည့်စနစ်ထဲသို့ အလိုအလျောက် ထည့်သွင်းပေးထားပါသည်!`
+      );
+      setTimeout(() => setToastMsg(null), 5000);
+      return;
+    }
+
+    const first = parsedList[0];
+    setSelectedRole('student');
+    setName(first.name);
+    setUsername(first.username);
+    setIsUsernameManuallyEdited(false);
+    setEmail(first.email);
+    setIsEmailManuallyEdited(Boolean(first.email && !first.email.endsWith('@swanarh.edu')));
+    if (first.phone) {
+      setPhone(first.phone);
+    }
+    if (first.occupation) {
+      setTitle(first.occupation);
+    }
+    setGender(first.gender);
+    if (first.address) {
+      setAddress(first.address);
+    }
+    setErrorMsg(null);
+    setSingleAutoFilledNotice(
+      `✓ "${first.name}" (@${first.username}) ၏ အချက်အလက်များကို သက်ဆိုင်ရာ အကွက်များထဲသို့ Auto ဖြည့်သွင်းပြီးပါပြီ! အောက်တွင် စစ်ဆေးပြီး Create တန်းနှိပ်နိုင်ပါသည်။`
+    );
+  };
+
+  const handleClipboardAutoFillSingle = async () => {
+    try {
+      const clipText = await navigator.clipboard.readText();
+      if (!clipText || !clipText.trim()) {
+        setErrorMsg('Clipboard ထဲတွင် စာသားမရှိသေးပါ။ ကျောင်းသားပို့လာသော စာကို အရင် Copy ကူးယူပါ။');
+        return;
+      }
+      applySmartAutoFillToSingleForm(clipText);
+    } catch {
+      setErrorMsg('Clipboard ဖတ်ယူရန် အောက်ပါ အကွက်ထဲတွင် တိုက်ရိုက် Paste (Ctrl+V / ဖိနှိပ်၍ Paste) ချပေးပါ။');
+    }
+  };
+
+  const handleClipboardPasteBatch = async () => {
+    try {
+      const clipText = await navigator.clipboard.readText();
+      if (!clipText || !clipText.trim()) {
+        setErrorMsg('Clipboard ထဲတွင် စာသားမရှိသေးပါ။ ကျောင်းသားပို့လာသော စာကို အရင် Copy ကူးယူပါ။');
+        return;
+      }
+      setPasteRawText((prev) => (prev.trim() ? `${prev.trim()}\n\n${clipText.trim()}` : clipText.trim()));
+      setErrorMsg(null);
+    } catch {
+      setErrorMsg('အောက်ပါ စာသားအကွက်ထဲတွင် တိုက်ရိုက် Paste (Ctrl+V / ဖိနှိပ်၍ Paste) ချပေးပါ။');
+    }
+  };
+
+  const generateShortEasyPassword = () => {
+    const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+    let pass = '';
+    for (let i = 0; i < 6; i++) {
+      pass += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return pass;
+  };
+
+  const handleQuickPasteBatchSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (parsedPastePreview.length === 0) {
+      setErrorMsg('ကျေးဇူးပြု၍ အနည်းဆုံး ကျောင်းသား (၁) ဦး၏ အချက်အလက်ကို ရိုက်ထည့်ပါ (သို့မဟုတ် Paste ကူးထည့်ပါ)။');
+      return;
+    }
+    if (pastePasswordMode === 'shared' && !pasteSharedPassword.trim()) {
+      setErrorMsg('ကျေးဇူးပြု၍ ဘုံသုံးမည့် Password (သို့မဟုတ် Auto Password စနစ်) ကို ရွေးချယ်ပါ။');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setErrorMsg(null);
+
+    const enrolledCoursesList = courses.filter((c) => selectedInitialCourses.includes(c.id));
+    const enrolledLabel =
+      enrolledCoursesList.length > 0
+        ? enrolledCoursesList.map((c) => c.code).join(', ')
+        : 'No initial course';
+    const loginLink = getOfficialLoginUrl();
+
+    const createdList: Array<{
+      id: string;
+      name: string;
+      username: string;
+      password: string;
+      role: UserRole;
+      email?: string;
+      occupation?: string;
+      phone?: string;
+      gender?: string;
+      address?: string;
+      courseName?: string;
+      loginUrl: string;
+    }> = [];
+
+    const assignedUsernames = new Set<string>();
+    const newStudentIds: string[] = [];
+
+    for (const item of parsedPastePreview) {
+      const finalUsername = generateUsernameFromName(item.name, assignedUsernames);
+      assignedUsernames.add(finalUsername);
+
+      const finalPassword =
+        pastePasswordMode === 'random'
+          ? generateShortEasyPassword()
+          : pasteSharedPassword.trim() || 'student123';
+
+      const finalEmail =
+        item.email && item.email.includes('@') && !item.email.endsWith('@swanarh.edu')
+          ? item.email.toLowerCase()
+          : `${finalUsername}@swanarh.edu`;
+
+      const res = ClassroomDB.registerNewUser({
+        name: item.name,
+        username: finalUsername,
+        email: finalEmail,
+        phone: item.phone || '+95 9 ',
+        role: 'student',
+        password: finalPassword,
+        avatar: '',
+        title: item.occupation || undefined,
+        gender: item.gender || 'male',
+        address: item.address || undefined,
+        initialCourseIds: selectedInitialCourses,
+        skipCloudUpsert: true,
+      });
+
+      if (res.user) {
+        newStudentIds.push(res.user.id);
+        createdList.push({
+          id: res.user.id,
+          name: res.user.name,
+          username: res.user.username,
+          password: finalPassword,
+          role: 'student',
+          email: finalEmail,
+          occupation: item.occupation || undefined,
+          phone: item.phone || undefined,
+          gender: item.gender === 'female' ? 'မ (Female)' : 'ကျား (Male)',
+          address: item.address || undefined,
+          courseName: enrolledLabel,
+          loginUrl: loginLink,
+        });
+
+        await SupabaseService.signUpWithSupabase(finalEmail, finalPassword, {
+          id: res.user.id,
+          name: res.user.name,
+          username: res.user.username,
+          role: 'student',
+          phone: res.user.phone,
+          avatar: '',
+          title: res.user.title,
+          gender: item.gender || 'male',
+          address: res.user.address,
+        }).catch(() => {});
+      }
+    }
+
+    if (enrolledCoursesList.length > 0 && newStudentIds.length > 0) {
+      await Promise.all(
+        enrolledCoursesList.map((course) =>
+          SupabaseService.upsertCourse({
+            ...course,
+            enrolledStudentIds: Array.from(new Set([...course.enrolledStudentIds, ...newStudentIds])),
+          })
+        )
+      ).catch(() => {});
+    }
+
+    setBatchCreatedCredentials(createdList);
+    setCopiedBatchIds({});
+    setCopiedAllBatchSuccess(false);
+    setCreatedCredentials(null);
+    setPasteRawText('');
+    setShowNewForm(false);
+    setIsSubmitting(false);
+
+    setToastMsg(
+      `🎉 ကျောင်းသားအကောင့်သစ် (${createdList.length}) ဦးကို တစ်ပြိုင်နက် ဖွင့်လှစ်ပြီး အတန်းသွင်းပေးပြီးပါပြီ! တစ်ဦးချင်းစီအတွက် Copy ခလုတ်နှိပ်၍ ပေးပို့နိုင်ပါပြီ။`
+    );
+    onRefresh();
+    setTimeout(() => setToastMsg(null), 7000);
+  };
+
+  const handleCopySingleBatchItem = (item: {
+    id: string;
+    name: string;
+    username: string;
+    password: string;
+    role: UserRole;
+    occupation?: string;
+    courseName?: string;
+    loginUrl: string;
+  }) => {
+    navigator.clipboard.writeText(formatCredentialMessage(item));
+    setCopiedBatchIds((prev) => ({ ...prev, [item.id]: true }));
+  };
+
+  const handleCopyAllBatchItems = () => {
+    if (batchCreatedCredentials.length === 0) return;
+    const combined = batchCreatedCredentials
+      .map((item, idx) => `[${idx + 1}] ${formatCredentialMessage(item)}`)
+      .join('\n\n');
+    navigator.clipboard.writeText(combined);
+    setCopiedAllBatchSuccess(true);
+    const allMarked: Record<string, boolean> = {};
+    batchCreatedCredentials.forEach((item) => {
+      allMarked[item.id] = true;
+    });
+    setCopiedBatchIds(allMarked);
+    setTimeout(() => setCopiedAllBatchSuccess(false), 3500);
   };
 
   const toggleRevealPassword = (studentId: string) => {
@@ -911,6 +1464,100 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
             </div>
           )}
 
+          {/* Batch Created Accounts Credentials Panel (Quick Text Paste Mode Results) */}
+          {batchCreatedCredentials.length > 0 && (
+            <div className="mx-4 mt-3 p-3.5 sm:p-4 bg-emerald-50/90 dark:bg-emerald-950/40 border-2 border-emerald-400 dark:border-emerald-700 rounded-2xl shadow-xs text-xs space-y-3 shrink-0 max-h-[38vh] flex flex-col">
+              <div className="flex flex-wrap items-center justify-between gap-2 shrink-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold shrink-0">
+                    ✓
+                  </span>
+                  <div className="min-w-0">
+                    <h4 className="font-extrabold text-slate-900 dark:text-white text-xs sm:text-sm truncate">
+                      ကျောင်းသားအကောင့်သစ် ({batchCreatedCredentials.length}) ဦး ဖွင့်ပြီးပါပြီ — တစ်ဦးချင်းစီအတွက် Copy တန်းကူးနိုင်ပါသည်
+                    </h4>
+                    <p className="text-[11px] text-slate-600 dark:text-slate-300">
+                      တစ်ယောက်ချင်းစီ၏ <strong>Copy Login Info</strong> ခလုတ်ကို နှိပ်၍ Viber / Messenger သို့ တိုက်ရိုက် ပေးပို့နိုင်ပါသည် ({Object.keys(copiedBatchIds).length}/{batchCreatedCredentials.length} ကူးယူပြီး)
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleCopyAllBatchItems}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs cursor-pointer shadow-2xs"
+                  >
+                    {copiedAllBatchSuccess ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>
+                      {copiedAllBatchSuccess
+                        ? 'အားလုံး Copy ကူးပြီးပါပြီ!'
+                        : `အားလုံး စုပေါင်း Copy ကူးမည် (${batchCreatedCredentials.length} ဦး)`}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBatchCreatedCredentials([])}
+                    className="text-slate-400 hover:text-slate-700 dark:hover:text-white font-bold px-2 py-1 rounded-lg cursor-pointer"
+                    title="ပိတ်မည်"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+
+              <div className="overflow-y-auto space-y-1.5 pr-1">
+                {batchCreatedCredentials.map((item, idx) => {
+                  const isCopied = Boolean(copiedBatchIds[item.id]);
+                  return (
+                    <div
+                      key={item.id}
+                      className={`p-2.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 transition-colors ${
+                        isCopied
+                          ? 'bg-emerald-100/70 dark:bg-emerald-900/30 border-emerald-300 dark:border-emerald-700'
+                          : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 min-w-0 font-mono text-[11px]">
+                        <span className="font-sans font-extrabold text-slate-400 text-xs">#{idx + 1}</span>
+                        <span className="font-sans font-bold text-slate-900 dark:text-white text-xs">
+                          👤 {item.name}
+                        </span>
+                        <span className="text-indigo-600 dark:text-indigo-300 font-bold">
+                          🔑 @{item.username}
+                        </span>
+                        <span className="text-emerald-600 dark:text-emerald-400 font-bold">
+                          🔒 {item.password}
+                        </span>
+                        {item.occupation && (
+                          <span className="font-sans text-slate-600 dark:text-slate-300">
+                            💼 {item.occupation}
+                          </span>
+                        )}
+                        {item.courseName && (
+                          <span className="font-sans text-slate-500 dark:text-slate-400">
+                            📚 {item.courseName}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleCopySingleBatchItem(item)}
+                        className={`px-3 py-1.5 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shrink-0 transition-all ${
+                          isCopied
+                            ? 'bg-emerald-600 text-white shadow-2xs'
+                            : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-2xs'
+                        }`}
+                      >
+                        {isCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>{isCopied ? 'Copied! (ထပ်ကူးမည်)' : 'Copy Login Info'}</span>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Main Scrollable Content Area */}
           <div className="p-3.5 sm:p-5 overflow-y-auto flex-1 space-y-4 min-w-0">
             {/* Collapsible Reports & CSV Export Drawer */}
@@ -992,24 +1639,76 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
               </div>
             )}
 
-            {/* Create New Account Form */}
+            {/* Create New Account Form (Supports Both Normal Single Mode & Quick Text Paste Mode) */}
             {showNewForm && (
-              <form
-                onSubmit={handleCreateAccountSubmit}
-                className="p-4 sm:p-5 rounded-2xl border-2 border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-800/90 space-y-4 text-xs shadow-sm"
-              >
-                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-2.5">
+              <div className="p-4 sm:p-5 rounded-2xl border-2 border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-800/90 space-y-4 text-xs shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-b border-slate-100 dark:border-slate-700 pb-3">
                   <div className="flex items-center gap-2 text-slate-900 dark:text-white font-extrabold text-sm">
                     <UserPlus className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                     <span>အကောင့်အသစ် ဖွင့်လှစ်ခြင်း (Create New Account)</span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowNewForm(false)}
-                    className="text-slate-400 hover:text-slate-700 dark:hover:text-white font-bold cursor-pointer"
-                  >
-                    ✕ ပိတ်မည်
-                  </button>
+
+                  {/* Mode Switcher & Copy Student Form Template Button */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCopyStudentFormTemplate}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
+                        copiedTemplateNotice
+                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                          : 'bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-200 border-amber-300 dark:border-amber-700 hover:bg-amber-100'
+                      }`}
+                      title="ကျောင်းသားများထံ ပို့ပေးရမည့် အချက်အလက်တောင်းခံလွှာ ပုံစံကို Copy ကူးရန်"
+                    >
+                      {copiedTemplateNotice ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>
+                        {copiedTemplateNotice
+                          ? 'Form ပုံစံ Copy ကူးပြီးပါပြီ!'
+                          : '📋 ကျောင်းသားထံ တောင်းရန် Form ပုံစံ Copy ကူးမည်'}
+                      </span>
+                    </button>
+
+                    <div className="inline-flex rounded-xl p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCreateEntryMode('single');
+                          setErrorMsg(null);
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                          createEntryMode === 'single'
+                            ? 'bg-indigo-600 text-white shadow-2xs'
+                            : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        <UserPlus className="w-3.5 h-3.5" />
+                        <span>ပုံမှန် တစ်ဦးချင်း ဖွင့်မည်</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCreateEntryMode('paste');
+                          setErrorMsg(null);
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                          createEntryMode === 'paste'
+                            ? 'bg-emerald-600 text-white shadow-2xs'
+                            : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>⚡ အများအပြား တစ်ပြိုင်နက် သွင်းမည် (Multi-Form Paste)</span>
+                      </button>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowNewForm(false)}
+                      className="text-slate-400 hover:text-slate-700 dark:hover:text-white font-bold cursor-pointer px-2 py-1"
+                    >
+                      ✕ ပိတ်မည်
+                    </button>
+                  </div>
                 </div>
 
                 {errorMsg && (
@@ -1019,11 +1718,60 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                   </div>
                 )}
 
-                {/* Role Selector */}
-                <div>
-                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                    ၁။ အကောင့်အမျိုးအစား (Account Role) *
-                  </label>
+                {createEntryMode === 'single' ? (
+                  <form onSubmit={handleCreateAccountSubmit} className="space-y-4">
+                    {/* Smart Student Registration Form Auto-Fill Bar */}
+                    <div className="p-3 rounded-xl bg-indigo-50/75 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/80 space-y-2">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="space-y-0.5">
+                          <div className="font-bold text-indigo-950 dark:text-indigo-200 flex items-center gap-1.5 text-xs">
+                            <Sparkles className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                            <span>✨ ကျောင်းသားပို့လာသော Form စာသားမှ အကွက်များထဲသို့ Auto တန်းဖြည့်မည်</span>
+                          </div>
+                          <p className="text-[11px] text-slate-600 dark:text-slate-300">
+                            ကျောင်းသားဖြည့်ပို့လာသော <strong>&ldquo;အမည်(Full Name): ... ဖုန်းနံပါတ်(Phone): ...&rdquo;</strong> စာသားကို Copy ကူးပြီး <strong>Clipboard မှ တန်းဖြည့်မည်</strong> နှိပ်ရုံ (သို့မဟုတ် အောက်အကွက်တွင် Paste ချရုံ) ဖြင့် သက်ဆိုင်ရာ အကွက်အားလုံး အလိုအလျောက် ပြည့်သွားပါမည်။
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleClipboardAutoFillSingle}
+                          className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs cursor-pointer shadow-2xs flex items-center justify-center gap-1.5 shrink-0"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>📥 Clipboard မှ တန်းဖြည့်မည် (1-Click Auto-Fill)</span>
+                        </button>
+                      </div>
+
+                      <textarea
+                        rows={2}
+                        value={singleSmartPasteText}
+                        onChange={(e) => applySmartAutoFillToSingleForm(e.target.value)}
+                        placeholder="သို့မဟုတ် ကျောင်းသားပို့လာသော Form စာသားကို ဤနေရာတွင် Paste (Ctrl+V / ဖိနှိပ်၍ Paste) ချလိုက်ပါက အောက်ရှိ အကွက်များထဲသို့ အလိုအလျောက် တန်းဝင်သွားပါမည်..."
+                        className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800 rounded-xl text-slate-900 dark:text-white text-xs focus:outline-none focus:border-indigo-500"
+                      />
+
+                      {singleAutoFilledNotice && (
+                        <div className="px-3 py-1.5 rounded-lg bg-emerald-100/90 dark:bg-emerald-900/50 border border-emerald-300 dark:border-emerald-700 text-emerald-900 dark:text-emerald-200 font-bold text-[11px] flex items-center justify-between gap-2">
+                          <span>{singleAutoFilledNotice}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSingleSmartPasteText('');
+                              setSingleAutoFilledNotice(null);
+                            }}
+                            className="text-emerald-700 dark:text-emerald-300 hover:underline text-[10px] cursor-pointer shrink-0"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Role Selector */}
+                    <div>
+                      <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                        ၁။ အကောင့်အမျိုးအစား (Account Role) *
+                      </label>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     <button
                       type="button"
@@ -1362,24 +2110,285 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                   </div>
                 )}
 
-                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-700">
-                  <button
-                    type="button"
-                    onClick={() => setShowNewForm(false)}
-                    className="px-3.5 py-2 text-slate-600 dark:text-slate-300 font-semibold cursor-pointer"
-                  >
-                    မလုပ်တော့ပါ
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isSubmitting}
-                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
-                  >
-                    <UserPlus className="w-4 h-4" />
-                    <span>{isSubmitting ? 'Creating...' : 'အကောင့်သစ် သိမ်းဆည်းမည်'}</span>
-                  </button>
-                </div>
-              </form>
+                    <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-700">
+                      <button
+                        type="button"
+                        onClick={() => setShowNewForm(false)}
+                        className="px-3.5 py-2 text-slate-600 dark:text-slate-300 font-semibold cursor-pointer"
+                      >
+                        မလုပ်တော့ပါ
+                      </button>
+                      <button
+                        type="submit"
+                        onClick={() => setAutoCopyAfterSingleCreate(false)}
+                        disabled={isSubmitting}
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 dark:hover:bg-slate-600 text-white font-bold rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                      >
+                        <UserPlus className="w-4 h-4" />
+                        <span>{isSubmitting ? 'Creating...' : 'အကောင့်သစ် သိမ်းဆည်းမည်'}</span>
+                      </button>
+                      <button
+                        type="submit"
+                        onClick={() => setAutoCopyAfterSingleCreate(true)}
+                        disabled={isSubmitting}
+                        className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                      >
+                        <Copy className="w-4 h-4" />
+                        <span>
+                          {isSubmitting
+                            ? 'Creating & Copying...'
+                            : '⚡ အကောင့်ဖွင့်ပြီး Login Info တန်း Copy ကူးမည်'}
+                        </span>
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  /* နည်းလမ်း (၁) — Multi-Form / Quick Text Paste Mode */
+                  <form onSubmit={handleQuickPasteBatchSubmit} className="space-y-4">
+                    <div className="p-3 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/70 text-slate-700 dark:text-slate-200 space-y-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="font-bold text-emerald-900 dark:text-emerald-200 flex items-center gap-1.5">
+                          <Sparkles className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          <span>
+                            ကျောင်းသားများ ပို့လာသော Form စာသားများကို တစ်ပြိုင်နက် Paste ချပြီး အကောင့်အားလုံး တန်းဖွင့်သည့်စနစ်
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleClipboardPasteBatch}
+                          className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs cursor-pointer shadow-2xs flex items-center gap-1.5"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>📥 Clipboard မှ စာသား ထပ်ပေါင်းထည့်မည် (Paste from Clipboard)</span>
+                        </button>
+                      </div>
+                      <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                        ကျောင်းသား (၁) ဦး သို့မဟုတ် အများအပြား ပို့လာသော <strong>&ldquo;အမည်(Full Name): ... Email: ... ဖုန်းနံပါတ်(Phone): ... အလုပ်အကိုင်/ပညာအရည်အချင်း: ... ကျား/မ(Gender): ... နေရပ်လိပ်စာ(Address): ...&rdquo;</strong> ပုံစံများကို တစ်ဆက်တည်း Paste ကူးထည့်လိုက်ရုံဖြင့် စနစ်က တစ်ဦးချင်းစီ၏ သက်ဆိုင်ရာ အကွက်များထဲသို့ အလိုအလျောက် ခွဲခြားဖြည့်ပေးပြီး တစ်ပြိုင်နက် အကောင့်ဖွင့်ပေးပါမည်။
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      {/* Left: Textarea Input */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="font-bold text-slate-800 dark:text-slate-200">
+                            ၁။ ကျောင်းသားများ ပို့လာသော Form စာသားများ Paste ကူးထည့်ရန် *
+                          </label>
+                          <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 font-bold text-[11px]">
+                            {parsedPastePreview.length} ဦး အသင့်တွေ့ရှိသည်
+                          </span>
+                        </div>
+                        <textarea
+                          rows={9}
+                          value={pasteRawText}
+                          onChange={(e) => setPasteRawText(e.target.value)}
+                          placeholder={`အမည်(Full Name): မောင်မင်းခန့်\nEmail: minkhant@gmail.com\nဖုန်းနံပါတ်(Phone): 0912345678\nအလုပ်အကိုင်/ပညာအရည်အချင်း: B.C.Sc\nကျား/မ(Gender): ကျား\nနေရပ်လိပ်စာ(Address): ရန်ကုန်မြို့\n\nအမည်(Full Name): မေသဇင်\nEmail: \nဖုန်းနံပါတ်(Phone): 0998765432\nအလုပ်အကိုင်/ပညာအရည်အချင်း: ဝန်ထမ်း\nကျား/မ(Gender): မ\nနေရပ်လိပ်စာ(Address): မန္တလေးမြို့`}
+                          className="w-full p-3 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-sans text-xs leading-relaxed focus:outline-none focus:border-emerald-500"
+                        />
+                        <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+                          <span>💡 Email မပါလျှင်လည်း @swanarh.edu ဖြင့် အလိုအလျောက် ဖြည့်ပေးပါသည်။</span>
+                          {pasteRawText && (
+                            <button
+                              type="button"
+                              onClick={() => setPasteRawText('')}
+                              className="text-rose-600 dark:text-rose-400 font-bold hover:underline cursor-pointer"
+                            >
+                              ရှင်းလင်းမည် (Clear)
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Right: Password Settings, Default Occupation & Auto-Segmented Live Preview Cards */}
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                              ၂။ Password သတ်မှတ်ပုံ
+                            </label>
+                            <div className="grid grid-cols-2 gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setPastePasswordMode('shared')}
+                                className={`py-2 px-2 rounded-xl border font-bold text-[11px] cursor-pointer ${
+                                  pastePasswordMode === 'shared'
+                                    ? 'bg-indigo-600 text-white border-indigo-600'
+                                    : 'bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+                                }`}
+                              >
+                                တူညီသော Password
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setPastePasswordMode('random')}
+                                className={`py-2 px-2 rounded-xl border font-bold text-[11px] cursor-pointer ${
+                                  pastePasswordMode === 'random'
+                                    ? 'bg-emerald-600 text-white border-emerald-600'
+                                    : 'bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+                                }`}
+                              >
+                                တစ်ဦးချင်း Auto သီးသန့်
+                              </button>
+                            </div>
+                          </div>
+
+                          {pastePasswordMode === 'shared' ? (
+                            <div>
+                              <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                                ဘုံသုံးမည့် Password *
+                              </label>
+                              <input
+                                type="text"
+                                value={pasteSharedPassword}
+                                onChange={(e) => setPasteSharedPassword(e.target.value)}
+                                placeholder="student123"
+                                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-mono text-slate-900 dark:text-white"
+                              />
+                            </div>
+                          ) : (
+                            <div>
+                              <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                                အလုပ်အကိုင်/ပညာအရည်အချင်း (Default)
+                              </label>
+                              <input
+                                type="text"
+                                value={pasteDefaultOccupation}
+                                onChange={(e) => setPasteDefaultOccupation(e.target.value)}
+                                placeholder="ဥပမာ - သင်တန်းသား (မထည့်လည်းရသည်)"
+                                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Live Preview Cards with All 6 Auto-Extracted Fields */}
+                        <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-700 space-y-2">
+                          <div className="flex items-center justify-between text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                            <span>🔍 အကွက်များထဲ အလိုအလျောက် ခွဲခြားဖြည့်ထားသော စာရင်း (Auto-Filled Preview)</span>
+                            <span className="text-emerald-600 dark:text-emerald-400">{parsedPastePreview.length} ဦး</span>
+                          </div>
+                          {parsedPastePreview.length === 0 ? (
+                            <div className="text-[11px] text-slate-400 py-6 text-center">
+                              ဘယ်ဘက်အကွက်တွင် ကျောင်းသားပို့လာသော Form စာသားကို Paste ချလိုက်ပါက အမည်၊ Username၊ Email၊ ဖုန်း၊ အလုပ်အကိုင်၊ ကျား/မ၊ လိပ်စာ တို့ကို အလိုအလျောက် ခွဲခြားဖြည့်ပေးပါမည်...
+                            </div>
+                          ) : (
+                            <div className="max-h-48 overflow-y-auto space-y-2 pr-1 text-[11px]">
+                              {parsedPastePreview.map((p) => (
+                                <div
+                                  key={`${p.index}-${p.username}`}
+                                  className="p-2.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 space-y-1 shadow-2xs"
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="font-bold text-slate-900 dark:text-white truncate">
+                                      <span className="text-slate-400 mr-1.5">#{p.index}</span>
+                                      <span>👤 {p.name}</span>
+                                      <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
+                                        {p.gender === 'female' ? '♀ မ' : '♂ ကျား'}
+                                      </span>
+                                    </div>
+                                    <div className="shrink-0 font-mono flex items-center gap-2">
+                                      <span className="text-indigo-600 dark:text-indigo-300 font-bold">
+                                        @{p.username}
+                                      </span>
+                                      <span className="text-emerald-600 dark:text-emerald-400 font-bold">
+                                        {pastePasswordMode === 'random' ? '[Auto-Pwd]' : pasteSharedPassword}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] text-slate-600 dark:text-slate-300 pt-0.5 border-t border-slate-100 dark:border-slate-700/60">
+                                    <div className="truncate">📧 Email: <span className="font-mono">{p.email}</span></div>
+                                    <div className="truncate">📞 ဖုန်း: <span className="font-mono">{p.phone || '—'}</span></div>
+                                    <div className="truncate">💼 အလုပ်/ပညာ: {p.occupation || '—'}</div>
+                                    <div className="truncate">📍 လိပ်စာ: {p.address || '—'}</div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Course Selection for Batch Paste */}
+                    <div className="p-3 bg-slate-50 dark:bg-slate-900/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <label className="font-bold text-slate-800 dark:text-slate-200">
+                          ၄။ တစ်ပြိုင်နက် တက်ရောက်ခွင့်ပြုမည့် အတန်းများ ({selectedInitialCourses.length} တန်း ရွေးထားသည်)
+                        </label>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedInitialCourses(courses.map((c) => c.id))}
+                            className="px-2 py-1 text-[11px] font-bold bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 rounded-lg cursor-pointer"
+                          >
+                            Select All
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedInitialCourses([])}
+                            className="px-2 py-1 text-[11px] font-bold bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg cursor-pointer"
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                        {courses.map((c) => {
+                          const isChecked = selectedInitialCourses.includes(c.id);
+                          return (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => toggleInitialCourseSelection(c.id)}
+                              className={`p-2 rounded-xl border text-left transition-all cursor-pointer flex items-center gap-2 ${
+                                isChecked
+                                  ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-500 text-emerald-950 dark:text-emerald-100'
+                                  : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+                              }`}
+                            >
+                              <div
+                                className={`w-4 h-4 rounded flex items-center justify-center shrink-0 border ${
+                                  isChecked
+                                    ? 'bg-emerald-600 border-emerald-600 text-white'
+                                    : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-600'
+                                }`}
+                              >
+                                {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="font-bold text-xs truncate">{c.code} · {c.title}</div>
+                                <div className="text-[10px] text-slate-500 truncate">{c.batch}</div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-700">
+                      <button
+                        type="button"
+                        onClick={() => setShowNewForm(false)}
+                        className="px-3.5 py-2 text-slate-600 dark:text-slate-300 font-semibold cursor-pointer"
+                      >
+                        မလုပ်တော့ပါ
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isSubmitting || parsedPastePreview.length === 0}
+                        className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                      >
+                        <Sparkles className="w-4 h-4" />
+                        <span>
+                          {isSubmitting
+                            ? `Creating ${parsedPastePreview.length} Accounts...`
+                            : `ကျောင်းသား (${parsedPastePreview.length}) ဦးလုံးကို တစ်ပြိုင်နက် အကောင့်ဖွင့်မည်`}
+                        </span>
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
             )}
 
             {/* Clean Unified Search & Filter Control Bar */}

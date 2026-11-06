@@ -17,6 +17,20 @@
       window.__pwaDeferredPrompt = null;
       window.__swanarhMounted = false;
 
+      // Suppress benign Vite HMR WebSocket unhandled rejections in Cloud Run preview environments
+      window.addEventListener('unhandledrejection', function (event) {
+        try {
+          var reason = event && event.reason;
+          var msg = (reason && (reason.message || String(reason))) || '';
+          if (
+            msg.indexOf('WebSocket closed without opened') !== -1 ||
+            msg.indexOf('failed to connect to websocket') !== -1
+          ) {
+            event.preventDefault();
+          }
+        } catch (e) {}
+      });
+
       // Enforce HTTPS on custom domain so Service Worker & Standalone WebAPK always work
       try {
         if (
