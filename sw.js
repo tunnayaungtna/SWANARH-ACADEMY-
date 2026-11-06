@@ -1,4 +1,4 @@
-const CACHE_NAME = 'swanarh-classroom-v17';
+const CACHE_NAME = 'swanarh-classroom-v19';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
@@ -9,6 +9,26 @@ const PRECACHE_ASSETS = [
   '/apple-touch-icon.png',
   '/icon.svg',
 ];
+
+function fetchWithTimeout(request, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = setTimeout(() => {
+      if (controller) controller.abort();
+      reject(new Error('SW navigation timeout'));
+    }, timeoutMs);
+
+    fetch(request, controller ? { signal: controller.signal } : undefined)
+      .then((res) => {
+        clearTimeout(timer);
+        resolve(res);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -65,13 +85,13 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith('/api/')) return;
 
-  // Network-First for HTML navigation requests:
-  // 1. Always fetches fresh HTML from network when online (prevents stale session hangs 2-3 hours later)
-  // 2. Calls event.respondWith() with offline fallback so Chrome/Android WebAPK & Desktop PWA install as a true Standalone Native App
+  // Network-First with 3.5s fast timeout for HTML navigation requests:
+  // Ensures Myanmar mobile networks with packet loss/throttling never hang on a white screen
   if (request.mode === 'navigate' || request.destination === 'document') {
     event.respondWith(
-      fetch(request)
+      fetchWithTimeout(request, 3500)
         .then((response) => {
           if (response && response.status === 200 && response.type === 'basic') {
             const cloned = response.clone();

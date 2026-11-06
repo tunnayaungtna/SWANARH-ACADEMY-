@@ -60,7 +60,7 @@
           if ('caches' in window) {
             caches.keys().then(function (keys) {
               keys.forEach(function (key) {
-                if (key !== 'swanarh-classroom-v15') {
+                if (key !== 'swanarh-classroom-v19') {
                   caches.delete(key).catch(function () {});
                 }
               });
@@ -123,7 +123,7 @@
         if (window.__swanarhMounted || window.__staticBundleLoaded) return;
         window.__staticBundleLoaded = true;
         try {
-          var bust = 'v15_' + Math.floor(Date.now() / 60000);
+          var bust = 'v19_' + Math.floor(Date.now() / 60000);
           var link = document.createElement('link');
           link.rel = 'stylesheet';
           link.href = '/gh-pages/app.css?v=' + bust;
@@ -136,7 +136,7 @@
         } catch (e) {}
       };
 
-      // Show manual reload button only if app still hasn't mounted after 4 seconds
+      // Show manual reload button only if app still hasn't mounted after 6.5 seconds
       setTimeout(function () {
         if (!window.__swanarhMounted) {
           var rescueBox = document.getElementById('swanarh-rescue-box');
@@ -144,7 +144,7 @@
             rescueBox.style.display = 'flex';
           }
         }
-      }, 4000);
+      }, 6500);
     </script>
     <title>SwanArh Classroom - Dr. Si Thu Aung · Swanarh Academy</title>
     <link rel="canonical" href="https://www.swanarhclassroom.online/" />
