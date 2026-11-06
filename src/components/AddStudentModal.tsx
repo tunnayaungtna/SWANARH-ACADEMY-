@@ -3,6 +3,7 @@ import { Course } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
 import { SupabaseService } from '../services/supabase';
 import { PRESET_AVATARS } from '../data/presetAvatars';
+import { useBackHandler } from '../utils/backNavigation';
 import {
   UserPlus,
   Search,
@@ -13,6 +14,7 @@ import {
   EyeOff,
   Copy,
   CheckCheck,
+  Sparkles,
 } from 'lucide-react';
 
 interface AddStudentModalProps {
@@ -28,6 +30,8 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
   onClose,
   onStudentEnrolled,
 }) => {
+  useBackHandler(isOpen, onClose);
+
   const [activeTab, setActiveTab] = useState<'existing' | 'new'>('existing');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -51,11 +55,13 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
   const [newUsername, setNewUsername] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newPhone, setNewPhone] = useState('');
+  const [newTitle, setNewTitle] = useState('');
   const [newGender, setNewGender] = useState<'male' | 'female' | 'other'>('male');
   const [newAddress, setNewAddress] = useState('');
+  const [smartPasteBox, setSmartPasteBox] = useState('');
   const [selectedCourseIds, setSelectedCourseIds] = useState<string[]>([course.id]);
   const [newPassword, setNewPassword] = useState('student123');
-  const [newAvatar, setNewAvatar] = useState(PRESET_AVATARS[0].url);
+  const [newAvatar] = useState(PRESET_AVATARS[0].url);
   const [showPassword, setShowPassword] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -68,6 +74,119 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
   const [copied, setCopied] = useState(false);
 
   if (!isOpen) return null;
+
+  const STUDENT_FORM_TEMPLATE = `အမည်(Full Name): 
+Email: 
+ဖုန်းနံပါတ်(Phone): 
+အလုပ်အကိုင်/ပညာအရည်အချင်း: 
+ကျား/မ(Gender): 
+နေရပ်လိပ်စာ(Address): `;
+
+  const normalizeMyanmarPhone = (val: string): string => {
+    const mmDigits: Record<string, string> = {
+      '၀': '0',
+      '၁': '1',
+      '၂': '2',
+      '၃': '3',
+      '၄': '4',
+      '၅': '5',
+      '၆': '6',
+      '၇': '7',
+      '၈': '8',
+      '၉': '9',
+    };
+    return val.replace(/[၀-၉]/g, (d) => mmDigits[d] || d).trim();
+  };
+
+  const applySmartAutoFill = (rawText: string) => {
+    setSmartPasteBox(rawText);
+    const trimmed = rawText.trim();
+    if (!trimmed) return;
+
+    const lines = trimmed
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    let name = '';
+    let email = '';
+    let phone = '';
+    let occupation = '';
+    let gender: 'male' | 'female' | null = null;
+    let address = '';
+
+    for (const line of lines) {
+      const cleanLine = line.replace(/^[\d၀-၉]+[.)\-]\s*/, '').trim();
+      const colonIdx = cleanLine.search(/[:：=]/);
+      if (colonIdx !== -1) {
+        const key = cleanLine.slice(0, colonIdx).trim().toLowerCase();
+        const val = cleanLine.slice(colonIdx + 1).trim();
+        if (!val) continue;
+
+        if (key.includes('အမည်') || key.includes('name') || key.includes('နာမည်')) {
+          name = val;
+        } else if (key.includes('email') || key.includes('အီးမေး') || key.includes('mail')) {
+          email = val;
+        } else if (key.includes('ဖုန်း') || key.includes('phone') || key.includes('ph') || key.includes('ဆက်သွယ်ရန်')) {
+          phone = normalizeMyanmarPhone(val);
+        } else if (
+          key.includes('အလုပ်အကိုင်') ||
+          key.includes('ပညာအရည်အချင်း') ||
+          key.includes('occupation') ||
+          key.includes('education') ||
+          key.includes('job') ||
+          key.includes('title')
+        ) {
+          occupation = val;
+        } else if (key.includes('ကျား') || key.includes('မ') || key.includes('gender') || key.includes('sex')) {
+          const vLow = val.toLowerCase();
+          if (vLow.includes('မ') || vLow.includes('female') || vLow === 'f' || vLow.includes('woman') || vLow.includes('girl')) {
+            gender = 'female';
+          } else if (vLow.includes('ကျား') || vLow.includes('male') || vLow === 'm' || vLow.includes('man') || vLow.includes('boy')) {
+            gender = 'male';
+          }
+        } else if (key.includes('လိပ်စာ') || key.includes('နေရပ်') || key.includes('address') || key.includes('မြို့')) {
+          address = val;
+        }
+      }
+    }
+
+    if (!name && lines.length === 1) {
+      const parts = lines[0].split(/[,，|\t;]+/).map((p) => p.trim()).filter(Boolean);
+      for (const p of parts) {
+        const normP = normalizeMyanmarPhone(p);
+        if (p.includes('@') && p.includes('.')) {
+          email = p.toLowerCase();
+        } else if (/^(\+?95|09|\d{7,12})/.test(normP.replace(/[\s-]/g, ''))) {
+          phone = normP;
+        } else if (['ကျား', 'male', 'm'].includes(p.toLowerCase())) {
+          gender = 'male';
+        } else if (['မ', 'female', 'f'].includes(p.toLowerCase())) {
+          gender = 'female';
+        } else if (!name) {
+          name = p;
+        } else if (!occupation) {
+          occupation = p;
+        } else if (!address) {
+          address = p;
+        }
+      }
+    }
+
+    if (name) {
+      setNewName(name);
+      const suggested = ClassroomDB.suggestUsername(name);
+      setNewUsername(suggested);
+      if (!email) {
+        setNewEmail(`${suggested}@swanarh.edu`);
+      }
+    }
+    if (email) setNewEmail(email.toLowerCase().replace(/\s+/g, ''));
+    if (phone) setNewPhone(phone);
+    if (occupation) setNewTitle(occupation);
+    if (gender) setNewGender(gender);
+    if (address) setNewAddress(address);
+  };
 
   const toggleCourseSelection = (cId: string) => {
     setSelectedCourseIds((prev) =>
@@ -84,10 +203,13 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
     }, 3000);
   };
 
-  const handleCreateAndEnroll = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newName.trim() || !newUsername.trim() || !newEmail.trim()) {
-      setFormError('ကျေးဇူးပြု၍ အချက်အလက်များ အပြည့်အစုံ ဖြည့်စွက်ပေးပါ။');
+  const executeCreateAndEnroll = (autoCopyAfterCreate: boolean) => {
+    const cleanName = newName.trim();
+    const cleanUsername = (newUsername.trim() || ClassroomDB.suggestUsername(cleanName)).toLowerCase().replace(/\s+/g, '');
+    const cleanEmail = (newEmail.trim() || `${cleanUsername}@swanarh.edu`).toLowerCase().replace(/\s+/g, '');
+
+    if (!cleanName || !cleanUsername) {
+      setFormError('ကျေးဇူးပြု၍ ကျောင်းသားအမည် ဖြည့်စွက်ပေးပါ။');
       return;
     }
 
@@ -100,12 +222,13 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
 
     setFormError(null);
     const result = ClassroomDB.registerNewStudent({
-      name: newName,
-      username: newUsername,
+      name: cleanName,
+      username: cleanUsername,
       password: newPassword.trim(),
-      email: newEmail,
-      phone: newPhone || '+95 9 790 000000',
+      email: cleanEmail,
+      phone: newPhone.trim() || '+95 9 790 000000',
       avatar: newAvatar,
+      title: newTitle.trim() || undefined,
       gender: newGender,
       address: newAddress.trim() || undefined,
       initialCourseIds: targetCourses,
@@ -117,13 +240,14 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
     }
 
     if (result.student) {
-      SupabaseService.signUpWithSupabase(newEmail.trim(), newPassword.trim(), {
+      SupabaseService.signUpWithSupabase(cleanEmail, newPassword.trim(), {
         id: result.student.id,
         name: result.student.name,
         username: result.student.username,
         role: 'student',
         phone: result.student.phone,
         avatar: result.student.avatar,
+        title: result.student.title,
         gender: newGender,
         address: result.student.address,
       }).catch(() => {});
@@ -134,15 +258,27 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
       .map((c) => c.code)
       .join(', ');
 
+    const finalCoursesLabel = enrolledCourseCodes || course.code;
+
     setCreatedDetails({
-      name: newName.trim(),
-      username: newUsername.trim(),
+      name: cleanName,
+      username: cleanUsername,
       password: newPassword.trim(),
-      coursesLabel: enrolledCourseCodes || course.code,
+      coursesLabel: finalCoursesLabel,
     });
 
+    if (autoCopyAfterCreate) {
+      navigator.clipboard.writeText(
+        `SwanArh Classroom Login:\nURL: https://www.swanarhclassroom.online/\nName: ${cleanName}\nUsername: ${cleanUsername}\nPassword: ${newPassword.trim()}\nClass: ${finalCoursesLabel}`
+      );
+      setCopied(true);
+      setTimeout(() => setCopied(false), 3000);
+    }
+
     setSuccessMessage(
-      `ကျောင်းသားအသစ် "${newName}" (@${newUsername}) အတွက် Login အကောင့် ဖန်တီးပြီး (${enrolledCourseCodes || course.code}) အတန်းများထဲသို့ တစ်ပြိုင်တည်း ထည့်သွင်းပြီးပါပြီ!`
+      autoCopyAfterCreate
+        ? `✅ "${cleanName}" (@${cleanUsername}) အကောင့် ဖန်တီးပြီး Login အချက်အလက်များကို Clipboard ထဲသို့ Auto Copy ကူးယူပြီးပါပြီ!`
+        : `ကျောင်းသားအသစ် "${cleanName}" (@${cleanUsername}) အတွက် Login အကောင့် ဖန်တီးပြီး (${finalCoursesLabel}) အတန်းများထဲသို့ တစ်ပြိုင်တည်း ထည့်သွင်းပြီးပါပြီ!`
     );
 
     // Reset form fields
@@ -150,12 +286,19 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
     setNewUsername('');
     setNewEmail('');
     setNewPhone('');
+    setNewTitle('');
     setNewGender('male');
     setNewAddress('');
+    setSmartPasteBox('');
     setSelectedCourseIds([course.id]);
     setNewPassword('student123');
 
     onStudentEnrolled();
+  };
+
+  const handleCreateAndEnroll = (e: React.FormEvent) => {
+    e.preventDefault();
+    executeCreateAndEnroll(false);
   };
 
   return (
@@ -290,7 +433,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
             </div>
           )}
 
-          {/* Tab 2: Create New Student with Login Access & Profile Picture */}
+          {/* Tab 2: Create New Student with Login Access & Smart Auto-Fill */}
           {activeTab === 'new' && (
             <div className="space-y-4">
               {/* If credentials recently created, display the copyable card */}
@@ -304,7 +447,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
                       type="button"
                       onClick={() => {
                         navigator.clipboard.writeText(
-                          `SwanArh Classroom Login:\nURL: https://www.swanarhclassroom.online/\nUsername: ${createdDetails.username}\nPassword: ${createdDetails.password}\nClass: ${createdDetails.coursesLabel || course.code}`
+                          `SwanArh Classroom Login:\nURL: https://www.swanarhclassroom.online/\nName: ${createdDetails.name}\nUsername: ${createdDetails.username}\nPassword: ${createdDetails.password}\nClass: ${createdDetails.coursesLabel || course.code}`
                         );
                         setCopied(true);
                         setTimeout(() => setCopied(false), 2500);
@@ -329,6 +472,56 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
                 </div>
               )}
 
+              {/* Smart Student Registration Form Auto-Filler */}
+              <div className="p-3 bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/70 rounded-xl space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                    <span className="text-[11px] font-bold text-indigo-950 dark:text-indigo-200">
+                      ⚡ Smart Auto-Fill (ကျောင်းသားပို့သော Form ကို တန်းဖြည့်ရန်)
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(STUDENT_FORM_TEMPLATE);
+                        setSuccessMessage('📋 ကျောင်းသားထံ ပို့ပေးရမည့် Form ပုံစံကို Copy ကူးယူပြီးပါပြီ!');
+                        setTimeout(() => setSuccessMessage(null), 3000);
+                      }}
+                      className="text-[10px] font-bold px-2 py-1 rounded-lg bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 hover:bg-indigo-50 cursor-pointer"
+                    >
+                      📋 Form ပုံစံ Copy ကူးမည်
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          const clip = await navigator.clipboard.readText();
+                          if (clip && clip.trim()) {
+                            applySmartAutoFill(clip);
+                            setSuccessMessage('✨ Clipboard မှ အချက်အလက်များကို သက်ဆိုင်ရာ အကွက်များထဲသို့ Auto ဖြည့်သွင်းပြီးပါပြီ!');
+                            setTimeout(() => setSuccessMessage(null), 3000);
+                          }
+                        } catch {
+                          setFormError('အောက်ပါအကွက်ထဲတွင် တိုက်ရိုက် Paste (Ctrl+V) ချပေးပါ။');
+                        }
+                      }}
+                      className="text-[10px] font-bold px-2 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer"
+                    >
+                      📥 Clipboard မှ တန်းဖြည့်မည်
+                    </button>
+                  </div>
+                </div>
+                <textarea
+                  rows={2}
+                  value={smartPasteBox}
+                  onChange={(e) => applySmartAutoFill(e.target.value)}
+                  placeholder="ကျောင်းသားပြန်ပို့သော Form စာသားကို ဤနေရာတွင် Paste ချလိုက်ပါက အောက်ရှိအကွက်များအားလုံး သူ့ဘာသာ Auto ဖြည့်ပေးပါမည်..."
+                  className="w-full px-2.5 py-1.5 text-[11px] bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800 rounded-lg text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-hidden focus:border-indigo-500"
+                />
+              </div>
+
               <form onSubmit={handleCreateAndEnroll} className="space-y-3.5 text-xs">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
@@ -339,16 +532,15 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
                       type="text"
                       value={newName}
                       onChange={(e) => {
-                        setNewName(e.target.value);
-                        if (!newUsername) {
-                          const suggested = e.target.value
-                            .toLowerCase()
-                            .replace(/[^a-z0-9]/g, '')
-                            .slice(0, 12);
-                          if (suggested) setNewUsername(suggested);
+                        const val = e.target.value;
+                        setNewName(val);
+                        const suggested = ClassroomDB.suggestUsername(val);
+                        setNewUsername(suggested);
+                        if (!newEmail || newEmail.endsWith('@swanarh.edu')) {
+                          setNewEmail(`${suggested}@swanarh.edu`);
                         }
                       }}
-                      placeholder="e.g. Aung Kaung Myat"
+                      placeholder="e.g. မောင်အောင်မင်း / Aung Min"
                       className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-hidden focus:border-indigo-500"
                       required
                     />
@@ -362,7 +554,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
                       type="text"
                       value={newUsername}
                       onChange={(e) => setNewUsername(e.target.value.toLowerCase().replace(/\s+/g, ''))}
-                      placeholder="e.g. aung.kaung"
+                      placeholder="e.g. aungmin"
                       className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 placeholder-slate-400 font-mono focus:outline-hidden focus:border-indigo-500"
                       required
                     />
@@ -395,15 +587,14 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
 
                   <div>
                     <label className="block text-slate-700 dark:text-slate-300 font-medium mb-1">
-                      Student Email *
+                      Student Email (မရှိပါက Auto ဖြည့်ပေးပါမည်)
                     </label>
                     <input
                       type="email"
                       value={newEmail}
                       onChange={(e) => setNewEmail(e.target.value)}
-                      placeholder="student@example.com"
+                      placeholder="student@swanarh.edu"
                       className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-hidden focus:border-indigo-500"
-                      required
                     />
                   </div>
                 </div>
@@ -422,6 +613,21 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
                     />
                   </div>
 
+                  <div>
+                    <label className="block text-slate-700 dark:text-slate-300 font-medium mb-1">
+                      အလုပ်အကိုင် / ပညာအရည်အချင်း
+                    </label>
+                    <input
+                      type="text"
+                      value={newTitle}
+                      onChange={(e) => setNewTitle(e.target.value)}
+                      placeholder="ဥပမာ - B.C.Sc / ကျောင်းသား"
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-hidden focus:border-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-slate-700 dark:text-slate-300 font-medium mb-1">
                       Gender (ကျား / မ ရွေးချယ်ရန်) *
@@ -451,19 +657,19 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
                       </button>
                     </div>
                   </div>
-                </div>
 
-                <div>
-                  <label className="block text-slate-700 dark:text-slate-300 font-medium mb-1">
-                    Address (နေရပ်လိပ်စာ)
-                  </label>
-                  <input
-                    type="text"
-                    value={newAddress}
-                    onChange={(e) => setNewAddress(e.target.value)}
-                    placeholder="ဥပမာ - အမှတ် (၁၂)၊ ပြည်လမ်း၊ ကမာရွတ်မြို့နယ်၊ ရန်ကုန်မြို့"
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-hidden focus:border-indigo-500"
-                  />
+                  <div>
+                    <label className="block text-slate-700 dark:text-slate-300 font-medium mb-1">
+                      Address (နေရပ်လိပ်စာ)
+                    </label>
+                    <input
+                      type="text"
+                      value={newAddress}
+                      onChange={(e) => setNewAddress(e.target.value)}
+                      placeholder="ဥပမာ - ကမာရွတ်မြို့နယ်၊ ရန်ကုန်မြို့"
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-hidden focus:border-indigo-500"
+                    />
+                  </div>
                 </div>
 
                 {/* Multi-course selection */}
@@ -521,19 +727,27 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
                   </div>
                 </div>
 
-                <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-100 dark:border-slate-800">
+                <div className="pt-2 flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 dark:border-slate-800">
                   <button
                     type="button"
                     onClick={onClose}
-                    className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
+                    className="px-3.5 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl shadow-xs transition-colors cursor-pointer"
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 dark:hover:bg-slate-600 text-white font-semibold rounded-xl shadow-xs transition-colors cursor-pointer"
                   >
-                    Create & Enroll ({selectedCourseIds.length || 1} Classes)
+                    Create ({selectedCourseIds.length || 1} Classes)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => executeCreateAndEnroll(true)}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>⚡ အကောင့်ဖွင့်ပြီး Login Info တန်း Copy ကူးမည်</span>
                   </button>
                 </div>
               </form>

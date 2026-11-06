@@ -30,33 +30,9 @@ import {
   FileSpreadsheet,
 } from 'lucide-react';
 
-const PRESET_AVATARS = [
-  {
-    id: 'av-1',
-    name: 'Dr. Si Thu / Lead',
-    url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-  },
-  {
-    id: 'av-2',
-    name: 'Coordinator',
-    url: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
-  },
-  {
-    id: 'av-3',
-    name: 'Academic Staff',
-    url: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
-  },
-  {
-    id: 'av-4',
-    name: 'Faculty Member',
-    url: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-  },
-  {
-    id: 'av-5',
-    name: 'Senior Lecturer',
-    url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-  },
-];
+import { PRESET_AVATARS as SHARED_PRESET_AVATARS } from '../data/presetAvatars';
+
+const PRESET_AVATARS = SHARED_PRESET_AVATARS.slice(0, 5);
 
 interface AdminStudentDirectoryModalProps {
   isOpen: boolean;

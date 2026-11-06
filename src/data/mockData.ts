@@ -1,5 +1,16 @@
 import { User, Course, CoursePost, Assignment, Quiz, StudentProgress, AssignmentSubmission, QuizSubmission, NotificationItem, AttendanceSession } from '../types/classroom';
 
+const MOCK_ADMIN_AVATAR =
+  "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect width='150' height='150' rx='75' fill='%234f46e5'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.9'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.9'/%3E%3C/svg%3E";
+const MOCK_COADMIN_AVATAR =
+  "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect width='150' height='150' rx='75' fill='%230d9488'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.9'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.9'/%3E%3C/svg%3E";
+const MOCK_BANNER_INDIGO =
+  "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='300' viewBox='0 0 1200 300'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%231e1b4b'/%3E%3Cstop offset='100%25' stop-color='%234338ca'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='1200' height='300' fill='url(%23g)'/%3E%3Ccircle cx='1050' cy='50' r='180' fill='%23ffffff' fill-opacity='0.06'/%3E%3C/svg%3E";
+const MOCK_BANNER_EMERALD =
+  "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='300' viewBox='0 0 1200 300'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%23064e3b'/%3E%3Cstop offset='100%25' stop-color='%230d9488'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='1200' height='300' fill='url(%23g)'/%3E%3Ccircle cx='1050' cy='50' r='180' fill='%23ffffff' fill-opacity='0.06'/%3E%3C/svg%3E";
+const MOCK_BANNER_CYAN =
+  "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='300' viewBox='0 0 1200 300'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%230f172a'/%3E%3Cstop offset='100%25' stop-color='%230284c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='1200' height='300' fill='url(%23g)'/%3E%3Ccircle cx='1050' cy='50' r='180' fill='%23ffffff' fill-opacity='0.06'/%3E%3C/svg%3E";
+
 export const INITIAL_USERS: User[] = [
   {
     id: 'user-admin-1',
@@ -11,7 +22,7 @@ export const INITIAL_USERS: User[] = [
     gender: 'male',
     address: 'No. 45, Pyay Road, Kamayut, Yangon',
     phone: '+95 9 791 234567',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    avatar: MOCK_ADMIN_AVATAR,
     title: 'Dean of Computing & Lead Instructor',
   },
   {
@@ -24,7 +35,7 @@ export const INITIAL_USERS: User[] = [
     gender: 'female',
     address: 'No. 12, University Avenue, Bahan, Yangon',
     phone: '+95 9 512 889900',
-    avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
+    avatar: MOCK_COADMIN_AVATAR,
     title: 'Course Coordinator & Assistant Instructor',
   },
   {
@@ -75,7 +86,7 @@ export const INITIAL_COURSES: Course[] = [
     description: 'Advanced distributed systems, Next.js / Express microservices, edge computing, database replication, and secure authentication.',
     instructorName: 'Dr. Kyaw Swar',
     instructorEmail: 'kyaw.admin@classroomos.edu',
-    bannerImage: 'https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=1200&h=300&fit=crop&q=85',
+    bannerImage: MOCK_BANNER_INDIGO,
     themeColor: 'indigo',
     enrolledStudentIds: ['user-student-1', 'user-student-2'], // Aung Min, Su Su
     totalLessons: 4,
@@ -91,7 +102,7 @@ export const INITIAL_COURSES: Course[] = [
     description: 'Foundations of mathematical modeling, supervised & unsupervised machine learning, deep neural networks, and PyTorch pipelines.',
     instructorName: 'Dr. Kyaw Swar',
     instructorEmail: 'kyaw.admin@classroomos.edu',
-    bannerImage: 'https://images.unsplash.com/photo-1509062522246-3755977927d7?w=1200&h=300&fit=crop&q=85',
+    bannerImage: MOCK_BANNER_EMERALD,
     themeColor: 'emerald',
     enrolledStudentIds: ['user-student-1'], // Only Aung Min
     totalLessons: 3,
@@ -107,7 +118,7 @@ export const INITIAL_COURSES: Course[] = [
     description: 'Penetration testing fundamentals, cryptographic protocols, token security, anti-piracy content protection, and zero-trust perimeter defense.',
     instructorName: 'Dr. Kyaw Swar',
     instructorEmail: 'kyaw.admin@classroomos.edu',
-    bannerImage: 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=1200&h=300&fit=crop&q=85',
+    bannerImage: MOCK_BANNER_CYAN,
     themeColor: 'cyan',
     enrolledStudentIds: ['user-student-3'], // Only Thura Soe
     totalLessons: 3,
@@ -123,7 +134,7 @@ export const INITIAL_POSTS: CoursePost[] = [
     authorId: 'user-admin-1',
     authorName: 'Dr. Kyaw Swar',
     authorRole: 'admin',
-    authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    authorAvatar: MOCK_ADMIN_AVATAR,
     title: '📌 Live Lecture: Distributed Caching & Redis Sliding-Window Q&A',
     content: 'Students of Batch 2026-A, today we will hold our live architectural review session. You can join directly using the class link below:\nhttps://us02web.zoom.us/j/84920193847?pwd=CloudArch2026',
     postType: 'lesson',
@@ -151,7 +162,7 @@ export const INITIAL_POSTS: CoursePost[] = [
     authorId: 'user-admin-1',
     authorName: 'Dr. Kyaw Swar',
     authorRole: 'admin',
-    authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    authorAvatar: MOCK_ADMIN_AVATAR,
     title: 'Announcement: Mid-Term Batch Schedule & Office Hours',
     content: 'Dear Batch 2026-A students, office hours for architecture consultations will be held every Thursday from 4:00 PM to 6:00 PM. Please ensure your Assignment 1 is submitted before the due date.',
     postType: 'announcement',
@@ -168,7 +179,7 @@ export const INITIAL_POSTS: CoursePost[] = [
     authorId: 'user-admin-1',
     authorName: 'Dr. Kyaw Swar',
     authorRole: 'admin',
-    authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    authorAvatar: MOCK_ADMIN_AVATAR,
     title: 'Lesson 01: Secure Edge Video Delivery & Anti-Piracy Architecture',
     content: 'Welcome to Lecture 1. In this lesson, we break down how modern streaming services prevent unauthorized downloading via domain-restricted HLS manifests, proxy authentication tokens, and dynamic browser watermarking. Watch the secure player video below and review the attached architecture slides before next Monday.',
     postType: 'lesson',
@@ -180,7 +191,7 @@ export const INITIAL_POSTS: CoursePost[] = [
       provider: 'bunny-stream',
       playbackId: 'sec-stream-9921b',
       duration: '18:45',
-      thumbnailUrl: 'https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=1200&h=300&fit=crop&q=85',
+      thumbnailUrl: MOCK_BANNER_INDIGO,
       hlsStreamProxy: '/api/v1/secure-stream/hls-manifest-cs401-01.m3u8',
       allowDynamicWatermark: true,
     },
@@ -218,7 +229,7 @@ export const INITIAL_POSTS: CoursePost[] = [
         authorId: 'user-admin-1',
         authorName: 'Dr. Kyaw Swar',
         authorRole: 'admin',
-        authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+        authorAvatar: MOCK_ADMIN_AVATAR,
         content: 'Good question Aung Min. In production systems like ours, it shifts coordinates randomly every 3 to 7 seconds across the canvas so screen recorders cannot crop it out.',
         createdAt: 'Jan 14, 2024, 03:42 PM',
       },
@@ -232,7 +243,7 @@ export const INITIAL_POSTS: CoursePost[] = [
     authorId: 'user-admin-1',
     authorName: 'Dr. Kyaw Swar',
     authorRole: 'admin',
-    authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    authorAvatar: MOCK_ADMIN_AVATAR,
     title: 'Lesson 01: High-Dimensional Feature Spaces & Neural Activation',
     content: 'Welcome to Applied Machine Learning. Today we examine non-linear decision boundaries and vector embeddings. The lecture video is attached below with forensic watermarking.',
     postType: 'lesson',
@@ -243,7 +254,7 @@ export const INITIAL_POSTS: CoursePost[] = [
       provider: 'mux-secure',
       playbackId: 'mux-token-x992',
       duration: '24:10',
-      thumbnailUrl: 'https://images.unsplash.com/photo-1509062522246-3755977927d7?w=1200&h=300&fit=crop&q=85',
+      thumbnailUrl: MOCK_BANNER_EMERALD,
       hlsStreamProxy: '/api/v1/secure-stream/hls-manifest-ds302-01.m3u8',
       allowDynamicWatermark: true,
     },
@@ -258,7 +269,7 @@ export const INITIAL_POSTS: CoursePost[] = [
     authorId: 'user-admin-1',
     authorName: 'Dr. Kyaw Swar',
     authorRole: 'admin',
-    authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    authorAvatar: MOCK_ADMIN_AVATAR,
     title: 'Lesson 01: Zero-Trust Network Architecture & Row-Level Security',
     content: 'Security must not rely solely on the frontend UI. In this module, we dissect PostgreSQL Row-Level Security (RLS) policies and rate limiting with Redis sliding-window counters.',
     postType: 'lesson',
@@ -269,7 +280,7 @@ export const INITIAL_POSTS: CoursePost[] = [
       provider: 'vimeo-private',
       playbackId: 'vimeo-priv-7788',
       duration: '21:30',
-      thumbnailUrl: 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=1200&h=300&fit=crop&q=85',
+      thumbnailUrl: MOCK_BANNER_CYAN,
       hlsStreamProxy: '/api/v1/secure-stream/hls-manifest-sec505-01.m3u8',
       allowDynamicWatermark: true,
     },
@@ -445,7 +456,7 @@ export const INITIAL_SUBMISSIONS: AssignmentSubmission[] = [
     courseId: 'course-web-arch',
     studentId: 'user-student-1',
     studentName: 'Aung Min',
-    studentAvatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
+    studentAvatar: '',
     submissionText: 'Dr. Kyaw, I have completed the PostgreSQL RLS policy definitions and attached the execution benchmark.',
     fileAttachment: {
       name: 'AungMin_CS401_Assignment1_Final.pdf',

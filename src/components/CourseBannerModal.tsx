@@ -18,54 +18,61 @@ export interface PresetBannerItem {
   url: string;
 }
 
+function makeClassroomBannerSvg(c1: string, c2: string, accent: string): string {
+  const s1 = encodeURIComponent(c1);
+  const s2 = encodeURIComponent(c2);
+  const ac = encodeURIComponent(accent);
+  return `data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='300' viewBox='0 0 1200 300'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='${s1}'/%3E%3Cstop offset='100%25' stop-color='${s2}'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='1200' height='300' fill='url(%23g)'/%3E%3Ccircle cx='1040' cy='60' r='200' fill='${ac}' fill-opacity='0.18'/%3E%3Ccircle cx='180' cy='260' r='170' fill='%23ffffff' fill-opacity='0.08'/%3E%3Cpath d='M0 220 Q 400 140 800 230 T 1200 180 L 1200 300 L 0 300 Z' fill='%23ffffff' fill-opacity='0.06'/%3E%3C/svg%3E`;
+}
+
 export const PRESET_CLASSROOM_BANNERS: PresetBannerItem[] = [
   {
     id: 'banner-collaborative-campus',
     label: 'Modern Collaborative Campus',
     category: 'Featured Header',
-    url: 'https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=1200&h=300&fit=crop&q=85',
+    url: makeClassroomBannerSvg('#1e1b4b', '#4338ca', '#818cf8'),
   },
   {
     id: 'banner-digital-classroom',
     label: 'Interactive Digital Classroom',
     category: 'Academic',
-    url: 'https://images.unsplash.com/photo-1509062522246-3755977927d7?w=1200&h=300&fit=crop&q=85',
+    url: makeClassroomBannerSvg('#064e3b', '#0d9488', '#34d399'),
   },
   {
     id: 'banner-tech-innovation',
     label: 'Technology & Innovation Lab',
     category: 'Technology',
-    url: 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=1200&h=300&fit=crop&q=85',
+    url: makeClassroomBannerSvg('#0f172a', '#0284c7', '#38bdf8'),
   },
   {
     id: 'banner-academy-hall',
     label: 'University Lecture Hall',
     category: 'University',
-    url: 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1200&h=300&fit=crop&q=85',
+    url: makeClassroomBannerSvg('#311042', '#7e22ce', '#c084fc'),
   },
   {
     id: 'banner-medical-science',
     label: 'Medical & Laboratory Science',
     category: 'Science & Medicine',
-    url: 'https://images.unsplash.com/photo-1532094349884-543bc11b234d?w=1200&h=300&fit=crop&q=85',
+    url: makeClassroomBannerSvg('#134e4a', '#0f766e', '#2dd4bf'),
   },
   {
     id: 'banner-library-books',
     label: 'Classic Library & Research',
     category: 'Literature',
-    url: 'https://images.unsplash.com/photo-1507842229356-51c61504d3ab?w=1200&h=300&fit=crop&q=85',
+    url: makeClassroomBannerSvg('#451a03', '#b45309', '#fbbf24'),
   },
   {
     id: 'banner-modern-campus',
     label: 'Executive Study Workspace',
     category: 'General',
-    url: 'https://images.unsplash.com/photo-1497633762265-9d179a990aa6?w=1200&h=300&fit=crop&q=85',
+    url: makeClassroomBannerSvg('#1e293b', '#334155', '#94a3b8'),
   },
   {
     id: 'banner-biotech',
     label: 'Clinical & Microscope Study',
     category: 'Biology',
-    url: 'https://images.unsplash.com/photo-1579154204601-01588f351e67?w=1200&h=300&fit=crop&q=85',
+    url: makeClassroomBannerSvg('#3b0764', '#be185d', '#f472b6'),
   },
 ];
 

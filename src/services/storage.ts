@@ -41,6 +41,15 @@ import {
   INITIAL_ATTENDANCE_SESSIONS,
 } from '../data/mockData';
 
+const DEFAULT_AVATAR_SVG =
+  "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect width='150' height='150' rx='75' fill='%234f46e5'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.9'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.9'/%3E%3C/svg%3E";
+const DEFAULT_BANNER_INDIGO =
+  "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='300' viewBox='0 0 1200 300'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%231e1b4b'/%3E%3Cstop offset='100%25' stop-color='%234338ca'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='1200' height='300' fill='url(%23g)'/%3E%3Ccircle cx='1050' cy='50' r='180' fill='%23ffffff' fill-opacity='0.06'/%3E%3C/svg%3E";
+const DEFAULT_BANNER_EMERALD =
+  "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='300' viewBox='0 0 1200 300'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%23064e3b'/%3E%3Cstop offset='100%25' stop-color='%230d9488'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='1200' height='300' fill='url(%23g)'/%3E%3Ccircle cx='1050' cy='50' r='180' fill='%23ffffff' fill-opacity='0.06'/%3E%3C/svg%3E";
+const DEFAULT_BANNER_CYAN =
+  "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='300' viewBox='0 0 1200 300'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%230f172a'/%3E%3Cstop offset='100%25' stop-color='%230284c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='1200' height='300' fill='url(%23g)'/%3E%3Ccircle cx='1050' cy='50' r='180' fill='%23ffffff' fill-opacity='0.06'/%3E%3C/svg%3E";
+
 const STORAGE_KEYS = {
   CURRENT_USER: 'classroom_current_user',
   USERS: 'classroom_users',
@@ -285,14 +294,18 @@ export class ClassroomDB {
       const existingCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, []);
       let coursesChanged = false;
       const upgradedCourses = existingCourses.map((c) => {
-        if (!c.bannerImage || c.bannerImage.startsWith('/src/assets/images/')) {
+        if (
+          !c.bannerImage ||
+          c.bannerImage.startsWith('/src/assets/images/') ||
+          c.bannerImage.includes('images.unsplash.com')
+        ) {
           coursesChanged = true;
           const nextBanner =
             c.id === 'course-data-sci'
-              ? 'https://images.unsplash.com/photo-1509062522246-3755977927d7?w=1200&h=300&fit=crop&q=85'
+              ? DEFAULT_BANNER_EMERALD
               : c.id === 'course-cyber-sec'
-              ? 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=1200&h=300&fit=crop&q=85'
-              : 'https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=1200&h=300&fit=crop&q=85';
+              ? DEFAULT_BANNER_CYAN
+              : DEFAULT_BANNER_INDIGO;
           return { ...c, bannerImage: nextBanner };
         }
         return c;
@@ -370,8 +383,7 @@ export class ClassroomDB {
           actorName: 'Dr. Kyaw Swar',
           actorUsername: 'kyawswar.admin',
           actorRole: 'admin',
-          actorAvatar:
-            'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+          actorAvatar: DEFAULT_AVATAR_SVG,
           category: 'security',
           actionCode: 'SECURITY_AUDIT_INITIALIZED',
           actionLabel: 'လုံခြုံရေး မှတ်တမ်းစနစ် စတင်ဖွင့်လှစ်ခြင်း (Audit System Active)',
@@ -1337,6 +1349,82 @@ export class ClassroomDB {
     return { user: newUser };
   }
 
+  static suggestUsername(rawName: string): string {
+    const trimmed = rawName.trim();
+    if (!trimmed) return 'student';
+
+    const mmWordMap: Array<[RegExp, string]> = [
+      [/မောင်/g, 'mg'],
+      [/ကို/g, 'ko'],
+      [/ဒေါ်/g, 'daw'],
+      [/ဦး/g, 'u'],
+      [/အောင်/g, 'aung'],
+      [/မင်း/g, 'min'],
+      [/ခန့်/g, 'khant'],
+      [/ကျော်/g, 'kyaw'],
+      [/စွာ/g, 'swar'],
+      [/ထွန်း/g, 'htun'],
+      [/နေ/g, 'nay'],
+      [/ဝင်း/g, 'win'],
+      [/စု/g, 'su'],
+      [/သူရ/g, 'thura'],
+      [/သူ/g, 'thu'],
+      [/စိုး/g, 'soe'],
+      [/နိုင်/g, 'naing'],
+      [/လင်း/g, 'lin'],
+      [/ထက်/g, 'htet'],
+      [/ဖြိုး/g, 'phyo'],
+      [/ပိုင်/g, 'paing'],
+      [/သက်/g, 'thet'],
+      [/ဇော်/g, 'zaw'],
+      [/မြတ်/g, 'myat'],
+      [/နွယ်/g, 'nwe'],
+      [/မေ/g, 'may'],
+      [/သဇင်/g, 'thazin'],
+      [/နှင်း/g, 'hnin'],
+      [/ရတနာ/g, 'yadanar'],
+      [/မိုး/g, 'moe'],
+      [/လှိုင်/g, 'hlaing'],
+      [/သန်း/g, 'than'],
+      [/သိန်း/g, 'thein'],
+      [/ဇင်/g, 'zin'],
+      [/မာ/g, 'mar'],
+      [/ဝေ/g, 'wai'],
+      [/ယဉ်/g, 'yin'],
+      [/ချို/g, 'cho'],
+      [/နီ/g, 'ni'],
+      [/ဖြူ/g, 'phyu'],
+      [/ရွှေ/g, 'shwe'],
+      [/စန်း/g, 'san'],
+      [/မြင့်/g, 'myint'],
+      [/ခင်/g, 'khin'],
+      [/မျိုး/g, 'myo'],
+      [/သီရိ/g, 'thiri'],
+      [/နန္ဒာ/g, 'nandar'],
+    ];
+
+    let working = trimmed.toLowerCase();
+    for (const [pattern, rom] of mmWordMap) {
+      working = working.replace(pattern, rom);
+    }
+
+    let base = working.replace(/[^a-z0-9]/g, '');
+    if (base.length < 3) {
+      base = `stu${Math.floor(100 + Math.random() * 900)}`;
+    } else if (base.length > 16) {
+      base = base.slice(0, 16);
+    }
+
+    const existingSet = new Set(this.getAllUsers().map((u) => u.username.toLowerCase()));
+    if (!existingSet.has(base)) return base;
+
+    let counter = 1;
+    while (existingSet.has(`${base}${counter}`)) {
+      counter++;
+    }
+    return `${base}${counter}`;
+  }
+
   static registerNewStudent(data: {
     name: string;
     username: string;
@@ -1344,6 +1432,7 @@ export class ClassroomDB {
     phone: string;
     password?: string;
     avatar?: string;
+    title?: string;
     gender?: 'male' | 'female' | 'other';
     address?: string;
     initialCourseId?: string;

@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { User } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
-import { PRESET_AVATARS, compressImageFile } from '../data/presetAvatars';
+import { PRESET_AVATARS, DEFAULT_AVATAR_SVG, compressImageFile } from '../data/presetAvatars';
 import {
   X,
   Upload,
@@ -27,7 +27,7 @@ export const ProfilePictureModal: React.FC<ProfilePictureModalProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const [selectedAvatar, setSelectedAvatar] = useState<string>(user.avatar);
+  const [selectedAvatar, setSelectedAvatar] = useState<string>(user.avatar || DEFAULT_AVATAR_SVG);
   const [activeTab, setActiveTab] = useState<'upload' | 'preset' | 'url'>('upload');
   const [customUrl, setCustomUrl] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -143,14 +143,13 @@ export const ProfilePictureModal: React.FC<ProfilePictureModalProps> = ({
           <div className="flex flex-col sm:flex-row items-center gap-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800">
             <div className="relative group shrink-0">
               <img
-                src={selectedAvatar}
+                src={selectedAvatar || DEFAULT_AVATAR_SVG}
                 alt="Avatar preview"
                 referrerPolicy="no-referrer"
                 className="w-20 h-20 sm:w-24 sm:h-24 rounded-full object-cover ring-4 ring-indigo-500/20 shadow-md"
                 onError={(e) => {
                   // Fallback if URL is broken
-                  (e.target as HTMLImageElement).src =
-                    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80';
+                  (e.target as HTMLImageElement).src = DEFAULT_AVATAR_SVG;
                 }}
               />
               <div className="absolute inset-0 rounded-full bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
