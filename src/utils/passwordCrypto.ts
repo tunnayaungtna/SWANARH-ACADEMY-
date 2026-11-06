@@ -316,3 +316,33 @@ export function getEncryptedHashFingerprint(
   }
   return 'ENC_V1:Protected';
 }
+
+/**
+ * Computes an HMAC-SHA256 integrity seal over a logged-in user's identity and role (`userId`, `role`, `username`).
+ * Prevents privilege escalation if a user tampers with `localStorage` in Browser DevTools.
+ */
+export function computeSessionIntegritySeal(
+  userId: string,
+  role: UserRole,
+  username: string
+): string {
+  const payload = `${MASTER_PEPPER}::SESSION_SEAL_V1::${userId.trim()}::${role.trim()}::${username
+    .trim()
+    .toLowerCase()}`;
+  const digest = sha256Bytes(utf8ToBytes(payload));
+  return `SEAL_V1:${bytesToHex(digest.subarray(0, 16))}`;
+}
+
+export function verifySessionIntegritySeal(
+  userId: string,
+  role: UserRole,
+  username: string,
+  seal?: string | null
+): boolean {
+  if (!seal || typeof seal !== 'string' || !seal.startsWith('SEAL_V1:')) {
+    return false;
+  }
+  const expected = computeSessionIntegritySeal(userId, role, username);
+  return constantTimeEqual(seal, expected);
+}
+

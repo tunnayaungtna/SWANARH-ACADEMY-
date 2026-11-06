@@ -11,13 +11,54 @@ const SUPABASE_TARGET_ORIGIN =
 const SUPABASE_DEFAULT_KEY =
   process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_mhYrcHRIdU-2EXQoXATDaw_s4vO4ZXv';
 
+const parsedTargetOrigin = new URL(SUPABASE_TARGET_ORIGIN).origin;
+
+// Per-IP sliding-window rate limiter for /api/sb-proxy to prevent abuse / DoS
+const ipRequestBuckets = new Map<string, number[]>();
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 360;
+
+function checkProxyRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const recent = (ipRequestBuckets.get(ip) || []).filter((ts) => now - ts < RATE_LIMIT_WINDOW_MS);
+  if (recent.length >= RATE_LIMIT_MAX_REQUESTS) {
+    ipRequestBuckets.set(ip, recent);
+    return false;
+  }
+  recent.push(now);
+  ipRequestBuckets.set(ip, recent);
+  if (ipRequestBuckets.size > 5000) {
+    for (const [key, timestamps] of ipRequestBuckets.entries()) {
+      if (timestamps.every((ts) => now - ts >= RATE_LIMIT_WINDOW_MS)) {
+        ipRequestBuckets.delete(key);
+      }
+    }
+  }
+  return true;
+}
+
+function isAllowedSupabaseSubPath(subPath: string): boolean {
+  if (!subPath.startsWith('/')) return false;
+  if (subPath.startsWith('//') || subPath.includes('..') || subPath.includes('\\')) {
+    return false;
+  }
+  return (
+    subPath.startsWith('/rest/v1/') ||
+    subPath.startsWith('/auth/v1/') ||
+    subPath.startsWith('/storage/v1/')
+  );
+}
+
 async function startServer() {
   const app = express();
+  app.disable('x-powered-by');
   const PORT = Number(process.env.PORT) || 3000;
 
-  // Global CORS support so students on www.swanarhclassroom.online or any mirror domain
-  // can transparently relay Supabase queries through this Singapore Cloud Run server without VPN
+  // Security & Global CORS headers so students in Myanmar and worldwide can access seamlessly
   app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader(
       'Access-Control-Allow-Methods',
@@ -25,11 +66,11 @@ async function startServer() {
     );
     res.setHeader(
       'Access-Control-Allow-Headers',
-      'Origin, X-Requested-With, Content-Type, Accept, Authorization, apikey, Prefer, Range, x-client-info, x-supabase-api-version'
+      'Origin, X-Requested-With, Content-Type, Accept, Accept-Profile, Content-Profile, Authorization, apikey, Prefer, Range, x-client-info, x-supabase-api-version'
     );
     res.setHeader(
       'Access-Control-Expose-Headers',
-      'Content-Range, Range-Unit, X-Total-Count, Content-Location'
+      'Content-Range, Range-Unit, X-Total-Count, Content-Location, Preference-Applied'
     );
     if (req.method === 'OPTIONS') {
       res.status(204).end();
@@ -38,7 +79,7 @@ async function startServer() {
     next();
   });
 
-  // Health check endpoint for Geo-Resilient multi-route detector
+  // Health check endpoint
   app.get('/api/health', (_req, res) => {
     res.status(200).json({
       ok: true,
@@ -47,14 +88,41 @@ async function startServer() {
     });
   });
 
-  // Raw body parser specifically for /api/sb-proxy so POST/PATCH/UPSERT payloads forward cleanly
+  // Hardened /api/sb-proxy reverse proxy with strict SSRF & path validation
   app.use(
     '/api/sb-proxy',
-    express.raw({ type: '*/*', limit: '10mb' }),
+    express.raw({ type: '*/*', limit: '6mb' }),
     async (req, res) => {
       try {
-        const subPath = req.originalUrl.replace(/^\/api\/sb-proxy/, '') || '/';
-        const targetUrl = `${SUPABASE_TARGET_ORIGIN.replace(/\/+$/, '')}${subPath.startsWith('/') ? subPath : `/${subPath}`}`;
+        const clientIp =
+          (typeof req.headers['x-forwarded-for'] === 'string'
+            ? req.headers['x-forwarded-for'].split(',')[0].trim()
+            : req.socket.remoteAddress) || 'unknown';
+
+        if (!checkProxyRateLimit(clientIp)) {
+          res.status(429).json({
+            message: 'Too many requests. Please wait a moment and try again.',
+          });
+          return;
+        }
+
+        const rawSub = req.originalUrl.replace(/^\/api\/sb-proxy/, '') || '/';
+        const normalizedSub = rawSub.startsWith('/') ? rawSub : `/${rawSub}`;
+
+        if (!isAllowedSupabaseSubPath(normalizedSub)) {
+          res.status(403).json({
+            message: 'Forbidden proxy path.',
+          });
+          return;
+        }
+
+        const targetUrl = new URL(normalizedSub, parsedTargetOrigin);
+        if (targetUrl.origin !== parsedTargetOrigin) {
+          res.status(403).json({
+            message: 'Invalid target origin.',
+          });
+          return;
+        }
 
         const forwardHeaders = new Headers();
         const allowedIncomingHeaders = [
@@ -91,40 +159,52 @@ async function startServer() {
           Buffer.isBuffer(req.body) &&
           req.body.length > 0;
 
-        const upstreamRes = await fetch(targetUrl, {
-          method: req.method,
-          headers: forwardHeaders,
-          body: hasBody ? new Uint8Array(req.body) : undefined,
-        });
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15_000);
 
-        res.status(upstreamRes.status);
+        try {
+          const upstreamRes = await fetch(targetUrl.toString(), {
+            method: req.method,
+            headers: forwardHeaders,
+            body: hasBody ? new Uint8Array(req.body) : undefined,
+            signal: controller.signal,
+          });
 
-        const passthroughResponseHeaders = [
-          'content-type',
-          'content-range',
-          'range-unit',
-          'x-total-count',
-          'content-location',
-          'preference-applied',
-        ];
-        for (const h of passthroughResponseHeaders) {
-          const val = upstreamRes.headers.get(h);
-          if (val) {
-            res.setHeader(h, val);
+          res.status(upstreamRes.status);
+
+          const passthroughResponseHeaders = [
+            'content-type',
+            'content-range',
+            'range-unit',
+            'x-total-count',
+            'content-location',
+            'preference-applied',
+          ];
+          for (const h of passthroughResponseHeaders) {
+            const val = upstreamRes.headers.get(h);
+            if (val) {
+              res.setHeader(h, val);
+            }
           }
-        }
 
-        const arrayBuf = await upstreamRes.arrayBuffer();
-        res.send(Buffer.from(arrayBuf));
+          const arrayBuf = await upstreamRes.arrayBuffer();
+          res.send(Buffer.from(arrayBuf));
+        } finally {
+          clearTimeout(timeout);
+        }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         res.status(502).json({
           message: `Global Relay Proxy Error: ${msg}`,
-          hint: 'Automatic failover route encountered an upstream network issue.',
         });
       }
     }
   );
+
+  // Reject any unknown /api/* route with JSON 404
+  app.use('/api', (_req, res) => {
+    res.status(404).json({ message: 'API route not found.' });
+  });
 
   const distDir = path.resolve(__dirname, 'dist');
   const isProd = process.env.NODE_ENV === 'production';

@@ -25,6 +25,8 @@ import {
   verifyPassword,
   isEncryptedPassword,
   getEncryptedHashFingerprint,
+  computeSessionIntegritySeal,
+  verifySessionIntegritySeal,
 } from '../utils/passwordCrypto';
 import {
   INITIAL_USERS,
@@ -62,6 +64,7 @@ const STORAGE_KEYS = {
   KICK_REASON: 'classroom_os_kick_reason_v1',
   NOTIFIED_POST_IDS: 'classroom_os_notified_post_ids_v1',
   AUDIT_LOGS: 'classroom_os_audit_logs_v1',
+  SESSION_SEAL: 'classroom_os_session_seal_v1',
 };
 
 // Rate limiting in-memory / storage tracker
@@ -687,8 +690,12 @@ export class ClassroomDB {
     }
   }
 
-  // Reset database to initial state
+  // Reset database to initial state (Restricted to Primary Admin)
   static resetAll(): void {
+    const currentLogged = this.getCurrentUser();
+    if (!currentLogged || currentLogged.role !== 'admin') {
+      return;
+    }
     this.memoryCache.clear();
     localStorage.clear();
     this.init();
@@ -700,15 +707,20 @@ export class ClassroomDB {
       textProtectionEnabled: true,
       dynamicWatermarkEnabled: true,
       watermarkOpacity: 0.22,
-      domainRestriction: window.location.host,
+      domainRestriction: typeof window !== 'undefined' ? window.location.host : 'www.swanarhclassroom.online',
     });
   }
 
   static updateSecuritySettings(settings: Partial<SecuritySettings>): SecuritySettings {
+    const currentLogged = this.getCurrentUser();
     const current = this.getSecuritySettings();
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
+      return current;
+    }
     const updated = { ...current, ...settings };
     this.setItem(STORAGE_KEYS.SECURITY_SETTINGS, updated);
     this.recordAuditLog({
+      actor: currentLogged,
       category: 'security',
       actionCode: 'SECURITY_SETTINGS_UPDATED',
       actionLabel: 'ဗီဒီယိုနှင့် လုံခြုံရေး Setting ပြင်ဆင်ခြင်း (Security Settings Updated)',
@@ -753,20 +765,54 @@ export class ClassroomDB {
     };
   }
 
-  // Current User & Authentication
+  // Current User & Authentication (Protected by HMAC-SHA256 Session Integrity Seal)
   static getCurrentUser(): User | null {
     this.init();
     const storedUser = this.getItem<User | null>(STORAGE_KEYS.CURRENT_USER, null);
-    if (!storedUser) return null;
+    if (!storedUser || !storedUser.id) return null;
 
-    // Verify user still exists in database and keep session profile fresh (without exposing plaintext password in session state)
+    // Verify user still exists in database and verify HMAC-SHA256 Session Seal against DevTools role tampering
     const allUsers = this.getAllUsers();
     const freshUser = allUsers.find((u) => u.id === storedUser.id);
-    if (!freshUser) {
+    if (!freshUser || storedUser.role !== freshUser.role) {
       this.memoryCache.delete(STORAGE_KEYS.CURRENT_USER);
-      localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+      try {
+        localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+        localStorage.removeItem(STORAGE_KEYS.SESSION_SEAL);
+      } catch {
+        // ignore
+      }
       return null;
     }
+
+    try {
+      const storedSeal = localStorage.getItem(STORAGE_KEYS.SESSION_SEAL);
+      if (!storedSeal) {
+        // One-time seal initialization for pre-existing valid sessions
+        const initialSeal = computeSessionIntegritySeal(
+          freshUser.id,
+          freshUser.role,
+          freshUser.username
+        );
+        localStorage.setItem(STORAGE_KEYS.SESSION_SEAL, initialSeal);
+      } else if (
+        !verifySessionIntegritySeal(
+          freshUser.id,
+          freshUser.role,
+          freshUser.username,
+          storedSeal
+        )
+      ) {
+        // Session or role was tampered with in DevTools localStorage!
+        this.memoryCache.delete(STORAGE_KEYS.CURRENT_USER);
+        localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+        localStorage.removeItem(STORAGE_KEYS.SESSION_SEAL);
+        return null;
+      }
+    } catch {
+      // ignore storage read errors
+    }
+
     const { password: _pwd, ...safeUser } = freshUser;
     return safeUser;
   }
@@ -774,18 +820,34 @@ export class ClassroomDB {
   static setCurrentUser(user: User | null): void {
     if (user === null) {
       this.memoryCache.delete(STORAGE_KEYS.CURRENT_USER);
-      localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+      try {
+        localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+        localStorage.removeItem(STORAGE_KEYS.SESSION_SEAL);
+      } catch {
+        // ignore
+      }
     } else {
       const { password: _pwd, ...safeSessionUser } = user;
       this.setItem(STORAGE_KEYS.CURRENT_USER, safeSessionUser);
+      try {
+        const seal = computeSessionIntegritySeal(user.id, user.role, user.username);
+        localStorage.setItem(STORAGE_KEYS.SESSION_SEAL, seal);
+      } catch {
+        // ignore
+      }
     }
   }
 
   static logout(): void {
     const storedUser = this.getItem<User | null>(STORAGE_KEYS.CURRENT_USER, null);
     this.memoryCache.delete(STORAGE_KEYS.CURRENT_USER);
-    localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
-    localStorage.removeItem(STORAGE_KEYS.SESSION_TOKEN);
+    try {
+      localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+      localStorage.removeItem(STORAGE_KEYS.SESSION_TOKEN);
+      localStorage.removeItem(STORAGE_KEYS.SESSION_SEAL);
+    } catch {
+      // ignore
+    }
 
     // Only mark activeDeviceId as LOGGED_OUT for student accounts (since Admin/Co-Admin can be active on multiple devices simultaneously)
     if (storedUser && storedUser.role === 'student') {
@@ -817,6 +879,7 @@ export class ClassroomDB {
     try {
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
       localStorage.removeItem(STORAGE_KEYS.SESSION_TOKEN);
+      localStorage.removeItem(STORAGE_KEYS.SESSION_SEAL);
     } catch {
       // ignore
     }
@@ -911,6 +974,19 @@ export class ClassroomDB {
    * Decrypts a user's stored ENC_V1 ciphertext password in memory for authorized Admin / Co-Admin inspection or credential copy.
    */
   static getDecryptedPassword(user: User): string {
+    const currentLogged = this.getCurrentUser();
+    if (
+      !currentLogged ||
+      (currentLogged.role !== 'admin' &&
+        currentLogged.role !== 'co_admin' &&
+        currentLogged.id !== user.id)
+    ) {
+      return '••••••••';
+    }
+    // Co-Admin cannot reveal Primary Admin's password
+    if (currentLogged.role === 'co_admin' && user.role === 'admin') {
+      return '••••••••';
+    }
     return decryptPassword(user.password, user.role);
   }
 
@@ -1171,14 +1247,12 @@ export class ClassroomDB {
       };
     }
 
-    // Curated high quality avatars for Admin & Co-Admin only (Students never have profile photos)
+    // Zero-latency offline-safe SVG avatars for Admin & Co-Admin only (Students never have profile photos)
     const avatarPool = [
-      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-      'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
-      'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
-      'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-      'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-      'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80',
+      "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'><rect width='120' height='120' rx='60' fill='%23059669'/><circle cx='60' cy='45' r='22' fill='%23ffffff' fill-opacity='0.92'/><path d='M24 104c6-20 22-32 36-32s30 12 36 32' fill='%23ffffff' fill-opacity='0.92'/></svg>",
+      "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'><rect width='120' height='120' rx='60' fill='%230284c7'/><circle cx='60' cy='45' r='22' fill='%23ffffff' fill-opacity='0.92'/><path d='M24 104c6-20 22-32 36-32s30 12 36 32' fill='%23ffffff' fill-opacity='0.92'/></svg>",
+      "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'><rect width='120' height='120' rx='60' fill='%234f46e5'/><circle cx='60' cy='45' r='22' fill='%23ffffff' fill-opacity='0.92'/><path d='M24 104c6-20 22-32 36-32s30 12 36 32' fill='%23ffffff' fill-opacity='0.92'/></svg>",
+      "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'><rect width='120' height='120' rx='60' fill='%23d97706'/><circle cx='60' cy='45' r='22' fill='%23ffffff' fill-opacity='0.92'/><path d='M24 104c6-20 22-32 36-32s30 12 36 32' fill='%23ffffff' fill-opacity='0.92'/></svg>",
     ];
     const finalAvatar =
       data.role === 'student'
@@ -1673,7 +1747,7 @@ export class ClassroomDB {
 
   static enrollStudent(courseId: string, studentId: string, skipAuditLog: boolean = false): boolean {
     const currentLogged = this.getCurrentUser();
-    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
       return false;
     }
     const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
@@ -1721,7 +1795,7 @@ export class ClassroomDB {
 
   static unenrollStudent(courseId: string, studentId: string): boolean {
     const currentLogged = this.getCurrentUser();
-    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
       return false;
     }
     const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
@@ -1767,7 +1841,7 @@ export class ClassroomDB {
 
   static createCourse(newCourse: Omit<Course, 'id'>): Course {
     const currentLogged = this.getCurrentUser();
-    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
       throw new Error('Unauthorized: Only Admin or Co-Admin can create courses.');
     }
     const existing = this.sortCoursesByCustomOrder(
@@ -1816,7 +1890,7 @@ export class ClassroomDB {
    */
   static reorderCourses(orderedCourseIds: string[]): Course[] {
     const currentLogged = this.getCurrentUser();
-    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
       return this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
     }
     const currentCourses = this.sortCoursesByCustomOrder(
@@ -1917,7 +1991,7 @@ export class ClassroomDB {
     applyToAllCourses: boolean = false
   ): Course | null {
     const currentLogged = this.getCurrentUser();
-    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
       return null;
     }
     const cleanBanner = bannerImage.trim();
@@ -3151,8 +3225,15 @@ export class ClassroomDB {
     const isPinned = isInstructor && Boolean(postData.isPinned);
 
     const nowMs = Date.now();
+    const safeAttachments = (postData.attachments || []).map((att) => ({
+      ...att,
+      url: /^(javascript|vbscript|data:text\/html)/i.test((att.url || '').trim())
+        ? '#'
+        : att.url,
+    }));
     const newPost: CoursePost = {
       ...postData,
+      attachments: safeAttachments,
       authorAvatar: currentUser.role === 'student' ? '' : currentUser.avatar || postData.authorAvatar,
       isPinned,
       status: isScheduled ? 'scheduled' : 'published',
@@ -3735,7 +3816,7 @@ export class ClassroomDB {
 
   static gradeAssignment(submissionId: string, grade: number, feedback: string): boolean {
     const currentLogged = this.getCurrentUser();
-    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
       return false;
     }
     const safeGrade = Math.max(0, Math.min(100, Number.isFinite(grade) ? Math.round(grade) : 0));
@@ -4199,7 +4280,7 @@ export class ClassroomDB {
 
   static toggleAttendanceSessionOpen(sessionId: string, isOpen: boolean): AttendanceSession | null {
     const currentLogged = this.getCurrentUser();
-    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
       return null;
     }
     const sessions = this.getItem<AttendanceSession[]>(
@@ -4248,7 +4329,7 @@ export class ClassroomDB {
 
   static deleteAttendanceSession(sessionId: string): boolean {
     const currentLogged = this.getCurrentUser();
-    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
       return false;
     }
     const sessions = this.getItem<AttendanceSession[]>(
@@ -4358,7 +4439,7 @@ export class ClassroomDB {
     note?: string
   ): boolean {
     const currentLogged = this.getCurrentUser();
-    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
       return false;
     }
     const sessions = this.getItem<AttendanceSession[]>(
@@ -4406,7 +4487,7 @@ export class ClassroomDB {
     status: AttendanceStatus
   ): boolean {
     const currentLogged = this.getCurrentUser();
-    if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
       return false;
     }
     const sessions = this.getItem<AttendanceSession[]>(
