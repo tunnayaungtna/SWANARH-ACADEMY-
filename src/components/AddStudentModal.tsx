@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Course } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
 import { SupabaseService } from '../services/supabase';
@@ -31,6 +31,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
   onStudentEnrolled,
 }) => {
   useBackHandler(isOpen, onClose);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const [activeTab, setActiveTab] = useState<'existing' | 'new'>('existing');
   const [searchQuery, setSearchQuery] = useState('');
@@ -81,6 +82,52 @@ Email:
 အလုပ်အကိုင်/ပညာအရည်အချင်း: 
 ကျား/မ(Gender): 
 နေရပ်လိပ်စာ(Address): `;
+
+  const buildStudentCredentialMessage = (info: {
+    name: string;
+    username: string;
+    password: string;
+    occupation?: string;
+    coursesLabel: string;
+  }): string => {
+    const loginUrl =
+      typeof window !== 'undefined' &&
+      window.location.hostname &&
+      !window.location.hostname.includes('.run.app') &&
+      window.location.hostname !== 'localhost' &&
+      window.location.hostname !== '127.0.0.1'
+        ? window.location.origin
+        : 'https://www.swanarhclassroom.online';
+
+    const lines = [
+      `🎓 SwanArh Digital Academy (Student (ကျောင်းသား) Login)`,
+      `━━━━━━━━━━━━━━━━━━━━`,
+      `👤 အမည် (Name): ${info.name}`,
+      `🔑 Username: ${info.username}`,
+      `🔒 Password: ${info.password}`,
+    ];
+    if (info.occupation) {
+      lines.push(`💼 အလုပ်အကိုင်/ပညာအရည်အချင်း: ${info.occupation}`);
+    }
+    if (info.coursesLabel) {
+      lines.push(`📚 တက်ရောက်ခွင့်ရသည့်အတန်း: ${info.coursesLabel}`);
+    }
+    lines.push(`🌐 Login ဝင်ရန် လင့်ခ် (Login Link):`);
+    lines.push(loginUrl);
+    lines.push(`━━━━━━━━━━━━━━━━━━━━`);
+    lines.push(`📌 သတိပြုရန် အချက်များ -`);
+    lines.push(
+      `၁။ ကျောင်းသား/သူများသည် Device တစ်ခုတည်းသာ Login ဝင်လို့ရပါမည်။ တခြား Device မှာ အသုံးပြုလိုပါက အရင်ဝင်ထားတဲ့ Device မှ Logout ထွက်ပြီးမှ Login ဝင်လို့ရပါမည်။`
+    );
+    lines.push(
+      `၂။ Login ဝင်ပြီးပါက ပေါ်လာသည့် သင်တန်းစည်းကမ်းချက်များကို သေချာဖတ်ပြီး "သိရှိလိုက်နာပါမည်" ကို ရွေးချယ်ပြီးမှ Classroom ကို ဝင်ရောက်လို့ရပါမည်။`
+    );
+    lines.push(
+      `၃။ သင်တန်းမှ ပထမဆုံးပေးသော Password ကို Classroom ထဲရောက်ပါက မိမိအသုံးပြုမည့် Password ကို ပြန်ချိန်းပြီးမှ သုံးပါ။`
+    );
+    lines.push(`━━━━━━━━━━━━━━━━━━━━`);
+    return lines.join('\n');
+  };
 
   const normalizeMyanmarPhone = (val: string): string => {
     const mmDigits: Record<string, string> = {
@@ -269,7 +316,13 @@ Email:
 
     if (autoCopyAfterCreate) {
       navigator.clipboard.writeText(
-        `SwanArh Classroom Login:\nURL: https://www.swanarhclassroom.online/\nName: ${cleanName}\nUsername: ${cleanUsername}\nPassword: ${newPassword.trim()}\nClass: ${finalCoursesLabel}`
+        buildStudentCredentialMessage({
+          name: cleanName,
+          username: cleanUsername,
+          password: newPassword.trim(),
+          occupation: newTitle.trim() || undefined,
+          coursesLabel: finalCoursesLabel,
+        })
       );
       setCopied(true);
       setTimeout(() => setCopied(false), 3000);
@@ -294,6 +347,9 @@ Email:
     setNewPassword('student123');
 
     onStudentEnrolled();
+    setTimeout(() => {
+      scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    }, 60);
   };
 
   const handleCreateAndEnroll = (e: React.FormEvent) => {
@@ -358,7 +414,10 @@ Email:
         </div>
 
         {/* Scrollable Container */}
-        <div className="overflow-y-auto p-4 sm:p-6 space-y-4">
+        <div
+          ref={scrollContainerRef}
+          className="overflow-y-auto flex-1 min-h-0 p-4 sm:p-6 space-y-4"
+        >
           {/* Status Alerts */}
           {successMessage && (
             <div className="flex items-start gap-2 p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/50 text-emerald-800 dark:text-emerald-300 text-xs rounded-xl">
@@ -447,7 +506,12 @@ Email:
                       type="button"
                       onClick={() => {
                         navigator.clipboard.writeText(
-                          `SwanArh Classroom Login:\nURL: https://www.swanarhclassroom.online/\nName: ${createdDetails.name}\nUsername: ${createdDetails.username}\nPassword: ${createdDetails.password}\nClass: ${createdDetails.coursesLabel || course.code}`
+                          buildStudentCredentialMessage({
+                            name: createdDetails.name,
+                            username: createdDetails.username,
+                            password: createdDetails.password,
+                            coursesLabel: createdDetails.coursesLabel || course.code,
+                          })
                         );
                         setCopied(true);
                         setTimeout(() => setCopied(false), 2500);
@@ -468,6 +532,12 @@ Email:
                       <span className="text-slate-400 block text-[10px]">PASSWORD</span>
                       <span className="font-bold text-emerald-600 dark:text-emerald-400">{createdDetails.password}</span>
                     </div>
+                  </div>
+                  <div className="p-2 rounded-lg bg-amber-50/90 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/70 text-[10px] text-amber-950 dark:text-amber-200 space-y-0.5 leading-snug">
+                    <div className="font-bold">📌 Copy ကူးယူရာတွင် တစ်ပါတည်း ပါဝင်မည့် လမ်းညွှန်ချက်များ -</div>
+                    <div>၁။ Device တစ်ခုတည်းသာ Login ဝင်လို့ရပါမည် (အခြား Device ပြောင်းလိုပါက အရင် Logout ထွက်ရမည်)</div>
+                    <div>၂။ သင်တန်းစည်းကမ်းချက်များကို ဖတ်ပြီး "သိရှိလိုက်နာပါမည်" ရွေးချယ်ရမည်</div>
+                    <div>၃။ ပထမဆုံးပေးသော Password ကို မိမိအသုံးပြုမည့် Password သို့ ပြန်ချိန်းပြီးမှ သုံးရမည်</div>
                   </div>
                 </div>
               )}

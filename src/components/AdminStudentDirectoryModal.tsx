@@ -78,6 +78,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
   const [auditFilterMode, setAuditFilterMode] = useState<'accepted_only' | 'all'>('accepted_only');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Profile Picture Editing Modal state
   const [editingAvatarUser, setEditingAvatarUser] = useState<User | null>(null);
@@ -549,29 +550,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     setCreatedCredentials(newCredsObj);
 
     if (autoCopyAfterSingleCreate) {
-      const roleLabel =
-        selectedRole === 'admin'
-          ? 'Admin (ဆရာ)'
-          : selectedRole === 'co_admin'
-          ? 'Co-Admin (တွဲဖက်ဆရာ)'
-          : 'Student (ကျောင်းသား)';
-      const copyLines = [
-        `🎓 SwanArh Digital Academy (${roleLabel} Login)`,
-        `━━━━━━━━━━━━━━━━━━━━`,
-        `👤 အမည် (Name): ${newCredsObj.name}`,
-        `🔑 Username: ${newCredsObj.username}`,
-        `🔒 Password: ${newCredsObj.password}`,
-      ];
-      if (newCredsObj.occupation) {
-        copyLines.push(`💼 အလုပ်အကိုင်/ပညာအရည်အချင်း: ${newCredsObj.occupation}`);
-      }
-      if (newCredsObj.courseName) {
-        copyLines.push(`📚 တက်ရောက်ခွင့်ရသည့်အတန်း: ${newCredsObj.courseName}`);
-      }
-      copyLines.push(`🌐 Login ဝင်ရန် လင့်ခ် (Login Link):`);
-      copyLines.push(loginLink);
-      copyLines.push(`━━━━━━━━━━━━━━━━━━━━`);
-      navigator.clipboard.writeText(copyLines.join('\n')).catch(() => {});
+      navigator.clipboard.writeText(formatCredentialMessage(newCredsObj)).catch(() => {});
       setCopiedSuccess(true);
       setTimeout(() => setCopiedSuccess(false), 4000);
     }
@@ -589,6 +568,9 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     setAutoCopyAfterSingleCreate(false);
     setShowNewForm(false);
     setIsSubmitting(false);
+    setTimeout(() => {
+      scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    }, 60);
 
     const syncNote = supabaseRes.profileSynced
       ? 'Supabase Cloud & Local Database သို့ ချိတ်ဆက်သိမ်းဆည်းပြီးပါပြီ။'
@@ -625,7 +607,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     setTimeout(() => setToastMsg(null), 6000);
   };
 
-  const formatCredentialMessage = (creds: {
+  function formatCredentialMessage(creds: {
     name: string;
     username: string;
     password: string;
@@ -635,7 +617,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     gender?: string;
     address?: string;
     loginUrl?: string;
-  }): string => {
+  }): string {
     const roleLabel =
       creds.role === 'admin'
         ? 'Admin (ဆရာ)'
@@ -660,8 +642,19 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     lines.push(`🌐 Login ဝင်ရန် လင့်ခ် (Login Link):`);
     lines.push(loginLink);
     lines.push(`━━━━━━━━━━━━━━━━━━━━`);
+    lines.push(`📌 သတိပြုရန် အချက်များ -`);
+    lines.push(
+      `၁။ ကျောင်းသား/သူများသည် Device တစ်ခုတည်းသာ Login ဝင်လို့ရပါမည်။ တခြား Device မှာ အသုံးပြုလိုပါက အရင်ဝင်ထားတဲ့ Device မှ Logout ထွက်ပြီးမှ Login ဝင်လို့ရပါမည်။`
+    );
+    lines.push(
+      `၂။ Login ဝင်ပြီးပါက ပေါ်လာသည့် သင်တန်းစည်းကမ်းချက်များကို သေချာဖတ်ပြီး "သိရှိလိုက်နာပါမည်" ကို ရွေးချယ်ပြီးမှ Classroom ကို ဝင်ရောက်လို့ရပါမည်။`
+    );
+    lines.push(
+      `၃။ သင်တန်းမှ ပထမဆုံးပေးသော Password ကို Classroom ထဲရောက်ပါက မိမိအသုံးပြုမည့် Password ကို ပြန်ချိန်းပြီးမှ သုံးပါ။`
+    );
+    lines.push(`━━━━━━━━━━━━━━━━━━━━`);
     return lines.join('\n');
-  };
+  }
 
   const handleCopyCredentials = (creds: {
     name: string;
@@ -1113,6 +1106,9 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     setPasteRawText('');
     setShowNewForm(false);
     setIsSubmitting(false);
+    setTimeout(() => {
+      scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    }, 60);
 
     setToastMsg(
       `🎉 ကျောင်းသားအကောင့်သစ် (${createdList.length}) ဦးကို တစ်ပြိုင်နက် ဖွင့်လှစ်ပြီး အတန်းသွင်းပေးပြီးပါပြီ! တစ်ဦးချင်းစီအတွက် Copy ခလုတ်နှိပ်၍ ပေးပို့နိုင်ပါပြီ။`
@@ -1354,188 +1350,221 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
             </div>
           </div>
 
-          {/* Status Toast */}
-          {toastMsg && (
-            <div className="mx-4 mt-3 flex items-center justify-between gap-2 p-3 bg-emerald-50 dark:bg-emerald-950/70 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs rounded-xl shadow-2xs shrink-0">
-              <div className="flex items-center gap-2 min-w-0">
-                <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                <span className="truncate">{toastMsg}</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setToastMsg(null)}
-                className="text-emerald-700 dark:text-emerald-300 hover:opacity-75 text-xs font-bold px-1 cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-          )}
-
-          {/* Newly Created Account Credentials Banner */}
-          {createdCredentials && (
-            <div className="mx-4 mt-3 p-3.5 sm:p-4 bg-indigo-50/90 dark:bg-indigo-950/50 border-2 border-indigo-300 dark:border-indigo-700 rounded-2xl shadow-xs text-xs space-y-2.5 shrink-0">
-              <div className="flex items-center justify-between gap-2">
+          {/* Main Scrollable Content Area (Everything inside scrolls smoothly) */}
+          <div
+            ref={scrollContainerRef}
+            className="p-3.5 sm:p-5 overflow-y-auto flex-1 min-h-0 space-y-4 min-w-0"
+          >
+            {/* Status Toast */}
+            {toastMsg && (
+              <div className="flex items-center justify-between gap-2 p-3 bg-emerald-50 dark:bg-emerald-950/70 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs rounded-xl shadow-2xs">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold shrink-0">
-                    ✓
-                  </span>
-                  <h4 className="font-bold text-slate-900 dark:text-white text-xs sm:text-sm truncate">
-                    {createdCredentials.role === 'admin'
-                      ? 'Admin'
-                      : createdCredentials.role === 'co_admin'
-                      ? 'Co-Admin'
-                      : 'Student'}{' '}
-                    အကောင့်သစ် ဖွင့်ပြီးပါပြီ — Copy နှိပ်၍ Login လင့်ခ်နှင့် အချက်အလက်အားလုံး ကူးယူပေးပို့နိုင်ပါသည်
-                  </h4>
+                  <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  <span className="break-words">{toastMsg}</span>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setCreatedCredentials(null)}
-                  className="text-slate-400 hover:text-slate-700 dark:hover:text-white font-bold p-1 cursor-pointer"
+                  onClick={() => setToastMsg(null)}
+                  className="text-emerald-700 dark:text-emerald-300 hover:opacity-75 text-xs font-bold px-1 cursor-pointer shrink-0"
                 >
                   ✕
                 </button>
               </div>
+            )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 bg-white dark:bg-slate-800 p-3 rounded-xl border border-indigo-200 dark:border-indigo-900/60 font-mono text-[11px]">
-                <div className="min-w-0">
-                  <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">အမည် (Name)</span>
-                  <span className="font-bold text-slate-900 dark:text-white truncate block">{createdCredentials.name}</span>
-                </div>
-                <div className="min-w-0">
-                  <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">Username</span>
-                  <span className="font-bold text-indigo-600 dark:text-indigo-300 truncate block">{createdCredentials.username}</span>
-                </div>
-                <div className="min-w-0">
-                  <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">Password</span>
-                  <span className="font-bold text-emerald-600 dark:text-emerald-400 truncate block">{createdCredentials.password}</span>
-                </div>
-                <div className="min-w-0">
-                  <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">အလုပ်အကိုင်/ပညာအရည်အချင်း</span>
-                  <span className="text-slate-700 dark:text-slate-300 truncate block font-sans">{createdCredentials.occupation || '—'}</span>
-                </div>
-                <div className="min-w-0">
-                  <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">Login ဝင်ရန် လင့်ခ်</span>
-                  <span className="font-bold text-indigo-600 dark:text-indigo-400 truncate block">{createdCredentials.loginUrl}</span>
-                </div>
-              </div>
-
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-0.5">
-                <span className="text-[11px] text-slate-600 dark:text-slate-300">
-                  📋 Copy နှိပ်ပါက <strong>Login Link, အမည်, Username, Password</strong> အားလုံး တစ်ခါတည်း ကူးယူပေးပါမည်။
-                </span>
-                <button
-                  type="button"
-                  onClick={() => handleCopyCredentials(createdCredentials)}
-                  className="flex items-center justify-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs cursor-pointer shadow-xs shrink-0"
-                >
-                  {copiedSuccess ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                  <span>
-                    {copiedSuccess
-                      ? 'Copied! (Login Link + အချက်အလက် الكوبي ကူးပြီးပါပြီ)'
-                      : 'Copy Login Info (Login လင့်ခ်နှင့် အချက်အလက်အားလုံး ကူးမည်)'}
-                  </span>
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Batch Created Accounts Credentials Panel (Quick Text Paste Mode Results) */}
-          {batchCreatedCredentials.length > 0 && (
-            <div className="mx-4 mt-3 p-3.5 sm:p-4 bg-emerald-50/90 dark:bg-emerald-950/40 border-2 border-emerald-400 dark:border-emerald-700 rounded-2xl shadow-xs text-xs space-y-3 shrink-0 max-h-[38vh] flex flex-col">
-              <div className="flex flex-wrap items-center justify-between gap-2 shrink-0">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold shrink-0">
-                    ✓
-                  </span>
-                  <div className="min-w-0">
-                    <h4 className="font-extrabold text-slate-900 dark:text-white text-xs sm:text-sm truncate">
-                      ကျောင်းသားအကောင့်သစ် ({batchCreatedCredentials.length}) ဦး ဖွင့်ပြီးပါပြီ — တစ်ဦးချင်းစီအတွက် Copy တန်းကူးနိုင်ပါသည်
+            {/* Newly Created Account Credentials Banner */}
+            {createdCredentials && (
+              <div className="p-3.5 sm:p-4 bg-indigo-50/90 dark:bg-indigo-950/50 border-2 border-indigo-300 dark:border-indigo-700 rounded-2xl shadow-xs text-xs space-y-3">
+                {/* Top Header with Prominent Immediate Copy Button */}
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold shrink-0">
+                      ✓
+                    </span>
+                    <h4 className="font-bold text-slate-900 dark:text-white text-xs sm:text-sm">
+                      {createdCredentials.role === 'admin'
+                        ? 'Admin'
+                        : createdCredentials.role === 'co_admin'
+                        ? 'Co-Admin'
+                        : 'Student'}{' '}
+                      အကောင့်သစ် ဖွင့်ပြီးပါပြီ — Copy နှိပ်၍ Login အချက်အလက်အားလုံး ကူးယူပေးပို့နိုင်ပါသည်
                     </h4>
-                    <p className="text-[11px] text-slate-600 dark:text-slate-300">
-                      တစ်ယောက်ချင်းစီ၏ <strong>Copy Login Info</strong> ခလုတ်ကို နှိပ်၍ Viber / Messenger သို့ တိုက်ရိုက် ပေးပို့နိုင်ပါသည် ({Object.keys(copiedBatchIds).length}/{batchCreatedCredentials.length} ကူးယူပြီး)
-                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
+                    <button
+                      type="button"
+                      onClick={() => handleCopyCredentials(createdCredentials)}
+                      className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs cursor-pointer shadow-xs"
+                    >
+                      {copiedSuccess ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                      <span>
+                        {copiedSuccess
+                          ? 'Copied! (ကူးပြီးပါပြီ)'
+                          : '📋 Copy Login Info (ကူးမည်)'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCreatedCredentials(null)}
+                      className="text-slate-400 hover:text-slate-700 dark:hover:text-white font-bold p-1.5 rounded-lg cursor-pointer"
+                      title="ပိတ်မည်"
+                    >
+                      ✕
+                    </button>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 bg-white dark:bg-slate-800 p-3 rounded-xl border border-indigo-200 dark:border-indigo-900/60 font-mono text-[11px]">
+                  <div className="min-w-0">
+                    <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">အမည် (Name)</span>
+                    <span className="font-bold text-slate-900 dark:text-white truncate block">{createdCredentials.name}</span>
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">Username</span>
+                    <span className="font-bold text-indigo-600 dark:text-indigo-300 truncate block">{createdCredentials.username}</span>
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">Password</span>
+                    <span className="font-bold text-emerald-600 dark:text-emerald-400 truncate block">{createdCredentials.password}</span>
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">အလုပ်အကိုင်/ပညာအရည်အချင်း</span>
+                    <span className="text-slate-700 dark:text-slate-300 truncate block font-sans">{createdCredentials.occupation || '—'}</span>
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-slate-400 block text-[10px] uppercase font-sans font-semibold">Login ဝင်ရန် လင့်ခ်</span>
+                    <span className="font-bold text-indigo-600 dark:text-indigo-400 truncate block">{createdCredentials.loginUrl}</span>
+                  </div>
+                </div>
+
+                <div className="p-2.5 rounded-xl bg-amber-50/90 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/70 text-[11px] text-amber-950 dark:text-amber-200 space-y-1 leading-relaxed">
+                  <div className="font-bold text-amber-800 dark:text-amber-300">
+                    📌 Copy ကူးယူရာတွင် တစ်ပါတည်း ပါဝင်မည့် လမ်းညွှန်ချက်များ -
+                  </div>
+                  <div>
+                    ၁။ ကျောင်းသား/သူများသည် Device တစ်ခုတည်းသာ Login ဝင်လို့ရပါမည်။ တခြား Device မှာ အသုံးပြုလိုပါက အရင်ဝင်ထားတဲ့ Device မှ Logout ထွက်ပြီးမှ Login ဝင်လို့ရပါမည်။
+                  </div>
+                  <div>
+                    ၂။ Login ဝင်ပြီးပါက ပေါ်လာသည့် သင်တန်းစည်းကမ်းချက်များကို သေချာဖတ်ပြီး "သိရှိလိုက်နာပါမည်" ကို ရွေးချယ်ပြီးမှ Classroom ကို ဝင်ရောက်လို့ရပါမည်။
+                  </div>
+                  <div>
+                    ၃။ သင်တန်းမှ ပထမဆုံးပေးသော Password ကို Classroom ထဲရောက်ပါက မိမိအသုံးပြုမည့် Password ကို ပြန်ချိန်းပြီးမှ သုံးပါ။
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-0.5">
+                  <span className="text-[11px] text-slate-600 dark:text-slate-300">
+                    📋 Copy နှိပ်ပါက <strong>Login Link, အမည်, Username, Password နှင့် အထက်ပါ လမ်းညွှန်ချက် (၃) ချက်</strong> အားလုံး တစ်ခါတည်း ကူးယူပေးပါမည်။
+                  </span>
                   <button
                     type="button"
-                    onClick={handleCopyAllBatchItems}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs cursor-pointer shadow-2xs"
+                    onClick={() => handleCopyCredentials(createdCredentials)}
+                    className="flex items-center justify-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs cursor-pointer shadow-xs shrink-0"
                   >
-                    {copiedAllBatchSuccess ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copiedSuccess ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                     <span>
-                      {copiedAllBatchSuccess
-                        ? 'အားလုံး Copy ကူးပြီးပါပြီ!'
-                        : `အားလုံး စုပေါင်း Copy ကူးမည် (${batchCreatedCredentials.length} ဦး)`}
+                      {copiedSuccess
+                        ? 'Copied! (Login Info + လမ်းညွှန်ချက်များ ကူးပြီးပါပြီ)'
+                        : 'Copy Login Info (Login လင့်ခ်နှင့် အချက်အလက်အားလုံး ကူးမည်)'}
                     </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBatchCreatedCredentials([])}
-                    className="text-slate-400 hover:text-slate-700 dark:hover:text-white font-bold px-2 py-1 rounded-lg cursor-pointer"
-                    title="ပိတ်မည်"
-                  >
-                    ✕
                   </button>
                 </div>
               </div>
+            )}
 
-              <div className="overflow-y-auto space-y-1.5 pr-1">
-                {batchCreatedCredentials.map((item, idx) => {
-                  const isCopied = Boolean(copiedBatchIds[item.id]);
-                  return (
-                    <div
-                      key={item.id}
-                      className={`p-2.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 transition-colors ${
-                        isCopied
-                          ? 'bg-emerald-100/70 dark:bg-emerald-900/30 border-emerald-300 dark:border-emerald-700'
-                          : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700'
-                      }`}
+            {/* Batch Created Accounts Credentials Panel (Quick Text Paste Mode Results) */}
+            {batchCreatedCredentials.length > 0 && (
+              <div className="p-3.5 sm:p-4 bg-emerald-50/90 dark:bg-emerald-950/40 border-2 border-emerald-400 dark:border-emerald-700 rounded-2xl shadow-xs text-xs space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold shrink-0">
+                      ✓
+                    </span>
+                    <div className="min-w-0">
+                      <h4 className="font-extrabold text-slate-900 dark:text-white text-xs sm:text-sm">
+                        ကျောင်းသားအကောင့်သစ် ({batchCreatedCredentials.length}) ဦး ဖွင့်ပြီးပါပြီ — တစ်ဦးချင်းစီအတွက် Copy တန်းကူးနိုင်ပါသည်
+                      </h4>
+                      <p className="text-[11px] text-slate-600 dark:text-slate-300">
+                        တစ်ယောက်ချင်းစီ၏ <strong>Copy Login Info</strong> ခလုတ်ကို နှိပ်၍ Viber / Messenger သို့ တိုက်ရိုက် ပေးပို့နိုင်ပါသည် ({Object.keys(copiedBatchIds).length}/{batchCreatedCredentials.length} ကူးယူပြီး)
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
+                    <button
+                      type="button"
+                      onClick={handleCopyAllBatchItems}
+                      className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs cursor-pointer shadow-2xs"
                     >
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 min-w-0 font-mono text-[11px]">
-                        <span className="font-sans font-extrabold text-slate-400 text-xs">#{idx + 1}</span>
-                        <span className="font-sans font-bold text-slate-900 dark:text-white text-xs">
-                          👤 {item.name}
-                        </span>
-                        <span className="text-indigo-600 dark:text-indigo-300 font-bold">
-                          🔑 @{item.username}
-                        </span>
-                        <span className="text-emerald-600 dark:text-emerald-400 font-bold">
-                          🔒 {item.password}
-                        </span>
-                        {item.occupation && (
-                          <span className="font-sans text-slate-600 dark:text-slate-300">
-                            💼 {item.occupation}
-                          </span>
-                        )}
-                        {item.courseName && (
-                          <span className="font-sans text-slate-500 dark:text-slate-400">
-                            📚 {item.courseName}
-                          </span>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleCopySingleBatchItem(item)}
-                        className={`px-3 py-1.5 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shrink-0 transition-all ${
+                      {copiedAllBatchSuccess ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>
+                        {copiedAllBatchSuccess
+                          ? 'အားလုံး Copy ကူးပြီးပါပြီ!'
+                          : `အားလုံး စုပေါင်း Copy ကူးမည် (${batchCreatedCredentials.length} ဦး)`}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBatchCreatedCredentials([])}
+                      className="text-slate-400 hover:text-slate-700 dark:hover:text-white font-bold px-2 py-1 rounded-lg cursor-pointer"
+                      title="ပိတ်မည်"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+
+                <div className="max-h-64 overflow-y-auto space-y-1.5 pr-1">
+                  {batchCreatedCredentials.map((item, idx) => {
+                    const isCopied = Boolean(copiedBatchIds[item.id]);
+                    return (
+                      <div
+                        key={item.id}
+                        className={`p-2.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 transition-colors ${
                           isCopied
-                            ? 'bg-emerald-600 text-white shadow-2xs'
-                            : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-2xs'
+                            ? 'bg-emerald-100/70 dark:bg-emerald-900/30 border-emerald-300 dark:border-emerald-700'
+                            : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700'
                         }`}
                       >
-                        {isCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                        <span>{isCopied ? 'Copied! (ထပ်ကူးမည်)' : 'Copy Login Info'}</span>
-                      </button>
-                    </div>
-                  );
-                })}
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 min-w-0 font-mono text-[11px]">
+                          <span className="font-sans font-extrabold text-slate-400 text-xs">#{idx + 1}</span>
+                          <span className="font-sans font-bold text-slate-900 dark:text-white text-xs">
+                            👤 {item.name}
+                          </span>
+                          <span className="text-indigo-600 dark:text-indigo-300 font-bold">
+                            🔑 @{item.username}
+                          </span>
+                          <span className="text-emerald-600 dark:text-emerald-400 font-bold">
+                            🔒 {item.password}
+                          </span>
+                          {item.occupation && (
+                            <span className="font-sans text-slate-600 dark:text-slate-300">
+                              💼 {item.occupation}
+                            </span>
+                          )}
+                          {item.courseName && (
+                            <span className="font-sans text-slate-500 dark:text-slate-400">
+                              📚 {item.courseName}
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleCopySingleBatchItem(item)}
+                          className={`px-3 py-1.5 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shrink-0 transition-all ${
+                            isCopied
+                              ? 'bg-emerald-600 text-white shadow-2xs'
+                              : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-2xs'
+                          }`}
+                        >
+                          {isCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                          <span>{isCopied ? 'Copied! (ထပ်ကူးမည်)' : 'Copy Login Info'}</span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          )}
-
-          {/* Main Scrollable Content Area */}
-          <div className="p-3.5 sm:p-5 overflow-y-auto flex-1 space-y-4 min-w-0">
+            )}
             {/* Collapsible Reports & CSV Export Drawer */}
             {showReportsDrawer && (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 p-3.5 rounded-2xl bg-white dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 shadow-xs animate-in fade-in duration-150">
