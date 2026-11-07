@@ -44,6 +44,10 @@ import {
   FileUp,
   CalendarCheck,
   Hand,
+  Copy,
+  ClipboardPaste,
+  Check,
+  RotateCcw,
 } from 'lucide-react';
 
 interface CourseStreamProps {
@@ -80,6 +84,11 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   const [attachedFiles, setAttachedFiles] = useState<Attachment[]>([]);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerCardRef = useRef<HTMLDivElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const contentTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const [copiedPostId, setCopiedPostId] = useState<string | null>(null);
+  const [copiedComposerField, setCopiedComposerField] = useState<'title' | 'content' | 'all' | null>(null);
 
   // Modals state
   const [editingPost, setEditingPost] = useState<CoursePost | null>(null);
@@ -375,11 +384,127 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   };
 
   const handleContentContextMenu = (e: React.MouseEvent) => {
+    const targetEl = e.target as HTMLElement | null;
+    const isEditableField =
+      targetEl &&
+      (targetEl.tagName === 'INPUT' ||
+        targetEl.tagName === 'TEXTAREA' ||
+        targetEl.isContentEditable);
+
+    // Admin & Co-Admin (and any input/textarea fields) always have full native Copy & Paste access
+    if (isInstructor || isEditableField) {
+      return;
+    }
+
     if (textProtectionEnabled) {
       e.preventDefault();
       setRateLimitError('Academic Content Protection: Text selection and copying are disabled.');
       setTimeout(() => setRateLimitError(null), 3000);
     }
+  };
+
+  // Copy & Paste helpers for Admin / Co-Admin Post Composer & Post Cards
+  const handlePasteIntoTitle = async () => {
+    try {
+      const clipText = await navigator.clipboard.readText();
+      if (!clipText || !clipText.trim()) {
+        setRateLimitError('Clipboard ထဲတွင် စာသား မရှိသေးပါ။ အရင် Copy ကူးယူပါ။');
+        setTimeout(() => setRateLimitError(null), 3000);
+        return;
+      }
+      const trimmed = clipText.trim();
+      const lines = trimmed.split(/\r?\n/);
+      if (lines.length > 1 && !postContent.trim()) {
+        setPostTitle(lines[0].trim());
+        setPostContent(lines.slice(1).join('\n').trim());
+        setSuccessToast('📋 ခေါင်းစဉ်နှင့် စာသား နှစ်ခုလုံးကို အလိုအလျောက် ခွဲခြား၍ Paste ချပေးပြီးပါပြီ!');
+      } else {
+        setPostTitle((prev) => (prev.trim() ? `${prev.trim()} ${trimmed.replace(/\r?\n/g, ' ')}` : trimmed.replace(/\r?\n/g, ' ')));
+        setSuccessToast('📋 Post Title ထဲသို့ Paste ချပေးပြီးပါပြီ!');
+      }
+      setTimeout(() => setSuccessToast(null), 2800);
+      titleInputRef.current?.focus();
+    } catch {
+      titleInputRef.current?.focus();
+      setRateLimitError('ခေါင်းစဉ်အကွက်ထဲတွင် ဖိနှိပ်၍ Paste (သို့မဟုတ် Ctrl+V / Cmd+V) နှိပ်ပြီး ထည့်သွင်းနိုင်ပါသည်။');
+      setTimeout(() => setRateLimitError(null), 3500);
+    }
+  };
+
+  const handlePasteIntoContent = async () => {
+    try {
+      const clipText = await navigator.clipboard.readText();
+      if (!clipText || !clipText.trim()) {
+        setRateLimitError('Clipboard ထဲတွင် စာသား မရှိသေးပါ။ အရင် Copy ကူးယူပါ။');
+        setTimeout(() => setRateLimitError(null), 3000);
+        return;
+      }
+      const trimmed = clipText.trim();
+      setPostContent((prev) => (prev.trim() ? `${prev.trim()}\n\n${trimmed}` : trimmed));
+      if (!postTitle.trim()) {
+        const firstLine = trimmed.split(/\r?\n/)[0]?.trim() || '';
+        if (firstLine && firstLine.length <= 120) {
+          setPostTitle(firstLine);
+        }
+      }
+      setSuccessToast('📋 Post Content ထဲသို့ စာသား Paste ချပေးပြီးပါပြီ!');
+      setTimeout(() => setSuccessToast(null), 2800);
+      contentTextareaRef.current?.focus();
+    } catch {
+      contentTextareaRef.current?.focus();
+      setRateLimitError('စာသားအကွက်ထဲတွင် ဖိနှိပ်၍ Paste (သို့မဟုတ် Ctrl+V / Cmd+V) နှိပ်ပြီး ထည့်သွင်းနိုင်ပါသည်။');
+      setTimeout(() => setRateLimitError(null), 3500);
+    }
+  };
+
+  const handleCopyComposerText = async (mode: 'title' | 'content' | 'all') => {
+    const textToCopy =
+      mode === 'title'
+        ? postTitle.trim()
+        : mode === 'content'
+        ? postContent.trim()
+        : `${postTitle.trim() ? `${postTitle.trim()}\n\n` : ''}${postContent.trim()}`.trim();
+
+    if (!textToCopy) return;
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      setCopiedComposerField(mode);
+      setSuccessToast('📋 စာသားကို Clipboard ထဲသို့ Copy ကူးယူပြီးပါပြီ!');
+      setTimeout(() => {
+        setCopiedComposerField(null);
+        setSuccessToast(null);
+      }, 2500);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleCopyPostCard = async (post: CoursePost) => {
+    const fullText = `${post.title}\n\n${post.content}`.trim();
+    try {
+      await navigator.clipboard.writeText(fullText);
+      setCopiedPostId(post.id);
+      setSuccessToast(`📋 "${post.title}" ပို့စ်စာသားကို Copy ကူးယူပြီးပါပြီ!`);
+      setTimeout(() => {
+        setCopiedPostId(null);
+        setSuccessToast(null);
+      }, 2800);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleDuplicatePostToComposer = (post: CoursePost) => {
+    setIsComposing(true);
+    setPostTitle(post.title);
+    setPostContent(post.content);
+    setPostType(post.postType);
+    setSuccessToast('📋 ပို့စ်စာသားကို Post အသစ်တင်မည့် အကွက်ထဲသို့ ကူးထည့်ပေးပြီးပါပြီ!');
+    setTimeout(() => {
+      setSuccessToast(null);
+      composerCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      contentTextareaRef.current?.focus();
+    }, 120);
   };
 
   const renderFileIcon = (type: string) => {
@@ -410,7 +535,9 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   return (
     <div
       onContextMenu={handleContentContextMenu}
-      className={`space-y-4 sm:space-y-6 w-full max-w-full ${textProtectionEnabled ? 'select-none' : ''}`}
+      className={`space-y-4 sm:space-y-6 w-full max-w-full ${
+        textProtectionEnabled && !isInstructor ? 'select-none' : 'select-text'
+      }`}
     >
       {/* Toast Alert for Rate Limiting / Content Protection */}
       {rateLimitError && (
@@ -674,7 +801,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
 
       {/* Google Classroom Style Post Composer (Accessible to Instructors only - Admin & Co-Admin) */}
       {isInstructor && (
-        <div className="neu-card rounded-3xl transition-all overflow-hidden">
+        <div ref={composerCardRef} className="neu-card rounded-3xl transition-all overflow-hidden">
           {!isComposing ? (
             /* Collapsed Google Classroom Announcement Bar */
             <div className="p-3.5 sm:p-4.5 flex items-center justify-between gap-3">
@@ -703,8 +830,39 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
               </div>
             </div>
 
-            {/* Quick Actions (Add File symbol & Schedule post symbol) */}
+            {/* Quick Actions (Paste Post, Add File symbol & Schedule post symbol) */}
             <div className="flex items-center gap-1.5 shrink-0">
+              {isInstructor && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setIsComposing(true);
+                    try {
+                      const clipText = await navigator.clipboard.readText();
+                      if (clipText && clipText.trim()) {
+                        const trimmed = clipText.trim();
+                        const lines = trimmed.split(/\r?\n/);
+                        if (lines.length > 1) {
+                          setPostTitle(lines[0].trim());
+                          setPostContent(lines.slice(1).join('\n').trim());
+                        } else {
+                          setPostContent(trimmed);
+                        }
+                        setSuccessToast('📋 Clipboard မှ စာသားကို Post အကွက်ထဲသို့ အသင့် Paste ချပေးပြီးပါပြီ!');
+                        setTimeout(() => setSuccessToast(null), 3000);
+                      }
+                    } catch {
+                      setTimeout(() => contentTextareaRef.current?.focus(), 80);
+                    }
+                  }}
+                  className="p-2 sm:px-3 sm:py-1.5 text-emerald-700 dark:text-emerald-300 bg-emerald-50/80 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/70 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer border border-emerald-200 dark:border-emerald-800"
+                  title="Clipboard မှ စာသားကို တိုက်ရိုက် Paste ချပြီး Post တင်ရန်"
+                >
+                  <ClipboardPaste className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  <span className="hidden sm:inline">Paste Post</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => {
@@ -814,26 +972,119 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
               </div>
             </div>
 
-              {/* Title Input */}
-              <div>
+              {/* Title Input with Quick Copy & Paste Toolbar */}
+              <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                  <label className="text-[11px] sm:text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Post Title (သင်ခန်းစာ သို့မဟုတ် ကြေညာချက် ခေါင်းစဉ်)
+                  </label>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={handlePasteIntoTitle}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/70 hover:bg-emerald-100 dark:hover:bg-emerald-900 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[11px] font-bold transition-colors cursor-pointer"
+                      title="Clipboard မှ ခေါင်းစဉ်ကို Paste ချမည်"
+                    >
+                      <ClipboardPaste className="w-3 h-3" />
+                      <span>Paste ချမည်</span>
+                    </button>
+                    {postTitle.trim() && (
+                      <button
+                        type="button"
+                        onClick={() => handleCopyComposerText('title')}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-slate-700 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 border border-slate-200 dark:border-slate-700 text-[11px] font-semibold transition-colors cursor-pointer"
+                        title="ခေါင်းစဉ်ကို Copy ကူးမည်"
+                      >
+                        {copiedComposerField === 'title' ? (
+                          <Check className="w-3 h-3 text-emerald-600" />
+                        ) : (
+                          <Copy className="w-3 h-3" />
+                        )}
+                        <span>{copiedComposerField === 'title' ? 'Copied!' : 'Copy'}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
                 <input
+                  ref={titleInputRef}
                   type="text"
                   placeholder="Post Title (သင်ခန်းစာ သို့မဟုတ် ကြေညာချက် ခေါင်းစဉ်)..."
                   value={postTitle}
                   onChange={(e) => setPostTitle(e.target.value)}
-                  className="w-full px-4 py-3 text-xs sm:text-sm font-semibold neu-input rounded-2xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 transition-all"
+                  className="w-full px-4 py-3 text-xs sm:text-sm font-semibold neu-input rounded-2xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 transition-all select-text"
                   required
                 />
               </div>
 
-              {/* Content Textarea (Google Classroom Announcement Editor Style) */}
-              <div>
+              {/* Content Textarea with Quick Copy & Paste Toolbar */}
+              <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                  <label className="text-[11px] sm:text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Post Content (သင်ခန်းစာ အကြောင်းအရာ / ကြေညာချက် စာသား)
+                  </label>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={handlePasteIntoContent}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/70 hover:bg-emerald-100 dark:hover:bg-emerald-900 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[11px] font-bold transition-colors cursor-pointer"
+                      title="Clipboard မှ စာသားကို Paste ချမည်"
+                    >
+                      <ClipboardPaste className="w-3 h-3" />
+                      <span>Paste စာသားချမည်</span>
+                    </button>
+                    {postContent.trim() && (
+                      <button
+                        type="button"
+                        onClick={() => handleCopyComposerText('content')}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-slate-700 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 border border-slate-200 dark:border-slate-700 text-[11px] font-semibold transition-colors cursor-pointer"
+                        title="စာသားကို Copy ကူးမည်"
+                      >
+                        {copiedComposerField === 'content' ? (
+                          <Check className="w-3 h-3 text-emerald-600" />
+                        ) : (
+                          <Copy className="w-3 h-3" />
+                        )}
+                        <span>{copiedComposerField === 'content' ? 'Copied!' : 'Copy စာသား'}</span>
+                      </button>
+                    )}
+                    {(postTitle.trim() || postContent.trim()) && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyComposerText('all')}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/70 hover:bg-indigo-100 dark:hover:bg-indigo-900 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-[11px] font-semibold transition-colors cursor-pointer"
+                          title="ခေါင်းစဉ်ရော စာသားပါ Copy ကူးမည်"
+                        >
+                          {copiedComposerField === 'all' ? (
+                            <Check className="w-3 h-3 text-emerald-600" />
+                          ) : (
+                            <Copy className="w-3 h-3" />
+                          )}
+                          <span>{copiedComposerField === 'all' ? 'All Copied!' : 'Copy All'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPostTitle('');
+                            setPostContent('');
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/50 text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 border border-slate-200 dark:border-slate-700 text-[11px] font-medium transition-colors cursor-pointer"
+                          title="ရေးထားသမျှ ရှင်းလင်းမည်"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          <span>ရှင်းမည်</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
                 <textarea
-                  rows={4}
-                  placeholder="Announce something to your class (အတန်းတွင်း ကြေညာချက်၊ သင်ခန်းစာ အကြောင်းအရာ သို့မဟုတ် ညွှန်ကြားချက်များ ရေးသားပါ)..."
+                  ref={contentTextareaRef}
+                  rows={5}
+                  placeholder="Announce something to your class (အတန်းတွင်း ကြေညာချက်၊ သင်ခန်းစာ အကြောင်းအရာ သို့မဟုတ် ညွှန်ကြားချက်များကို ရိုက်ထည့်ပါ သို့မဟုတ် တိုက်ရိုက် Paste ချပါ)..."
                   value={postContent}
                   onChange={(e) => setPostContent(e.target.value)}
-                  className="w-full px-4 py-3.5 text-xs sm:text-sm neu-input rounded-2xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 resize-none transition-all leading-relaxed"
+                  className="w-full px-4 py-3.5 text-xs sm:text-sm neu-input rounded-2xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 resize-y transition-all leading-relaxed select-text"
                   required
                 />
               </div>
@@ -1269,11 +1520,44 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                         </div>
                       )}
 
-                      {/* Post Action Controls: Pin, Edit & Delete (Instructors only: Admin & Co-Admin) */}
+                      {/* Post Action Controls: Copy, Reuse, Pin, Edit & Delete (Instructors only: Admin & Co-Admin) */}
                       {isInstructor && (
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1 flex-wrap justify-end">
+                          {/* Copy Post Text Button */}
+                          <button
+                            type="button"
+                            onClick={() => handleCopyPostCard(post)}
+                            className={`px-2 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1 ${
+                              copiedPostId === post.id
+                                ? 'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60'
+                                : 'text-slate-500 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-emerald-50/70 dark:hover:bg-emerald-950/40'
+                            }`}
+                            title="Copy post title & content (ပို့စ်စာသားကို Copy ကူးမည်)"
+                          >
+                            {copiedPostId === post.id ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                            <span className="text-[10px] hidden sm:inline">
+                              {copiedPostId === post.id ? 'Copied!' : 'Copy'}
+                            </span>
+                          </button>
+
+                          {/* Paste / Duplicate into New Post Composer Button */}
+                          <button
+                            type="button"
+                            onClick={() => handleDuplicatePostToComposer(post)}
+                            className="px-2 py-1.5 rounded-lg text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50/70 dark:hover:bg-indigo-950/40 transition-colors cursor-pointer flex items-center gap-1"
+                            title="Copy into Post Composer (ပို့စ်အသစ်တင်မည့် အကွက်ထဲသို့ ကူးထည့်မည်)"
+                          >
+                            <ClipboardPaste className="w-3.5 h-3.5" />
+                            <span className="text-[10px] hidden md:inline">Repost</span>
+                          </button>
+
                           {/* Pin Toggle Button */}
                           <button
+                            type="button"
                             onClick={() => handleTogglePin(post.id)}
                             className={`p-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer flex items-center gap-1 ${
                               post.isPinned
@@ -1294,6 +1578,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
 
                           {/* Edit Post Button */}
                           <button
+                            type="button"
                             onClick={() => setEditingPost(post)}
                             className="p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-950/40 transition-colors cursor-pointer"
                             title="Edit post (ပို့စ်ပြင်ဆင်ရန်)"
@@ -1303,6 +1588,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
 
                           {/* Delete Post Button */}
                           <button
+                            type="button"
                             onClick={() => handleDeletePost(post.id)}
                             className="p-1.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
                             title="Delete post (ပို့စ်ဖျက်ရန်)"
@@ -1315,7 +1601,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                   </div>
 
                   {/* Post Title & Content */}
-                  <div className="mt-3">
+                  <div className={`mt-3 ${isInstructor ? 'select-text' : ''}`}>
                     <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 leading-snug">
                       {post.title}
                     </h3>

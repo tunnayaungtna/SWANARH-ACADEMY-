@@ -898,22 +898,42 @@ export class ClassroomDB {
     this.setKickReason(reason);
   }
 
-  private static normalizeLoginIdentifier(raw: string): { cleanId: string; compactId: string } {
+  private static normalizeLoginIdentifier(raw: string): {
+    cleanId: string;
+    compactId: string;
+    idLocalPart: string;
+    alphaNumId: string;
+  } {
     const cleanId = (raw || '')
       .replace(/[\u200B-\u200D\uFEFF]/g, '')
-      .replace(/^(🔑\s*)?(username|email|id|အမည်|name)\s*[:：]\s*/i, '')
+      .replace(/^(🔑\s*|📧\s*|👤\s*)?(username|email|e-mail|mail|id|အမည်|name)\s*[:：=\-]\s*/i, '')
       .trim()
       .replace(/^@+/, '')
       .toLowerCase();
     const compactId = cleanId.replace(/\s+/g, '');
-    return { cleanId, compactId };
+    const idLocalPart = compactId.includes('@') ? compactId.split('@')[0].trim() : compactId;
+    const alphaNumId = idLocalPart.replace(/[^a-z0-9\u1000-\u109f]/g, '');
+    return { cleanId, compactId, idLocalPart, alphaNumId };
   }
 
   private static normalizeLoginPassword(raw: string): string {
     return (raw || '')
       .replace(/[\u200B-\u200D\uFEFF]/g, '')
-      .replace(/^(🔒\s*)?(password|စကားဝှက်)\s*[:：]\s*/i, '')
+      .replace(/^(🔒\s*)?(password|စကားဝှက်)\s*[:：=\-]\s*/i, '')
       .trim();
+  }
+
+  private static checkPasswordForUser(user: User, cleanPwd: string): boolean {
+    const firstLowerPwd =
+      cleanPwd.length > 1 ? cleanPwd.charAt(0).toLowerCase() + cleanPwd.slice(1) : cleanPwd.toLowerCase();
+
+    return (
+      verifyPassword(cleanPwd, user.password, user.role) ||
+      (firstLowerPwd !== cleanPwd && verifyPassword(firstLowerPwd, user.password, user.role)) ||
+      (cleanPwd.toLowerCase() !== cleanPwd &&
+        decryptPassword(user.password, user.role) === decryptPassword(user.password, user.role).toLowerCase() &&
+        verifyPassword(cleanPwd.toLowerCase(), user.password, user.role))
+    );
   }
 
   private static verifyCredentialsOnly(
@@ -923,63 +943,102 @@ export class ClassroomDB {
   ): { user: User | null; error?: string } {
     this.init();
 
-    const { cleanId, compactId } = this.normalizeLoginIdentifier(identifier);
+    const { cleanId, compactId, idLocalPart, alphaNumId } = this.normalizeLoginIdentifier(identifier);
     const cleanPwd = this.normalizeLoginPassword(password);
 
     if (!cleanId || !cleanPwd) {
       return {
         user: null,
-        error: 'Username နှင့် Password နှစ်ခုလုံး ပြည့်စုံစွာ ရိုက်ထည့်ပေးပါ။',
+        error: 'Username သို့မဟုတ် Email နှင့် Password ပြည့်စုံစွာ ရိုက်ထည့်ပေးပါ။',
       };
     }
 
     const allUsers = this.getAllUsers();
-    const matched =
-      allUsers.find((u) => {
-        const uName = (u.username || '').trim().toLowerCase();
+    const candidateSet = new Set<User>();
+
+    // Priority 1: Exact username or exact email match
+    for (const u of allUsers) {
+      const uName = (u.username || '').trim().replace(/^@+/, '').toLowerCase();
+      const uEmail = (u.email || '').trim().toLowerCase();
+      if (
+        uName === cleanId ||
+        uName === compactId ||
+        uEmail === cleanId ||
+        uEmail === compactId
+      ) {
+        candidateSet.add(u);
+      }
+    }
+
+    // Priority 2: Cross-match between Username and Email prefix (before '@')
+    // Fixes cases where email login works (e.g. "aungmin@gmail.com") and user enters "aungmin" as username, or vice versa
+    if (idLocalPart) {
+      for (const u of allUsers) {
+        const uName = (u.username || '').trim().replace(/^@+/, '').toLowerCase();
         const uEmail = (u.email || '').trim().toLowerCase();
-        return (
-          uName === cleanId ||
-          uName === compactId ||
-          uEmail === cleanId ||
-          uEmail === compactId
-        );
-      }) ||
-      allUsers.find((u) => {
-        const fullName = (u.name || '').trim().toLowerCase();
-        const compactName = fullName.replace(/\s+/g, '');
-        return fullName === cleanId || (compactId.length >= 3 && compactName === compactId);
-      });
+        const uEmailLocal = uEmail.includes('@') ? uEmail.split('@')[0].trim() : uEmail;
+        if (
+          uName === idLocalPart ||
+          uEmailLocal === compactId ||
+          uEmailLocal === idLocalPart
+        ) {
+          candidateSet.add(u);
+        }
+      }
+    }
+
+    // Priority 3: Punctuation/space-insensitive username or email prefix match, or full name match
+    for (const u of allUsers) {
+      const uName = (u.username || '').trim().toLowerCase();
+      const uEmail = (u.email || '').trim().toLowerCase();
+      const uEmailLocal = uEmail.includes('@') ? uEmail.split('@')[0].trim() : uEmail;
+      const uAlphaName = uName.replace(/[^a-z0-9\u1000-\u109f]/g, '');
+      const uAlphaEmail = uEmailLocal.replace(/[^a-z0-9\u1000-\u109f]/g, '');
+      const fullName = (u.name || '').trim().toLowerCase();
+      const compactName = fullName.replace(/\s+/g, '');
+
+      if (
+        (alphaNumId.length >= 2 && (uAlphaName === alphaNumId || uAlphaEmail === alphaNumId)) ||
+        fullName === cleanId ||
+        (compactId.length >= 2 && compactName === compactId)
+      ) {
+        candidateSet.add(u);
+      }
+    }
+
+    // Priority 4: Auto-generated numeric suffix match (e.g. username "mgaungmin1" when user types "mgaungmin")
+    if (idLocalPart.length >= 3) {
+      for (const u of allUsers) {
+        const uName = (u.username || '').trim().toLowerCase();
+        const strippedDigits = uName.replace(/\d+$/, '');
+        if (strippedDigits && strippedDigits === idLocalPart) {
+          candidateSet.add(u);
+        }
+      }
+    }
 
     const genericAuthError =
-      'Username သို့မဟုတ် Password မှားယွင်းနေပါသည်။ ကျေးဇူးပြု၍ သေချာစွာ ပြန်လည်စစ်ဆေးပြီး ဝင်ရောက်ပါ။ (Invalid username or password)';
+      'Username/Email သို့မဟုတ် Password မှားယွင်းနေပါသည်။ ကျေးဇူးပြု၍ သေချာစွာ ပြန်လည်စစ်ဆေးပြီး ဝင်ရောက်ပါ။ (Invalid username or password)';
 
-    if (!matched) {
+    const candidates = Array.from(candidateSet);
+    if (candidates.length === 0) {
       return {
         user: null,
         error: genericAuthError,
       };
     }
 
-    // Handle mobile keyboard auto-capitalization of the first letter (e.g., "Student123" -> "student123")
-    const firstLowerPwd =
-      cleanPwd.length > 1 ? cleanPwd.charAt(0).toLowerCase() + cleanPwd.slice(1) : cleanPwd.toLowerCase();
-
-    const isPasswordValid =
-      verifyPassword(cleanPwd, matched.password, matched.role) ||
-      (firstLowerPwd !== cleanPwd && verifyPassword(firstLowerPwd, matched.password, matched.role)) ||
-      (cleanPwd.toLowerCase() !== cleanPwd &&
-        decryptPassword(matched.password, matched.role) === decryptPassword(matched.password, matched.role).toLowerCase() &&
-        verifyPassword(cleanPwd.toLowerCase(), matched.password, matched.role));
-
-    if (!isPasswordValid) {
-      return {
-        user: null,
-        error: genericAuthError,
-      };
+    // Check password across ALL candidate matches so stale/duplicate entries never block a valid account
+    for (const candidate of candidates) {
+      if (this.checkPasswordForUser(candidate, cleanPwd)) {
+        return { user: candidate };
+      }
     }
 
-    return { user: matched };
+    return {
+      user: null,
+      error: genericAuthError,
+    };
   }
 
   /**
@@ -1103,15 +1162,26 @@ export class ClassroomDB {
   private static mergeRemoteUserIntoLocal(remoteUser: User, deletedSet: Set<string>): void {
     if (!remoteUser || deletedSet.has(remoteUser.id)) return;
     const localUsers = this.getAllUsers();
-    const idx = localUsers.findIndex(
-      (u) =>
-        u.id === remoteUser.id ||
-        u.username.toLowerCase() === remoteUser.username.toLowerCase()
-    );
+    const remoteUName = (remoteUser.username || '').trim().toLowerCase();
+    const remoteEmail = (remoteUser.email || '').trim().toLowerCase();
+
+    const idx = localUsers.findIndex((u) => {
+      if (u.id === remoteUser.id) return true;
+      const uName = (u.username || '').trim().toLowerCase();
+      const uEmail = (u.email || '').trim().toLowerCase();
+      if (remoteUName && remoteUName !== 'user' && uName === remoteUName) return true;
+      if (remoteEmail && uEmail === remoteEmail) return true;
+      return false;
+    });
     const existing = idx >= 0 ? localUsers[idx] : undefined;
     const mergedUser: User = {
       ...(existing || {}),
       ...remoteUser,
+      username:
+        remoteUName && remoteUName !== 'user'
+          ? remoteUName
+          : existing?.username || remoteUName || 'user',
+      email: remoteEmail || existing?.email || `${remoteUName}@swanarh.edu`,
       activeDeviceId: remoteUser.activeDeviceId,
       activeSessionToken: remoteUser.activeSessionToken,
       sessionUpdatedAtMs: remoteUser.sessionUpdatedAtMs,
@@ -1133,8 +1203,8 @@ export class ClassroomDB {
 
   /**
    * High-Concurrency Login with Authoritative Single-Device Verification & Full Cloud Fallback:
-   * 1. Queries the matching profile row from Supabase (~0.3KB) to verify live credentials and device lock.
-   * 2. If single-row lookup misses (or credentials were updated), falls back to pulling all remote profiles
+   * 1. Queries matching candidate profile rows from Supabase (by username, email, email prefix, or name) to verify live credentials and device lock.
+   * 2. If lookup misses (or credentials were updated), falls back to pulling all remote profiles
    *    so newly created accounts on another computer ALWAYS log in on mobile phones on the first try.
    */
   static async loginWithRemoteFallback(
@@ -1143,12 +1213,12 @@ export class ClassroomDB {
     expectedRole?: UserRole,
     forceTakeover: boolean = false
   ): Promise<{ user: User | null; deviceLocked?: boolean; error?: string }> {
-    const { cleanId, compactId } = this.normalizeLoginIdentifier(identifier);
+    const { cleanId } = this.normalizeLoginIdentifier(identifier);
     const cleanPwd = this.normalizeLoginPassword(password);
     if (!cleanId || !cleanPwd) {
       return {
         user: null,
-        error: 'Username နှင့် Password နှစ်ခုလုံး ပြည့်စုံစွာ ရိုက်ထည့်ပေးပါ။',
+        error: 'Username သို့မဟုတ် Email နှင့် Password ပြည့်စုံစွာ ရိုက်ထည့်ပေးပါ။',
       };
     }
 
@@ -1162,18 +1232,18 @@ export class ClassroomDB {
 
     const deletedSet = new Set(this.getDeletedIds());
     if (typeof navigator === 'undefined' || navigator.onLine !== false) {
-      // 1. Fast single-row lookup by username, email, or name
-      let remoteUser = await SupabaseService.getRemoteProfileByIdentifier(cleanId, true);
-      if (!remoteUser && compactId && compactId !== cleanId) {
-        remoteUser = await SupabaseService.getRemoteProfileByIdentifier(compactId, true);
-      }
-
-      if (remoteUser && !deletedSet.has(remoteUser.id)) {
-        this.mergeRemoteUserIntoLocal(remoteUser, deletedSet);
+      // 1. Fast candidate lookup by username, email, email prefix, or name
+      const remoteCandidates = await SupabaseService.getRemoteCandidateProfiles(identifier, true);
+      if (remoteCandidates.length > 0) {
+        for (const ru of remoteCandidates) {
+          if (!deletedSet.has(ru.id)) {
+            this.mergeRemoteUserIntoLocal(ru, deletedSet);
+          }
+        }
       }
 
       // 2. If user still not found or password check fails against cached local data, pull full remote profiles list
-      const preCheck = this.verifyCredentialsOnly(cleanId, cleanPwd, expectedRole);
+      const preCheck = this.verifyCredentialsOnly(identifier, cleanPwd, expectedRole);
       if (!preCheck.user) {
         const allRemoteProfiles = await SupabaseService.getRemoteProfiles(true);
         if (allRemoteProfiles && allRemoteProfiles.length > 0) {
@@ -1183,9 +1253,14 @@ export class ClassroomDB {
           allRemoteProfiles.forEach((ru) => {
             if (deletedSet.has(ru.id)) return;
             const existing = userMap.get(ru.id);
+            const ruName = (ru.username || '').trim().toLowerCase();
             userMap.set(ru.id, {
               ...(existing || {}),
               ...ru,
+              username:
+                ruName && ruName !== 'user'
+                  ? ruName
+                  : existing?.username || ruName || 'user',
               activeDeviceId: ru.activeDeviceId,
               activeSessionToken: ru.activeSessionToken,
               sessionUpdatedAtMs: ru.sessionUpdatedAtMs,
@@ -1205,7 +1280,7 @@ export class ClassroomDB {
     }
 
     // 3. Verify credentials and Single-Device Lock against updated user record
-    return this.login(cleanId, cleanPwd, expectedRole, forceTakeover);
+    return this.login(identifier, cleanPwd, expectedRole, forceTakeover);
   }
 
   static getAllUsers(): User[] {

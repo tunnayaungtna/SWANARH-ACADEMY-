@@ -331,7 +331,7 @@ export default function App() {
   return (
     <div
       className={`min-h-screen neu-canvas text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-300 ${
-        securitySettings.textProtectionEnabled ? 'select-none' : ''
+        securitySettings.textProtectionEnabled && currentUser.role === 'student' ? 'select-none' : ''
       }`}
     >
       <Suspense fallback={null}>

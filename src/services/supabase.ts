@@ -575,6 +575,7 @@ function compactBannerForCloud(banner?: string): string {
 
 const RULES_MARKER_PREFIX = '||RULES_OK:';
 const DEVICE_SESSION_MARKER_PREFIX = '||DEV_SES:';
+const USERNAME_MARKER_PREFIX = '||USR:';
 const PASSWORD_ENC_MARKER_PREFIX = '||PWD_ENC:';
 const COURSE_ORDER_MARKER_PREFIX = '||ORDER:';
 
@@ -608,6 +609,7 @@ function encodeTitleWithRules(user: User): string | null {
   const rawBase = (user.title || '')
     .split(RULES_MARKER_PREFIX)[0]
     .split(DEVICE_SESSION_MARKER_PREFIX)[0]
+    .split(USERNAME_MARKER_PREFIX)[0]
     .split(PASSWORD_ENC_MARKER_PREFIX)[0]
     .trim();
 
@@ -620,6 +622,10 @@ function encodeTitleWithRules(user: User): string | null {
     const sesToken = (user.activeSessionToken || '').replace(/[~|]/g, '');
     const sesTs = user.sessionUpdatedAtMs || Date.now();
     encoded += `${DEVICE_SESSION_MARKER_PREFIX}${user.activeDeviceId}~${sesToken}~${sesTs}`;
+  }
+  const cleanUser = (user.username || '').trim().toLowerCase().replace(/[|~]/g, '');
+  if (cleanUser) {
+    encoded += `${USERNAME_MARKER_PREFIX}${cleanUser}`;
   }
   const encryptedPwd = encryptPassword(user.password, user.role, user.id);
   encoded += `${PASSWORD_ENC_MARKER_PREFIX}${encryptedPwd}`;
@@ -637,12 +643,14 @@ function decodeTitleAndRules(
   activeDeviceId?: string;
   activeSessionToken?: string;
   sessionUpdatedAtMs?: number;
+  username?: string;
   encryptedPassword?: string;
 } {
   let working = rawTitle || '';
   let activeDeviceId: string | undefined;
   let activeSessionToken: string | undefined;
   let sessionUpdatedAtMs: number | undefined;
+  let username: string | undefined;
   let encryptedPassword: string | undefined;
 
   if (working.includes(PASSWORD_ENC_MARKER_PREFIX)) {
@@ -650,6 +658,14 @@ function decodeTitleAndRules(
     working = beforePwd;
     if (pwdRaw && pwdRaw.trim()) {
       encryptedPassword = pwdRaw.trim();
+    }
+  }
+
+  if (working.includes(USERNAME_MARKER_PREFIX)) {
+    const [beforeUsr, usrRaw] = working.split(USERNAME_MARKER_PREFIX);
+    working = beforeUsr;
+    if (usrRaw && usrRaw.trim()) {
+      username = usrRaw.trim().toLowerCase();
     }
   }
 
@@ -676,6 +692,7 @@ function decodeTitleAndRules(
       activeDeviceId,
       activeSessionToken,
       sessionUpdatedAtMs,
+      username,
       encryptedPassword,
     };
   }
@@ -686,6 +703,7 @@ function decodeTitleAndRules(
     activeDeviceId,
     activeSessionToken,
     sessionUpdatedAtMs,
+    username,
     encryptedPassword,
   };
 }
@@ -787,11 +805,21 @@ export class SupabaseService {
       role,
       userId
     );
+    const rawEmail = String(row.email || '').trim().toLowerCase();
+    const emailLocalPart = rawEmail.includes('@') ? rawEmail.split('@')[0].trim() : '';
+    const rawRowUsername = String(row.username || '').trim().toLowerCase();
+    const resolvedUsername =
+      (rawRowUsername && rawRowUsername !== 'user' ? rawRowUsername : '') ||
+      (decoded.username && decoded.username !== 'user' ? decoded.username : '') ||
+      emailLocalPart ||
+      rawRowUsername ||
+      'user';
+
     return {
       id: userId,
       name: String(row.name || 'User'),
-      username: String(row.username || 'user'),
-      email: String(row.email || ''),
+      username: resolvedUsername,
+      email: rawEmail || `${resolvedUsername}@swanarh.edu`,
       password: resolvedEncryptedPwd,
       role,
       phone: String(row.phone || ''),
@@ -811,64 +839,115 @@ export class SupabaseService {
   }
 
   /**
-   * Fast single-row lookup by username, email, or name for Login (handles mobile @ prefix, spaces, and copy-paste formatting)
+   * Fast lookup by username, email, email-prefix, or name for Login (returns all candidate matches up to 15 rows)
    */
-  static async getRemoteProfileByIdentifier(
+  static async getRemoteCandidateProfiles(
     identifier: string,
     skipDedupe: boolean = false
-  ): Promise<User | null> {
+  ): Promise<User[]> {
     const rawClean = (identifier || '')
       .replace(/[\u200B-\u200D\uFEFF]/g, '')
-      .replace(/^(username|email|id)\s*[:：]\s*/i, '')
+      .replace(/^(🔑\s*|📧\s*)?(username|email|e-mail|mail|id|အမည်|name)\s*[:：=\-]\s*/i, '')
       .trim()
       .replace(/^@+/, '')
       .toLowerCase();
-    if (!rawClean) return null;
+    if (!rawClean) return [];
 
     // Sanitize against PostgREST filter syntax characters
     const safeId = rawClean.replace(/[,()"'\\]/g, '').trim();
     const compactId = safeId.replace(/\s+/g, '');
-    if (!safeId && !compactId) return null;
+    if (!safeId && !compactId) return [];
 
-    const fetcher = async () => {
+    const idLocalPart = compactId.includes('@') ? compactId.split('@')[0].trim() : compactId;
+
+    const fetcher = async (): Promise<User[]> => {
       try {
-        const orFilters = [
-          `username.ilike.${compactId || safeId}`,
-          `email.ilike.${compactId || safeId}`,
-        ];
+        const filterSet = new Set<string>();
+        const targetCompact = compactId || safeId;
+        filterSet.add(`username.ilike.${targetCompact}`);
+        filterSet.add(`email.ilike.${targetCompact}`);
+        if (idLocalPart) {
+          filterSet.add(`username.ilike.${idLocalPart}`);
+          filterSet.add(`email.ilike.${idLocalPart}@%`);
+        }
         if (safeId !== compactId && safeId.length > 0) {
-          orFilters.push(`name.ilike.${safeId}`);
-          orFilters.push(`username.ilike.${safeId}`);
-        } else {
-          orFilters.push(`name.ilike.${safeId}`);
+          filterSet.add(`name.ilike.${safeId}`);
+          filterSet.add(`username.ilike.${safeId}`);
+        } else if (safeId) {
+          filterSet.add(`name.ilike.${safeId}`);
         }
 
         const { data, error } = await supabase
           .from('profiles')
           .select('*')
-          .or(orFilters.join(','))
-          .limit(5);
+          .or(Array.from(filterSet).join(','))
+          .limit(15);
 
         if (!error && Array.isArray(data) && data.length > 0) {
-          // Prefer exact username or email match first
-          const exactRow =
-            data.find((r) => {
-              const u = String(r.username || '').trim().toLowerCase();
-              const e = String(r.email || '').trim().toLowerCase();
-              return u === compactId || u === safeId || e === compactId || e === safeId;
-            }) || data[0];
-          return this.mapProfileRowToUser(exactRow as Record<string, unknown>);
+          return data.map((r) => this.mapProfileRowToUser(r as Record<string, unknown>));
         }
-        return null;
+
+        // Fallback if `username` column is missing in an older Supabase table schema
+        if (error) {
+          const fallbackFilters = [
+            `email.ilike.${targetCompact}`,
+            ...(idLocalPart ? [`email.ilike.${idLocalPart}@%`] : []),
+            `name.ilike.${safeId || targetCompact}`,
+          ];
+          const { data: fbData, error: fbErr } = await supabase
+            .from('profiles')
+            .select('*')
+            .or(Array.from(new Set(fallbackFilters)).join(','))
+            .limit(15);
+          if (!fbErr && Array.isArray(fbData) && fbData.length > 0) {
+            return fbData.map((r) => this.mapProfileRowToUser(r as Record<string, unknown>));
+          }
+        }
+        return [];
       } catch {
-        return null;
+        return [];
       }
     };
 
     if (skipDedupe) {
       return fetcher();
     }
-    return this.dedupeGet(`profile_login:${compactId || safeId}`, fetcher);
+    return this.dedupeGet(`profile_candidates:${compactId || safeId}`, fetcher);
+  }
+
+  /**
+   * Fast single-row lookup by username, email, or name for Login (handles mobile @ prefix, spaces, and copy-paste formatting)
+   */
+  static async getRemoteProfileByIdentifier(
+    identifier: string,
+    skipDedupe: boolean = false
+  ): Promise<User | null> {
+    const candidates = await this.getRemoteCandidateProfiles(identifier, skipDedupe);
+    if (candidates.length === 0) return null;
+
+    const rawClean = (identifier || '')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/^(🔑\s*|📧\s*)?(username|email|e-mail|mail|id|အမည်|name)\s*[:：=\-]\s*/i, '')
+      .trim()
+      .replace(/^@+/, '')
+      .toLowerCase();
+    const compactId = rawClean.replace(/\s+/g, '');
+    const idLocalPart = compactId.includes('@') ? compactId.split('@')[0].trim() : compactId;
+
+    return (
+      candidates.find((u) => {
+        const uName = (u.username || '').trim().toLowerCase();
+        const uEmail = (u.email || '').trim().toLowerCase();
+        const uEmailLocal = uEmail.includes('@') ? uEmail.split('@')[0].trim() : uEmail;
+        return (
+          uName === compactId ||
+          uName === rawClean ||
+          uEmail === compactId ||
+          uEmail === rawClean ||
+          (idLocalPart && (uName === idLocalPart || uEmailLocal === idLocalPart))
+        );
+      }) || candidates[0]
+    );
   }
 
   /**
