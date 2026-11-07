@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Course, CoursePost, User, VideoAsset, Attachment } from '../types/classroom';
 import { SecureVideoPlayer } from './SecureVideoPlayer';
 import { EditPostModal } from './EditPostModal';
@@ -128,6 +128,23 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   const scheduledPosts = posts.filter((p) => p.status === 'scheduled');
   const currentPinnedCount = posts.filter((p) => p.isPinned).length;
 
+  // Live 3-second watcher in CourseStream so scheduled posts transition to #1 in the Stream at the exact scheduled moment
+  useEffect(() => {
+    const checkDue = () => {
+      const publishedAny = ClassroomDB.checkAndPublishDueScheduledPosts();
+      if (publishedAny) {
+        setSuccessToast(
+          '🔔 အချိန်သတ်မှတ်ထားသော Post အား သတ်မှတ်ချိန်ပြည့်သဖြင့် Stream ထိပ်ဆုံးသို့ အလိုအလျောက် လွှင့်တင်ပြီးပါပြီ!'
+        );
+        setTimeout(() => setSuccessToast(null), 4500);
+        onRefresh();
+      }
+    };
+    checkDue();
+    const timer = setInterval(checkDue, 3000);
+    return () => clearInterval(timer);
+  }, [course.id, scheduledPosts.length]);
+
   // Process incoming file list (works for file input & drag-and-drop)
   const processFiles = (fileList: FileList | File[]) => {
     const filesArray = Array.from(fileList);
@@ -198,7 +215,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
 
   // Helper chips for quick scheduled date & time
   const setComposerQuickTime = (hoursFromNow: number) => {
-    const d = new Date(Date.now() + hoursFromNow * 60 * 60 * 1000);
+    const d = new Date(Date.now() + Math.round(hoursFromNow * 60 * 60 * 1000));
     const year = d.getFullYear();
     const month = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
@@ -217,6 +234,17 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
       setRateLimitError('ကျေးဇူးပြု၍ Schedule ပြုလုပ်မည့် နေ့စွဲနှင့် အချိန်ကို ရွေးချယ်ပေးပါ။');
       setTimeout(() => setRateLimitError(null), 4000);
       return;
+    }
+
+    if (publishMode === 'schedule' && scheduledDateTime) {
+      const schedMs = new Date(scheduledDateTime).getTime();
+      if (isNaN(schedMs) || schedMs <= Date.now() - 30000) {
+        setRateLimitError(
+          'ရွေးချယ်ထားသော Schedule အချိန်သည် လက်ရှိအချိန်ထက် ကျော်လွန်နေပါသည်။ အနာဂတ်အချိန်ကို ရွေးချယ်ပါ သို့မဟုတ် "Post to stream" ဖြင့် ချက်ချင်းတင်ပါ။'
+        );
+        setTimeout(() => setRateLimitError(null), 4500);
+        return;
+      }
     }
 
     if (pinUponPublish && currentPinnedCount >= 3) {
@@ -1261,6 +1289,27 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
 
                         {/* Quick Preset Chips */}
                         <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setComposerQuickTime(5 / 60)}
+                            className="px-2.5 py-1 text-[11px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/40 rounded-lg text-slate-700 dark:text-slate-300 transition-colors cursor-pointer font-medium"
+                          >
+                            +5 Mins
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setComposerQuickTime(15 / 60)}
+                            className="px-2.5 py-1 text-[11px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/40 rounded-lg text-slate-700 dark:text-slate-300 transition-colors cursor-pointer font-medium"
+                          >
+                            +15 Mins
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setComposerQuickTime(0.5)}
+                            className="px-2.5 py-1 text-[11px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/40 rounded-lg text-slate-700 dark:text-slate-300 transition-colors cursor-pointer font-medium"
+                          >
+                            +30 Mins
+                          </button>
                           <button
                             type="button"
                             onClick={() => setComposerQuickTime(1)}

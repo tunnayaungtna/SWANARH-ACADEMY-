@@ -74,6 +74,7 @@ const STORAGE_KEYS = {
   NOTIFIED_POST_IDS: 'classroom_os_notified_post_ids_v1',
   AUDIT_LOGS: 'classroom_os_audit_logs_v1',
   SESSION_SEAL: 'classroom_os_session_seal_v1',
+  CLOUD_CONFIRMED_POSTS: 'classroom_os_cloud_confirmed_posts_v1',
 };
 
 // Rate limiting in-memory / storage tracker
@@ -146,7 +147,36 @@ export class ClassroomDB {
     try {
       localStorage.setItem(key, JSON.stringify(value));
     } catch (e) {
-      console.warn('Storage quota exceeded or error writing:', e);
+      // Self-healing QuotaExceededError recovery so newly created posts NEVER fail to save in localStorage
+      try {
+        const logs = this.getItem<AuditLogEntry[]>(STORAGE_KEYS.AUDIT_LOGS, []);
+        if (logs.length > 80) {
+          const trimmedLogs = logs.slice(0, 80);
+          this.memoryCache.set(STORAGE_KEYS.AUDIT_LOGS, trimmedLogs);
+          localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(trimmedLogs));
+        }
+        if (key === STORAGE_KEYS.POSTS && Array.isArray(value)) {
+          const compactedPosts = (value as unknown as CoursePost[]).map((p, idx) => {
+            if (!p || !Array.isArray(p.attachments) || p.attachments.length === 0) return p;
+            // Keep full data URLs for the newest 3 posts if small; compact oversized data URLs (>250KB)
+            return {
+              ...p,
+              attachments: p.attachments.map((att) => {
+                if (att && att.url && att.url.startsWith('data:') && (idx >= 3 || att.url.length > 250_000)) {
+                  return { ...att, url: '#attachment' };
+                }
+                return att;
+              }),
+            };
+          });
+          this.memoryCache.set(key, compactedPosts as unknown as T);
+          localStorage.setItem(key, JSON.stringify(compactedPosts));
+          return;
+        }
+        localStorage.setItem(key, JSON.stringify(value));
+      } catch {
+        console.warn('Storage quota exceeded or error writing:', e);
+      }
     }
   }
 
@@ -161,6 +191,38 @@ export class ClassroomDB {
     // Bound DELETED_IDS to the latest 800 items so localStorage stays lean
     const bounded = Array.from(current).slice(-800);
     this.setItem(STORAGE_KEYS.DELETED_IDS, bounded);
+  }
+
+  private static unmarkDeletedId(id: string): void {
+    if (!id) return;
+    const current = this.getDeletedIds();
+    if (current.includes(id)) {
+      this.setItem(
+        STORAGE_KEYS.DELETED_IDS,
+        current.filter((item) => item !== id)
+      );
+    }
+  }
+
+  private static getCloudConfirmedPostIds(): Set<string> {
+    return new Set(this.getItem<string[]>(STORAGE_KEYS.CLOUD_CONFIRMED_POSTS, []));
+  }
+
+  private static markPostCloudConfirmed(ids: string | string[]): void {
+    const list = Array.isArray(ids) ? ids : [ids];
+    if (!list.length) return;
+    const current = this.getCloudConfirmedPostIds();
+    let changed = false;
+    list.forEach((id) => {
+      if (id && !current.has(id)) {
+        current.add(id);
+        changed = true;
+      }
+    });
+    if (changed) {
+      const bounded = Array.from(current).slice(-1000);
+      this.setItem(STORAGE_KEYS.CLOUD_CONFIRMED_POSTS, bounded);
+    }
   }
 
   static getDeviceId(): string {
@@ -220,14 +282,14 @@ export class ClassroomDB {
     const map = this.getItem<Record<string, number>>(STORAGE_KEYS.RECENT_WRITES, {});
     const next: Record<string, number> = { [id]: now };
     for (const [k, ts] of Object.entries(map)) {
-      if (now - ts < 180_000) {
+      if (now - ts < 600_000) {
         next[k] = ts;
       }
     }
     this.setItem(STORAGE_KEYS.RECENT_WRITES, next);
   }
 
-  private static isRecentLocalWrite(id: string, maxAgeMs: number = 120_000): boolean {
+  private static isRecentLocalWrite(id: string, maxAgeMs: number = 600_000): boolean {
     if (!id) return false;
     const map = this.getItem<Record<string, number>>(STORAGE_KEYS.RECENT_WRITES, {});
     const ts = map[id];
@@ -2437,7 +2499,8 @@ export class ClassroomDB {
     let postsMutated = false;
     const validPosts: CoursePost[] = [];
     for (const p of rawPosts) {
-      if (!p || !p.id || deletedSet.has(p.id) || !validCourseIds.has(p.courseId)) {
+      const isRealCourseId = Boolean(p?.courseId && /^course-\d{10,}/.test(p.courseId) && !deletedSet.has(p.courseId));
+      if (!p || !p.id || deletedSet.has(p.id) || (!validCourseIds.has(p.courseId) && !isRealCourseId)) {
         localCleaned++;
         postsMutated = true;
         continue;
@@ -2666,7 +2729,7 @@ export class ClassroomDB {
 
   /**
    * Computes a deterministic numeric sort timestamp for any CoursePost so that
-   * newly created posts ALWAYS appear at the very top (#1 spot) of the classroom stream.
+   * newly created or newly auto-published posts ALWAYS appear at the very top (#1 spot) of the classroom stream.
    */
   static getPostSortTimestamp(post: CoursePost): number {
     if (!post) return 0;
@@ -2694,13 +2757,7 @@ export class ClassroomDB {
       }
     }
 
-    // Guard against simulated future clock timestamps (e.g., from AI Studio preview 2026 clock)
-    // so that real-world posts created on user devices (Date.now()) ALWAYS sort at #1 top spot!
-    if (rawTs > now + 120_000 && !this.isRecentLocalWrite(post.id)) {
-      return 1_705_000_000_000 + (rawTs % 86_400_000);
-    }
-
-    return rawTs;
+    return rawTs || now;
   }
 
   /**
@@ -2720,8 +2777,11 @@ export class ClassroomDB {
       return false;
     }
 
-    // Always run 30-minute notification cleanup & 2-day Audit Log cleanup first in the background
-    const purgedLocalNotifs = this.purgeExpiredNotifications() || this.purgeExpiredAuditLogs();
+    // Always check due scheduled posts first, plus 30-minute notification cleanup & 2-day Audit Log cleanup
+    const purgedLocalNotifs =
+      this.checkAndPublishDueScheduledPosts() ||
+      this.purgeExpiredNotifications() ||
+      this.purgeExpiredAuditLogs();
 
     const force = Boolean(options?.force);
     const onlyProfiles = Boolean(options?.onlyProfiles);
@@ -3093,20 +3153,43 @@ export class ClassroomDB {
 
         // 3. Authoritative Posts Reconciliation & Strict Newest-First Ordering
         if (remotePosts !== null) {
+          if (this.checkAndPublishDueScheduledPosts()) {
+            updated = true;
+          }
           const remotePostIds = new Set(remotePosts.map((rp) => rp.id));
+          this.markPostCloudConfirmed(remotePosts.map((rp) => rp.id));
+          const confirmedCloudPosts = this.getCloudConfirmedPostIds();
+
           const scopedCourseSet = studentScopedCourseIds ? new Set(studentScopedCourseIds) : null;
           const localPosts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS).filter(
             (p) => p.id !== 'post-103' && !deletedSet.has(p.id) && !deletedSet.has(p.courseId)
           );
           const prevJson = JSON.stringify(localPosts);
           const postMap = new Map<string, CoursePost>();
+          const postsToPushToCloud: CoursePost[] = [];
 
           localPosts.forEach((p) => {
             const isInQueriedScope = !scopedCourseSet || scopedCourseSet.has(p.courseId);
-            if (!cloudActive || !isInQueriedScope || remotePostIds.has(p.id) || this.isRecentLocalWrite(p.id)) {
+            const isInitialDemo = /^post-\d{3}$/.test(p.id || '');
+            const wasConfirmedInCloud = confirmedCloudPosts.has(p.id);
+
+            if (remotePostIds.has(p.id)) {
               postMap.set(p.id, p);
+            } else if (
+              !cloudActive ||
+              !isInQueriedScope ||
+              this.isRecentLocalWrite(p.id) ||
+              p.status === 'scheduled' ||
+              (!wasConfirmedInCloud && !isInitialDemo) ||
+              (remotePosts.length === 0 && !isInitialDemo)
+            ) {
+              // Keep local post and ensure it is synced to Supabase so it never disappears
+              postMap.set(p.id, p);
+              if (!isInitialDemo) {
+                postsToPushToCloud.push(p);
+              }
             } else {
-              // Post was deleted on another device!
+              // Post was previously confirmed in Supabase and deleted on another device
               newlyDiscoveredRemoteDeletions.push(p.id);
               deletedSet.add(p.id);
             }
@@ -3121,20 +3204,46 @@ export class ClassroomDB {
               return;
             }
             const existing = postMap.get(rp.id);
-            const idTs = this.extractTimestampFromId(rp.id);
-            let postTimestampMs =
-              idTs ||
-              rp.createdAtMs ||
-              existing?.createdAtMs;
+            const isLocalRecent = this.isRecentLocalWrite(rp.id);
+            const wasAlreadyPublishedLocally =
+              existing?.status === 'published' && rp.status === 'scheduled';
+            const rpScheduledMs =
+              rp.status === 'scheduled' ? this.parseScheduledTimestampMs(rp) : null;
+            const isRpScheduleDueNow =
+              rp.status === 'scheduled' &&
+              (rpScheduledMs === null || rpScheduledMs <= Date.now());
 
-            // Clamp future simulated timestamps from AI Studio preview (Nov 2026) so real posts always stay on top
-            if (postTimestampMs && postTimestampMs > Date.now() + 120_000 && !this.isRecentLocalWrite(rp.id)) {
-              postTimestampMs = 1_705_000_000_000 + (postTimestampMs % 86_400_000);
-            }
+            const resolvedStatus: CoursePost['status'] =
+              wasAlreadyPublishedLocally || isRpScheduleDueNow
+                ? 'published'
+                : isLocalRecent && existing?.status
+                ? existing.status
+                : rp.status || existing?.status || 'published';
+
+            const idTs = this.extractTimestampFromId(rp.id);
+            const postTimestampMs =
+              isRpScheduleDueNow && !wasAlreadyPublishedLocally
+                ? Math.max(Date.now(), rpScheduledMs || 0)
+                : Math.max(
+                    rp.createdAtMs || 0,
+                    existing?.createdAtMs || 0,
+                    idTs || 0
+                  ) || Date.now();
+
+            const resolvedScheduledFor =
+              resolvedStatus === 'scheduled'
+                ? (isLocalRecent ? existing?.scheduledFor || rp.scheduledFor : rp.scheduledFor || existing?.scheduledFor)
+                : undefined;
+            const resolvedScheduledForDisplay =
+              resolvedStatus === 'scheduled'
+                ? (isLocalRecent
+                    ? existing?.scheduledForDisplay || rp.scheduledForDisplay
+                    : rp.scheduledForDisplay || existing?.scheduledForDisplay)
+                : undefined;
 
             const formattedTime =
-              rp.status === 'scheduled'
-                ? rp.createdAt
+              resolvedStatus === 'scheduled'
+                ? `Scheduled for ${resolvedScheduledForDisplay || resolvedScheduledFor || 'upcoming'}`
                 : postTimestampMs
                 ? this.formatPostTimestamp(postTimestampMs)
                 : rp.createdAt || existing?.createdAt || 'Recently';
@@ -3154,9 +3263,18 @@ export class ClassroomDB {
               })
             );
 
-            postMap.set(rp.id, {
+            const mergedPost: CoursePost = {
               ...existing,
               ...rp,
+              title: isLocalRecent && existing?.title ? existing.title : rp.title || existing?.title || '',
+              content: isLocalRecent && existing?.content ? existing.content : rp.content || existing?.content || '',
+              postType: isLocalRecent && existing?.postType ? existing.postType : rp.postType || existing?.postType || 'announcement',
+              status: resolvedStatus,
+              scheduledFor: resolvedScheduledFor,
+              scheduledForDisplay: resolvedScheduledForDisplay,
+              isPinned: isLocalRecent && existing?.isPinned !== undefined ? existing.isPinned : Boolean(rp.isPinned ?? existing?.isPinned),
+              pinnedAt: isLocalRecent && existing?.isPinned !== undefined ? existing.pinnedAt : (rp.pinnedAt || existing?.pinnedAt),
+              pinOrder: isLocalRecent && existing?.isPinned !== undefined ? existing.pinOrder : (rp.pinOrder ?? existing?.pinOrder),
               authorAvatar: liveAuthorAvatar,
               createdAt: formattedTime,
               createdAtMs: postTimestampMs,
@@ -3171,16 +3289,39 @@ export class ClassroomDB {
                       return att;
                     })
                   : existing?.attachments || [],
-            });
+            };
+
+            postMap.set(rp.id, mergedPost);
+
+            if (wasAlreadyPublishedLocally || isRpScheduleDueNow || isLocalRecent) {
+              postsToPushToCloud.push(mergedPost);
+            }
           });
 
-          // Sort all posts newest-first so newly created posts are ALWAYS at the top of the stream!
+          // Sort all posts newest-first so newly created or auto-published posts are ALWAYS at the top of the stream!
           const merged = Array.from(postMap.values()).sort(
             (a, b) => this.getPostSortTimestamp(b) - this.getPostSortTimestamp(a)
           );
           if (JSON.stringify(merged) !== prevJson) {
             this.setItem(STORAGE_KEYS.POSTS, merged);
             updated = true;
+          }
+
+          if (this.checkAndPublishDueScheduledPosts()) {
+            updated = true;
+          }
+
+          if (postsToPushToCloud.length > 0) {
+            const allCoursesNow = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+            const uniqueToPush = Array.from(new Map(postsToPushToCloud.map((p) => [p.id, p])).values());
+            uniqueToPush.forEach((p) => {
+              const parentCourse = allCoursesNow.find((c) => c.id === p.courseId);
+              SupabaseService.upsertPost(p, parentCourse)
+                .then((ok) => {
+                  if (ok) this.markPostCloudConfirmed(p.id);
+                })
+                .catch(() => {});
+            });
           }
         }
 
@@ -3324,12 +3465,6 @@ export class ClassroomDB {
           updated = true;
         }
 
-        // Automatically clean up any orphaned data in LocalStorage and Supabase
-        const orphanCleanup = await this.cleanOrphanedLocalAndCloudData(false);
-        if (orphanCleanup.localCleaned > 0) {
-          updated = true;
-        }
-
         // If Primary Admin is logged in, also pull latest Security Audit Logs from Supabase
         if (loggedUser && loggedUser.role === 'admin' && shouldFetchCatalog) {
           const prevAuditCount = this.getAuditLogs().length;
@@ -3350,73 +3485,118 @@ export class ClassroomDB {
     return this.activePullPromise;
   }
 
+  /**
+   * Safely parses the scheduled release timestamp (in ms) from a scheduled post.
+   */
+  static parseScheduledTimestampMs(post: CoursePost): number | null {
+    if (!post) return null;
+    if (post.scheduledFor) {
+      const t = new Date(post.scheduledFor).getTime();
+      if (!isNaN(t) && t > 0) return t;
+    }
+    if (post.scheduledForDisplay) {
+      const t = Date.parse(post.scheduledForDisplay);
+      if (!isNaN(t) && t > 0) return t;
+    }
+    if (post.createdAt && /^Scheduled for/i.test(post.createdAt)) {
+      const cleaned = post.createdAt.replace(/^Scheduled for\s*/i, '').trim();
+      const t = Date.parse(cleaned);
+      if (!isNaN(t) && t > 0) return t;
+    }
+    return null;
+  }
+
+  /**
+   * Checks all scheduled posts across all classrooms and automatically transitions any due post
+   * (scheduledTime <= Date.now()) to 'published' at the top of the classroom stream, persists it
+   * to LocalStorage and Supabase, and notifies enrolled students.
+   */
+  static checkAndPublishDueScheduledPosts(): boolean {
+    const allPosts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS);
+    if (!allPosts || allPosts.length === 0) return false;
+    const now = Date.now();
+    let hasAutoPublished = false;
+    const autoPublishedList: CoursePost[] = [];
+
+    const processedPosts = allPosts.map((post) => {
+      if (!post || post.status !== 'scheduled') return post;
+      const scheduledTime = this.parseScheduledTimestampMs(post);
+      if (scheduledTime === null || scheduledTime <= now) {
+        hasAutoPublished = true;
+        const publishMs = Math.max(now, scheduledTime || 0);
+        const released: CoursePost = {
+          ...post,
+          status: 'published' as const,
+          createdAt: this.formatPostTimestamp(publishMs),
+          createdAtMs: publishMs,
+          scheduledFor: undefined,
+          scheduledForDisplay: undefined,
+        };
+        autoPublishedList.push(released);
+        return released;
+      }
+      return post;
+    });
+
+    if (!hasAutoPublished) return false;
+
+    const sortedPosts = [...processedPosts].sort(
+      (a, b) => this.getPostSortTimestamp(b) - this.getPostSortTimestamp(a)
+    );
+    this.setItem(STORAGE_KEYS.POSTS, sortedPosts);
+
+    const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    autoPublishedList.forEach((ap) => {
+      this.unmarkDeletedId(ap.id);
+      this.markLocalWrite(ap.id);
+      const targetCourse = allCourses.find((c) => c.id === ap.courseId);
+      try {
+        SupabaseService.upsertPost(ap, targetCourse)
+          .then((ok) => {
+            if (ok) this.markPostCloudConfirmed(ap.id);
+          })
+          .catch(() => {});
+      } catch {
+        // ignore
+      }
+      if (targetCourse && (ap.authorRole === 'admin' || ap.authorRole === 'co_admin')) {
+        this.notifyEnrolledStudentsOfCoursePost(
+          targetCourse,
+          ap,
+          ap.authorName,
+          ap.authorRole
+        );
+      }
+    });
+
+    return true;
+  }
+
   // Posts / Stream Feed
   static getPostsForCourse(courseId: string, currentUser: User): CoursePost[] {
     const authResult = this.getCourseById(courseId, currentUser);
     if (!authResult.course) {
       return [];
     }
+
+    // Always auto-publish any scheduled posts whose scheduled date/time has arrived
+    this.checkAndPublishDueScheduledPosts();
+
     const allPosts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS);
     const now = Date.now();
 
-    // Check if any scheduled posts have reached their release date/time and auto-publish them
-    let hasAutoPublished = false;
-    const autoPublishedList: CoursePost[] = [];
-    const processedPosts = allPosts.map((post) => {
-      if (post.status === 'scheduled' && post.scheduledFor) {
-        const scheduledTime = new Date(post.scheduledFor).getTime();
-        if (scheduledTime <= now) {
-          hasAutoPublished = true;
-          const released: CoursePost = {
-            ...post,
-            status: 'published' as const,
-            createdAt: this.formatPostTimestamp(now),
-            createdAtMs: now,
-            scheduledFor: undefined,
-            scheduledForDisplay: undefined,
-          };
-          autoPublishedList.push(released);
-          return released;
-        }
-      }
-      return post;
-    });
-
-    if (hasAutoPublished) {
-      this.setItem(STORAGE_KEYS.POSTS, processedPosts);
-      const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
-      autoPublishedList.forEach((ap) => {
-        this.markLocalWrite(ap.id);
-        try {
-          SupabaseService.upsertPost(ap).catch(() => {});
-        } catch {
-          // ignore
-        }
-        const targetCourse = allCourses.find((c) => c.id === ap.courseId);
-        if (targetCourse && (ap.authorRole === 'admin' || ap.authorRole === 'co_admin')) {
-          this.notifyEnrolledStudentsOfCoursePost(
-            targetCourse,
-            ap,
-            ap.authorName,
-            ap.authorRole
-          );
-        }
-      });
-    }
-
     // Filter by course
-    const coursePosts = processedPosts.filter((post) => post.courseId === courseId);
+    const coursePosts = allPosts.filter((post) => post && post.courseId === courseId);
 
     // If current user is a student, only show published posts (or posts whose scheduled time is reached)
-    const visiblePosts = (currentUser.role === 'admin' || currentUser.role === 'co_admin')
-      ? coursePosts
-      : coursePosts.filter((post) => {
-          if (!post.status || post.status === 'published') return true;
-          if (post.status === 'scheduled' && post.scheduledFor) {
-            return new Date(post.scheduledFor).getTime() <= now;
-          }
-          return false;
-        });
+    const visiblePosts =
+      currentUser.role === 'admin' || currentUser.role === 'co_admin'
+        ? coursePosts
+        : coursePosts.filter((post) => {
+            if (!post.status || post.status === 'published') return true;
+            const schedMs = this.parseScheduledTimestampMs(post);
+            return schedMs === null || schedMs <= now;
+          });
 
     // Strictly sort newest posts first (highest timestamp at index 0) so every new post appears at the very top of the classroom stream!
     return [...visiblePosts].sort(
@@ -3471,21 +3651,28 @@ export class ClassroomDB {
       comments: [],
     };
 
+    this.unmarkDeletedId(newPost.id);
     this.markLocalWrite(newPost.id);
-    const sortedPosts = [newPost, ...posts].sort(
+    const sortedPosts = [newPost, ...posts.filter((p) => p.id !== newPost.id)].sort(
       (a, b) => this.getPostSortTimestamp(b) - this.getPostSortTimestamp(a)
     );
     this.setItem(STORAGE_KEYS.POSTS, sortedPosts);
+
+    const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const course = allCourses.find((c) => c.id === postData.courseId);
+
     try {
-      SupabaseService.upsertPost(newPost).catch(() => {});
+      SupabaseService.upsertPost(newPost, course)
+        .then((ok) => {
+          if (ok) this.markPostCloudConfirmed(newPost.id);
+        })
+        .catch(() => {});
     } catch {
       // ignore
     }
 
     // Send notifications to all enrolled students in this classroom if published immediately
     let notifiedCount = 0;
-    const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
-    const course = allCourses.find((c) => c.id === postData.courseId);
     if (!isScheduled && course) {
       notifiedCount = this.notifyEnrolledStudentsOfCoursePost(
         course,
@@ -3537,12 +3724,23 @@ export class ClassroomDB {
     }
 
     let updatedPost: CoursePost | null = null;
+    const nowMs = Date.now();
 
     const newPosts = posts.map((p) => {
       if (p.id === postId) {
+        const transitioningToPublished =
+          p.status === 'scheduled' && updates.status === 'published';
         updatedPost = {
           ...p,
           ...updates,
+          ...(transitioningToPublished
+            ? {
+                createdAt: this.formatPostTimestamp(nowMs),
+                createdAtMs: nowMs,
+                scheduledFor: undefined,
+                scheduledForDisplay: undefined,
+              }
+            : {}),
         };
         return updatedPost;
       }
@@ -3553,16 +3751,26 @@ export class ClassroomDB {
       return { post: null, error: 'Post not found.' };
     }
 
-    this.setItem(STORAGE_KEYS.POSTS, newPosts);
+    const finalPost = updatedPost as CoursePost;
+    this.unmarkDeletedId(finalPost.id);
+    this.markLocalWrite(finalPost.id);
+    const sortedPosts = [...newPosts].sort(
+      (a, b) => this.getPostSortTimestamp(b) - this.getPostSortTimestamp(a)
+    );
+    this.setItem(STORAGE_KEYS.POSTS, sortedPosts);
+
+    const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const course = allCourses.find((c) => c.id === finalPost.courseId);
     try {
-      SupabaseService.upsertPost(updatedPost).catch(() => {});
+      SupabaseService.upsertPost(finalPost, course)
+        .then((ok) => {
+          if (ok) this.markPostCloudConfirmed(finalPost.id);
+        })
+        .catch(() => {});
     } catch {
       // ignore
     }
 
-    const finalPost = updatedPost as CoursePost;
-    const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
-    const course = allCourses.find((c) => c.id === finalPost.courseId);
     this.recordAuditLog({
       actor: currentUser,
       category: 'post',
@@ -3616,10 +3824,16 @@ export class ClassroomDB {
         }
         return p;
       });
+      this.markLocalWrite(postId);
       this.setItem(STORAGE_KEYS.POSTS, updated);
       if (updatedTarget) {
+        const finalTarget = updatedTarget as CoursePost;
         try {
-          SupabaseService.upsertPost(updatedTarget).catch(() => {});
+          SupabaseService.upsertPost(finalTarget, course)
+            .then((ok) => {
+              if (ok) this.markPostCloudConfirmed(finalTarget.id);
+            })
+            .catch(() => {});
         } catch {
           // ignore
         }
@@ -3663,10 +3877,16 @@ export class ClassroomDB {
         }
         return p;
       });
+      this.markLocalWrite(postId);
       this.setItem(STORAGE_KEYS.POSTS, updated);
       if (updatedTarget) {
+        const finalTarget = updatedTarget as CoursePost;
         try {
-          SupabaseService.upsertPost(updatedTarget).catch(() => {});
+          SupabaseService.upsertPost(finalTarget, course)
+            .then((ok) => {
+              if (ok) this.markPostCloudConfirmed(finalTarget.id);
+            })
+            .catch(() => {});
         } catch {
           // ignore
         }
@@ -3724,10 +3944,20 @@ export class ClassroomDB {
       (a, b) => this.getPostSortTimestamp(b) - this.getPostSortTimestamp(a)
     );
     this.setItem(STORAGE_KEYS.POSTS, sortedUpdated);
+
+    const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const course = allCourses.find((c) => c.id === target.courseId);
+
     if (publishedPost) {
-      this.markLocalWrite((publishedPost as CoursePost).id);
+      const finalPublished = publishedPost as CoursePost;
+      this.unmarkDeletedId(finalPublished.id);
+      this.markLocalWrite(finalPublished.id);
       try {
-        SupabaseService.upsertPost(publishedPost).catch(() => {});
+        SupabaseService.upsertPost(finalPublished, course)
+          .then((ok) => {
+            if (ok) this.markPostCloudConfirmed(finalPublished.id);
+          })
+          .catch(() => {});
       } catch {
         // ignore
       }
@@ -3735,8 +3965,6 @@ export class ClassroomDB {
 
     // Send notifications to all enrolled students in this classroom
     let notifiedCount = 0;
-    const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
-    const course = allCourses.find((c) => c.id === target.courseId);
     if (course && publishedPost) {
       notifiedCount = this.notifyEnrolledStudentsOfCoursePost(
         course,

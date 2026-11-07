@@ -204,11 +204,20 @@ export default function App() {
       }
     }, jitteredIntervalMs);
 
+    // 5-second live timer to immediately auto-publish any due scheduled posts to the top of the stream
+    const scheduledPostsInterval = setInterval(() => {
+      const publishedAny = ClassroomDB.checkAndPublishDueScheduledPosts();
+      if (publishedAny) {
+        refreshData();
+      }
+    }, 5000);
+
     // 20-second background timer to auto-delete notifications (>30 mins) and Audit Logs (>2 days / 48 hours) locally & in Supabase
     const notifCleanupInterval = setInterval(() => {
+      const publishedDue = ClassroomDB.checkAndPublishDueScheduledPosts();
       const purgedNotifs = ClassroomDB.purgeExpiredNotifications();
       const purgedAudit = ClassroomDB.purgeExpiredAuditLogs();
-      if (purgedNotifs || purgedAudit) {
+      if (publishedDue || purgedNotifs || purgedAudit) {
         refreshData();
       }
     }, 20000);
@@ -234,6 +243,7 @@ export default function App() {
       window.removeEventListener('focus', handleWakeUp);
       window.removeEventListener('online', handleOnline);
       clearInterval(syncInterval);
+      clearInterval(scheduledPostsInterval);
       clearInterval(notifCleanupInterval);
     };
   }, []);

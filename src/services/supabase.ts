@@ -1025,11 +1025,9 @@ export class SupabaseService {
       }
       let query = supabase
         .from('posts')
-        .select(
-          'id,course_id,author_id,author_name,author_role,author_avatar,title,content,post_type,status,scheduled_for,scheduled_for_display,is_pinned,pinned_at,pin_order,attachments,likes,comments,created_at'
-        )
+        .select('*')
         .order('created_at', { ascending: false })
-        .limit(150);
+        .limit(500);
 
       if (courseIds && courseIds.length > 0 && courseIds.length <= 25) {
         query = query.in('course_id', courseIds);
@@ -1039,14 +1037,89 @@ export class SupabaseService {
       if (error || !data) return null;
 
       return data.map((row) => {
-        const parsedMs = row.created_at ? new Date(row.created_at).getTime() : undefined;
-        const authorRole = ((row.author_role as UserRole) || 'admin');
+        const rawAttachments = Array.isArray(row.attachments) ? row.attachments : [];
+        let metaObj: Record<string, unknown> = {};
+        const visibleAttachments = rawAttachments.filter((att: Record<string, unknown>) => {
+          if (att && att.id === '__post_meta__' && typeof att.url === 'string') {
+            try {
+              metaObj = JSON.parse(att.url) as Record<string, unknown>;
+            } catch {
+              // ignore malformed meta
+            }
+            return false;
+          }
+          return true;
+        });
+
+        const parsedRowMs = row.created_at ? new Date(row.created_at).getTime() : undefined;
+        const metaCreatedMs =
+          typeof metaObj.createdAtMs === 'number' && Number.isFinite(metaObj.createdAtMs)
+            ? metaObj.createdAtMs
+            : undefined;
+        const effectiveCreatedMs =
+          metaCreatedMs && parsedRowMs
+            ? Math.max(metaCreatedMs, parsedRowMs)
+            : metaCreatedMs || (parsedRowMs && !isNaN(parsedRowMs) ? parsedRowMs : undefined);
+
+        const authorRole =
+          ((row.author_role as UserRole) || (metaObj.authorRole as UserRole) || 'admin');
+        const status: CoursePost['status'] =
+          ((row.status as CoursePost['status']) ||
+            (metaObj.status as CoursePost['status']) ||
+            'published');
+        const scheduledFor =
+          (row.scheduled_for ? String(row.scheduled_for) : undefined) ||
+          (typeof metaObj.scheduledFor === 'string' ? metaObj.scheduledFor : undefined);
+        const scheduledForDisplay =
+          (row.scheduled_for_display ? String(row.scheduled_for_display) : undefined) ||
+          (typeof metaObj.scheduledForDisplay === 'string' ? metaObj.scheduledForDisplay : undefined);
+        const isPinned =
+          row.is_pinned !== undefined && row.is_pinned !== null
+            ? Boolean(row.is_pinned)
+            : Boolean(metaObj.isPinned);
+        const pinnedAt =
+          (row.pinned_at ? String(row.pinned_at) : undefined) ||
+          (typeof metaObj.pinnedAt === 'string' ? metaObj.pinnedAt : undefined);
+        const pinOrder =
+          typeof row.pin_order === 'number'
+            ? row.pin_order
+            : typeof metaObj.pinOrder === 'number'
+            ? metaObj.pinOrder
+            : undefined;
+
         const comments = Array.isArray(row.comments)
           ? row.comments.map((cm: Record<string, unknown>) => ({
               ...cm,
               authorAvatar: cm.authorRole === 'student' ? '' : String(cm.authorAvatar || ''),
             }))
           : [];
+
+        const formattedCreatedAt =
+          status === 'scheduled'
+            ? `Scheduled for ${
+                scheduledForDisplay ||
+                (scheduledFor
+                  ? new Date(scheduledFor).toLocaleString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      hour12: true,
+                    })
+                  : 'upcoming')
+              }`
+            : effectiveCreatedMs
+            ? new Date(effectiveCreatedMs).toLocaleString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: true,
+              })
+            : 'Recently';
+
         return {
           id: row.id,
           courseId: row.course_id,
@@ -1056,25 +1129,16 @@ export class SupabaseService {
           authorAvatar: authorRole === 'student' ? '' : (row.author_avatar || ''),
           title: row.title || '',
           content: row.content || '',
-          createdAt: row.created_at
-            ? new Date(row.created_at).toLocaleString('en-US', {
-                month: 'short',
-                day: 'numeric',
-                year: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-                hour12: true,
-              })
-            : 'Recently',
-          createdAtMs: parsedMs && !isNaN(parsedMs) ? parsedMs : undefined,
+          createdAt: formattedCreatedAt,
+          createdAtMs: effectiveCreatedMs,
           postType: (row.post_type as CoursePost['postType']) || 'announcement',
-          status: (row.status as CoursePost['status']) || 'published',
-          scheduledFor: row.scheduled_for || undefined,
-          scheduledForDisplay: row.scheduled_for_display || undefined,
-          isPinned: Boolean(row.is_pinned),
-          pinnedAt: row.pinned_at || undefined,
-          pinOrder: row.pin_order ?? undefined,
-          attachments: Array.isArray(row.attachments) ? row.attachments : [],
+          status,
+          scheduledFor: status === 'scheduled' ? scheduledFor : undefined,
+          scheduledForDisplay: status === 'scheduled' ? scheduledForDisplay : undefined,
+          isPinned,
+          pinnedAt,
+          pinOrder,
+          attachments: visibleAttachments,
           likes: Array.isArray(row.likes) ? row.likes : [],
           comments: comments as CoursePost['comments'],
         };
@@ -1871,18 +1935,20 @@ export class SupabaseService {
     }
   }
 
-  private static formatPostRow(post: CoursePost) {
+  private static formatPostRow(post: CoursePost, coreOnly: boolean = false) {
     // Strip heavy base64 fileData & oversized data URLs from attachments before storing in Supabase
-    const safeAttachments = (post.attachments || []).map((att) => ({
-      id: att.id,
-      name: att.name,
-      size: att.size,
-      type: att.type,
-      url:
-        att.url && (att.url.startsWith('data:') || att.url.length > 2000)
-          ? '#attachment'
-          : att.url,
-    }));
+    const cleanVisibleAttachments = (post.attachments || [])
+      .filter((att) => att && att.id !== '__post_meta__')
+      .map((att) => ({
+        id: att.id,
+        name: att.name,
+        size: att.size,
+        type: att.type,
+        url:
+          att.url && (att.url.startsWith('data:') || att.url.length > 2000)
+            ? '#attachment'
+            : att.url,
+      }));
 
     // Keep latest 50 comments max in Supabase row and strip student avatars
     const safeComments = (post.comments || []).slice(-50).map((c) => ({
@@ -1902,21 +1968,57 @@ export class SupabaseService {
     const effectiveMs =
       post.createdAtMs ||
       (idTs && idTs > 1_600_000_000_000 ? idTs : undefined) ||
-      (isInitialDemoPost ? 1_704_067_200_000 : undefined); // 2024-01-01 for demo posts so new posts are always newer
+      (isInitialDemoPost ? 1_704_067_200_000 : Date.now());
+
+    const postStatus = post.status || 'published';
+    const metaAttachment = {
+      id: '__post_meta__',
+      name: '__post_meta__',
+      size: '0B',
+      type: 'meta',
+      url: JSON.stringify({
+        status: postStatus,
+        scheduledFor: postStatus === 'scheduled' ? post.scheduledFor || null : null,
+        scheduledForDisplay: postStatus === 'scheduled' ? post.scheduledForDisplay || null : null,
+        isPinned: Boolean(post.isPinned),
+        pinnedAt: post.pinnedAt || null,
+        pinOrder: post.pinOrder ?? null,
+        createdAtMs: effectiveMs,
+        authorRole: post.authorRole || 'admin',
+      }),
+    };
+
+    const safeAttachments = [...cleanVisibleAttachments, metaAttachment];
+
+    if (coreOnly) {
+      return {
+        id: post.id,
+        course_id: post.courseId,
+        author_id: post.authorId,
+        author_name: post.authorName,
+        title: post.title,
+        content: post.content,
+        post_type: post.postType || 'announcement',
+        attachments: safeAttachments,
+        likes: post.likes || [],
+        comments: safeComments,
+        ...(effectiveMs ? { created_at: new Date(effectiveMs).toISOString() } : {}),
+      };
+    }
 
     return {
       id: post.id,
       course_id: post.courseId,
       author_id: post.authorId,
       author_name: post.authorName,
-      author_role: post.authorRole,
+      author_role: post.authorRole || 'admin',
       author_avatar: compactAvatarForCloud(post.authorAvatar, post.authorRole),
       title: post.title,
       content: post.content,
-      post_type: post.postType,
-      status: post.status || 'published',
-      scheduled_for: post.scheduledFor || null,
-      scheduled_for_display: post.scheduledForDisplay || null,
+      post_type: post.postType || 'announcement',
+      status: postStatus,
+      scheduled_for: postStatus === 'scheduled' ? post.scheduledFor || null : null,
+      scheduled_for_display: postStatus === 'scheduled' ? post.scheduledForDisplay || null : null,
       is_pinned: Boolean(post.isPinned),
       pinned_at: post.pinnedAt || null,
       pin_order: post.pinOrder ?? null,
@@ -1928,11 +2030,12 @@ export class SupabaseService {
   }
 
   /**
-   * Upsert a stream post (including comments & likes) to Supabase SQL database
+   * Upsert a stream post (including comments, likes, schedule & pin metadata) to Supabase SQL database
+   * with automatic schema fallback so posts never fail or disappear even if optional columns are missing.
    */
-  static async upsertPost(post: CoursePost): Promise<boolean> {
+  static async upsertPost(post: CoursePost, parentCourse?: Course): Promise<boolean> {
     try {
-      const row = this.formatPostRow(post);
+      const row = this.formatPostRow(post, false);
       const sigKey = `post:${post.id}`;
       if (!this.hasChangedSignature(sigKey, row)) {
         return true;
@@ -1940,8 +2043,32 @@ export class SupabaseService {
       const { error } = await supabase.from('posts').upsert(row, { onConflict: 'id' });
       if (!error) {
         this.recordSignature(sigKey, row);
+        return true;
       }
-      return !error;
+
+      // If foreign key violation on course_id (23503), ensure parentCourse is upserted first and retry
+      if (
+        parentCourse &&
+        (error.code === '23503' ||
+          (error.message && error.message.toLowerCase().includes('foreign key')))
+      ) {
+        await this.upsertCourse(parentCourse);
+        const { error: retryFkErr } = await supabase.from('posts').upsert(row, { onConflict: 'id' });
+        if (!retryFkErr) {
+          this.recordSignature(sigKey, row);
+          return true;
+        }
+      }
+
+      // Fallback to core columns if optional columns (e.g. scheduled_for, status, is_pinned) are missing
+      const coreRow = this.formatPostRow(post, true);
+      const { error: coreErr } = await supabase.from('posts').upsert(coreRow, { onConflict: 'id' });
+      if (!coreErr) {
+        this.recordSignature(sigKey, row);
+        return true;
+      }
+
+      return false;
     } catch {
       return false;
     }
@@ -2196,24 +2323,40 @@ export class SupabaseService {
         }
       }
 
-      // 3. Determine active course IDs and user IDs in Supabase
-      let courseIdSet: Set<string>;
-      if (validCourseIds && validCourseIds.length > 0) {
-        courseIdSet = new Set(validCourseIds.filter((id) => !deletedSet.has(id)));
-      } else {
-        const { data: cRows } = await supabase.from('courses').select('id').limit(500);
-        courseIdSet = new Set((cRows || []).map((r) => String(r.id)).filter((id) => !deletedSet.has(id)));
+      // 3. Determine active course IDs and user IDs by ALWAYS unioning local valid IDs with actual Supabase rows
+      // so a client with partial/unloaded local courses NEVER mistakenly deletes another classroom's posts!
+      const [cQueryRes, uQueryRes] = await Promise.all([
+        supabase.from('courses').select('id').limit(500),
+        supabase.from('profiles').select('id').limit(3000),
+      ]);
+
+      if (cQueryRes.error || uQueryRes.error || !cQueryRes.data || !uQueryRes.data) {
+        return {
+          success: true,
+          totalCleaned,
+          details: 'Skipped referential sweep (could not verify remote parent catalog)',
+        };
       }
 
-      let userIdSet: Set<string>;
-      if (validUserIds && validUserIds.length > 0) {
-        userIdSet = new Set(validUserIds.filter((id) => !deletedSet.has(id)));
-      } else {
-        const { data: uRows } = await supabase.from('profiles').select('id').limit(3000);
-        userIdSet = new Set((uRows || []).map((r) => String(r.id)).filter((id) => !deletedSet.has(id)));
-      }
+      const courseIdSet = new Set<string>();
+      (validCourseIds || []).forEach((id) => {
+        if (id && !deletedSet.has(id)) courseIdSet.add(String(id));
+      });
+      cQueryRes.data.forEach((r) => {
+        const id = String(r.id || '');
+        if (id && !deletedSet.has(id)) courseIdSet.add(id);
+      });
 
-      // If both sets are empty (e.g. offline or empty DB), skip referential sweep to avoid accidental deletion
+      const userIdSet = new Set<string>();
+      (validUserIds || []).forEach((id) => {
+        if (id && !deletedSet.has(id)) userIdSet.add(String(id));
+      });
+      uQueryRes.data.forEach((r) => {
+        const id = String(r.id || '');
+        if (id && !deletedSet.has(id)) userIdSet.add(id);
+      });
+
+      // If either set is empty, skip referential sweep to avoid accidental deletion
       if (courseIdSet.size === 0 || userIdSet.size === 0) {
         return { success: true, totalCleaned, details: 'No active parent catalog to compare' };
       }
