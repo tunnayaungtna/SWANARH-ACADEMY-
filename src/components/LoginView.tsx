@@ -97,7 +97,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       timeoutId = setTimeout(() => {
         timedOut = true;
         resolve(ClassroomDB.login(identifier, password, activeRole, forceTakeover));
-      }, 12000);
+      }, 3800);
     });
 
     const res = await Promise.race([remotePromise, timeoutPromise]);
@@ -126,6 +126,42 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const handleSignInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     await executeSignIn(false);
+  };
+
+  // Smart Paste: If a student copies the entire Login Info message from Admin and pastes it into Username/Email,
+  // automatically extract both Username/Email and Password!
+  const handleIdentifierPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const pasted = e.clipboardData?.getData('text') || '';
+    if (!pasted || !pasted.includes('\n')) return;
+
+    const lines = pasted
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    let extractedId = '';
+    let extractedPwd = '';
+
+    for (const line of lines) {
+      const userMatch = line.match(/^(?:🔑\s*)?(?:username|user\s*id)\s*[:：=\-]\s*(.+)$/i);
+      const emailMatch = line.match(/^(?:📧\s*)?(?:email|e-mail|mail)\s*[:：=\-]\s*(.+)$/i);
+      const pwdMatch = line.match(/^(?:🔒\s*)?(?:password|စကားဝှက်|pass)\s*[:：=\-]\s*(.+)$/i);
+
+      if (userMatch && userMatch[1]) {
+        extractedId = userMatch[1].trim();
+      } else if (!extractedId && emailMatch && emailMatch[1]) {
+        extractedId = emailMatch[1].trim();
+      } else if (pwdMatch && pwdMatch[1]) {
+        extractedPwd = pwdMatch[1].trim();
+      }
+    }
+
+    if (extractedId && extractedPwd) {
+      e.preventDefault();
+      setIdentifier(extractedId);
+      setPassword(extractedPwd);
+      setErrorMessage(null);
+    }
   };
 
   return (
@@ -338,7 +374,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     ? 'သင်တန်းများ၊ သင်ခန်းစာများနှင့် ကျောင်းသားအကောင့် အသစ်များကို စီမံခန့်ခွဲရန်'
                     : activeRole === 'co_admin'
                     ? 'ကျောင်းသားအသစ် ထည့်သွင်းခြင်း၊ သင်ခန်းစာ Post တင်ခြင်းနှင့် Attendance စီမံရန်'
-                    : 'သင်တန်းမှ ထုတ်ပေးထားသော Username နှင့် Password ကို အသုံးပြု၍ ဝင်ရောက်ပါ'}
+                    : 'သင်တန်းမှ ထုတ်ပေးထားသော Username သို့မဟုတ် Email နှင့် Password ကို အသုံးပြု၍ အမြန်ဝင်ရောက်ပါ'}
                 </p>
               </div>
 
@@ -381,14 +417,15 @@ export const LoginView: React.FC<LoginViewProps> = ({
                       type="text"
                       value={identifier}
                       onChange={(e) => setIdentifier(e.target.value)}
+                      onPaste={handleIdentifierPaste}
                       autoCapitalize="none"
                       autoCorrect="off"
                       spellCheck={false}
                       autoComplete="username"
                       placeholder={
                         activeRole === 'student'
-                          ? 'Enter your student username or email'
-                          : 'Enter administrator username or email'
+                          ? 'Username သို့မဟုတ် Email ရိုက်ထည့်ပါ'
+                          : 'Admin Username သို့မဟုတ် Email ရိုက်ထည့်ပါ'
                       }
                       className="neu-input w-full pl-10 pr-4 py-3.5 text-xs sm:text-sm rounded-2xl text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 font-mono"
                       required

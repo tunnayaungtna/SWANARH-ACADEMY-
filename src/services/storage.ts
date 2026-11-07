@@ -906,7 +906,7 @@ export class ClassroomDB {
   } {
     const cleanId = (raw || '')
       .replace(/[\u200B-\u200D\uFEFF]/g, '')
-      .replace(/^(🔑\s*|📧\s*|👤\s*)?(username|email|e-mail|mail|id|အမည်|name)\s*[:：=\-]\s*/i, '')
+      .replace(/^(🔑\s*|📧\s*|👤\s*)?(username|email|e-mail|mail|id)\s*[:：=\-]\s*/i, '')
       .trim()
       .replace(/^@+/, '')
       .toLowerCase();
@@ -956,7 +956,7 @@ export class ClassroomDB {
     const allUsers = this.getAllUsers();
     const candidateSet = new Set<User>();
 
-    // Priority 1: Exact username or exact email match
+    // Priority 1: Exact Username or Exact Email match
     for (const u of allUsers) {
       const uName = (u.username || '').trim().replace(/^@+/, '').toLowerCase();
       const uEmail = (u.email || '').trim().toLowerCase();
@@ -970,8 +970,8 @@ export class ClassroomDB {
       }
     }
 
-    // Priority 2: Cross-match between Username and Email prefix (before '@')
-    // Fixes cases where email login works (e.g. "aungmin@gmail.com") and user enters "aungmin" as username, or vice versa
+    // Priority 2: Cross-match between Username and Email local-part (before '@')
+    // Ensures both Username and Email work interchangeably for every account
     if (idLocalPart) {
       for (const u of allUsers) {
         const uName = (u.username || '').trim().replace(/^@+/, '').toLowerCase();
@@ -987,26 +987,22 @@ export class ClassroomDB {
       }
     }
 
-    // Priority 3: Punctuation/space-insensitive username or email prefix match, or full name match
-    for (const u of allUsers) {
-      const uName = (u.username || '').trim().toLowerCase();
-      const uEmail = (u.email || '').trim().toLowerCase();
-      const uEmailLocal = uEmail.includes('@') ? uEmail.split('@')[0].trim() : uEmail;
-      const uAlphaName = uName.replace(/[^a-z0-9\u1000-\u109f]/g, '');
-      const uAlphaEmail = uEmailLocal.replace(/[^a-z0-9\u1000-\u109f]/g, '');
-      const fullName = (u.name || '').trim().toLowerCase();
-      const compactName = fullName.replace(/\s+/g, '');
+    // Priority 3: Punctuation/space-insensitive Username or Email prefix match
+    if (alphaNumId.length >= 2) {
+      for (const u of allUsers) {
+        const uName = (u.username || '').trim().toLowerCase();
+        const uEmail = (u.email || '').trim().toLowerCase();
+        const uEmailLocal = uEmail.includes('@') ? uEmail.split('@')[0].trim() : uEmail;
+        const uAlphaName = uName.replace(/[^a-z0-9\u1000-\u109f]/g, '');
+        const uAlphaEmail = uEmailLocal.replace(/[^a-z0-9\u1000-\u109f]/g, '');
 
-      if (
-        (alphaNumId.length >= 2 && (uAlphaName === alphaNumId || uAlphaEmail === alphaNumId)) ||
-        fullName === cleanId ||
-        (compactId.length >= 2 && compactName === compactId)
-      ) {
-        candidateSet.add(u);
+        if (uAlphaName === alphaNumId || uAlphaEmail === alphaNumId) {
+          candidateSet.add(u);
+        }
       }
     }
 
-    // Priority 4: Auto-generated numeric suffix match (e.g. username "mgaungmin1" when user types "mgaungmin")
+    // Priority 4: Auto-generated numeric suffix match on Username (e.g. "mgaungmin1" when user types "mgaungmin")
     if (idLocalPart.length >= 3) {
       for (const u of allUsers) {
         const uName = (u.username || '').trim().toLowerCase();
@@ -1018,7 +1014,7 @@ export class ClassroomDB {
     }
 
     const genericAuthError =
-      'Username/Email သို့မဟုတ် Password မှားယွင်းနေပါသည်။ ကျေးဇူးပြု၍ သေချာစွာ ပြန်လည်စစ်ဆေးပြီး ဝင်ရောက်ပါ။ (Invalid username or password)';
+      'Username သို့မဟုတ် Email နှင့် Password မှားယွင်းနေပါသည်။ ကျေးဇူးပြု၍ ပြန်လည်စစ်ဆေးပြီး ဝင်ရောက်ပါ။ (Invalid username/email or password)';
 
     const candidates = Array.from(candidateSet);
     if (candidates.length === 0) {
@@ -1201,11 +1197,44 @@ export class ClassroomDB {
     this.setItem(STORAGE_KEYS.USERS, localUsers);
   }
 
+  private static mergeRemoteUsersBatchIntoLocal(remoteUsers: User[], deletedSet: Set<string>): void {
+    if (!remoteUsers || remoteUsers.length === 0) return;
+    const localUsers = this.getAllUsers().filter((u) => !deletedSet.has(u.id));
+    const userMap = new Map<string, User>();
+    localUsers.forEach((u) => userMap.set(u.id, u));
+
+    remoteUsers.forEach((ru) => {
+      if (deletedSet.has(ru.id)) return;
+      const existing = userMap.get(ru.id);
+      const ruName = (ru.username || '').trim().toLowerCase();
+      userMap.set(ru.id, {
+        ...(existing || {}),
+        ...ru,
+        username:
+          ruName && ruName !== 'user'
+            ? ruName
+            : existing?.username || ruName || 'user',
+        activeDeviceId: ru.activeDeviceId,
+        activeSessionToken: ru.activeSessionToken,
+        sessionUpdatedAtMs: ru.sessionUpdatedAtMs,
+        rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
+        rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
+        avatar: ru.role === 'student' ? '' : ru.avatar || existing?.avatar || '',
+        password: encryptPassword(
+          ru.password || existing?.password,
+          ru.role,
+          ru.id
+        ),
+      });
+    });
+
+    this.setItem(STORAGE_KEYS.USERS, Array.from(userMap.values()));
+  }
+
   /**
-   * High-Concurrency Login with Authoritative Single-Device Verification & Full Cloud Fallback:
-   * 1. Queries matching candidate profile rows from Supabase (by username, email, email prefix, or name) to verify live credentials and device lock.
-   * 2. If lookup misses (or credentials were updated), falls back to pulling all remote profiles
-   *    so newly created accounts on another computer ALWAYS log in on mobile phones on the first try.
+   * Ultra-Fast Login by Username or Email:
+   * 1. Instant 0ms Local Fast-Path when credentials already match locally (for Admin/Co-Admin, same-device students, or first-time students).
+   * 2. Parallelized Cloud Lookup (candidate lookup + full profile fallback simultaneously) with a short timeout so newly created accounts on another device log in rapidly.
    */
   static async loginWithRemoteFallback(
     identifier: string,
@@ -1231,55 +1260,87 @@ export class ClassroomDB {
     }
 
     const deletedSet = new Set(this.getDeletedIds());
-    if (typeof navigator === 'undefined' || navigator.onLine !== false) {
-      // 1. Fast candidate lookup by username, email, email prefix, or name
-      const remoteCandidates = await SupabaseService.getRemoteCandidateProfiles(identifier, true);
-      if (remoteCandidates.length > 0) {
-        for (const ru of remoteCandidates) {
-          if (!deletedSet.has(ru.id)) {
-            this.mergeRemoteUserIntoLocal(ru, deletedSet);
-          }
+    const localDeviceId = this.getDeviceId();
+
+    // 1. Instant 0ms Fast-Path: Check if user + password already match in local memory/storage
+    const instantLocal = this.verifyCredentialsOnly(identifier, cleanPwd, expectedRole);
+    if (instantLocal.user) {
+      const matched = instantLocal.user;
+      const canLoginImmediately =
+        matched.role !== 'student' ||
+        forceTakeover ||
+        !matched.rulesAccepted ||
+        !matched.activeDeviceId ||
+        matched.activeDeviceId === 'LOGGED_OUT' ||
+        matched.activeDeviceId === localDeviceId;
+
+      if (canLoginImmediately) {
+        // Sync latest profile in background without delaying login
+        if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+          SupabaseService.getRemoteCandidateProfiles(identifier, true)
+            .then((rows) => {
+              rows.forEach((ru) => this.mergeRemoteUserIntoLocal(ru, deletedSet));
+            })
+            .catch(() => {});
         }
+        return this.login(identifier, cleanPwd, expectedRole, forceTakeover);
       }
 
-      // 2. If user still not found or password check fails against cached local data, pull full remote profiles list
-      const preCheck = this.verifyCredentialsOnly(identifier, cleanPwd, expectedRole);
-      if (!preCheck.user) {
-        const allRemoteProfiles = await SupabaseService.getRemoteProfiles(true);
-        if (allRemoteProfiles && allRemoteProfiles.length > 0) {
-          const localUsers = this.getAllUsers().filter((u) => !deletedSet.has(u.id));
-          const userMap = new Map<string, User>();
-          localUsers.forEach((u) => userMap.set(u.id, u));
-          allRemoteProfiles.forEach((ru) => {
-            if (deletedSet.has(ru.id)) return;
-            const existing = userMap.get(ru.id);
-            const ruName = (ru.username || '').trim().toLowerCase();
-            userMap.set(ru.id, {
-              ...(existing || {}),
-              ...ru,
-              username:
-                ruName && ruName !== 'user'
-                  ? ruName
-                  : existing?.username || ruName || 'user',
-              activeDeviceId: ru.activeDeviceId,
-              activeSessionToken: ru.activeSessionToken,
-              sessionUpdatedAtMs: ru.sessionUpdatedAtMs,
-              rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
-              rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
-              avatar: ru.role === 'student' ? '' : ru.avatar || existing?.avatar || '',
-              password: encryptPassword(
-                ru.password || existing?.password,
-                ru.role,
-                ru.id
-              ),
-            });
-          });
-          this.setItem(STORAGE_KEYS.USERS, Array.from(userMap.values()));
-        }
+      // Student account that might be active on another device: do a quick max 1.2s cloud check
+      if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+        await Promise.race([
+          SupabaseService.getRemoteCandidateProfiles(identifier, true)
+            .then((rows) => {
+              rows.forEach((ru) => this.mergeRemoteUserIntoLocal(ru, deletedSet));
+            })
+            .catch(() => {}),
+          new Promise<void>((r) => setTimeout(r, 1200)),
+        ]);
       }
+      return this.login(identifier, cleanPwd, expectedRole, forceTakeover);
     }
 
-    // 3. Verify credentials and Single-Device Lock against updated user record
+    // 2. User not found locally yet (or password was just changed on another device):
+    // Run candidate query and full profiles query in PARALLEL with a fast 3.2s cap so we never wait sequentially
+    if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+      const candidatePromise = SupabaseService.getRemoteCandidateProfiles(identifier, true)
+        .then((rows) => {
+          if (rows && rows.length > 0) {
+            rows.forEach((ru) => this.mergeRemoteUserIntoLocal(ru, deletedSet));
+          }
+          return rows;
+        })
+        .catch(() => [] as User[]);
+
+      const fullProfilesPromise = SupabaseService.getRemoteProfiles(true)
+        .then((allRemote) => {
+          if (allRemote && allRemote.length > 0) {
+            this.mergeRemoteUsersBatchIntoLocal(allRemote, deletedSet);
+          }
+          return allRemote;
+        })
+        .catch(() => null);
+
+      // Wait for candidate query first (bounded by 1.5s)
+      await Promise.race([
+        candidatePromise,
+        new Promise<void>((r) => setTimeout(r, 1500)),
+      ]);
+
+      // If candidate query already resolved our user, log in right away without waiting for fullProfilesPromise!
+      const afterCandidateCheck = this.verifyCredentialsOnly(identifier, cleanPwd, expectedRole);
+      if (afterCandidateCheck.user) {
+        return this.login(identifier, cleanPwd, expectedRole, forceTakeover);
+      }
+
+      // Otherwise wait up to 2.0s more for the already-in-flight fullProfilesPromise
+      await Promise.race([
+        fullProfilesPromise,
+        new Promise<void>((r) => setTimeout(r, 2000)),
+      ]);
+    }
+
+    // 3. Final credential & single-device check
     return this.login(identifier, cleanPwd, expectedRole, forceTakeover);
   }
 

@@ -839,7 +839,7 @@ export class SupabaseService {
   }
 
   /**
-   * Fast lookup by username, email, email-prefix, or name for Login (returns all candidate matches up to 15 rows)
+   * Fast lookup strictly by username or email for Login (returns all candidate matches up to 15 rows)
    */
   static async getRemoteCandidateProfiles(
     identifier: string,
@@ -847,7 +847,7 @@ export class SupabaseService {
   ): Promise<User[]> {
     const rawClean = (identifier || '')
       .replace(/[\u200B-\u200D\uFEFF]/g, '')
-      .replace(/^(🔑\s*|📧\s*)?(username|email|e-mail|mail|id|အမည်|name)\s*[:：=\-]\s*/i, '')
+      .replace(/^(🔑\s*|📧\s*|👤\s*)?(username|email|e-mail|mail|id)\s*[:：=\-]\s*/i, '')
       .trim()
       .replace(/^@+/, '')
       .toLowerCase();
@@ -856,25 +856,18 @@ export class SupabaseService {
     // Sanitize against PostgREST filter syntax characters
     const safeId = rawClean.replace(/[,()"'\\]/g, '').trim();
     const compactId = safeId.replace(/\s+/g, '');
-    if (!safeId && !compactId) return [];
+    if (!compactId) return [];
 
     const idLocalPart = compactId.includes('@') ? compactId.split('@')[0].trim() : compactId;
 
     const fetcher = async (): Promise<User[]> => {
       try {
         const filterSet = new Set<string>();
-        const targetCompact = compactId || safeId;
-        filterSet.add(`username.ilike.${targetCompact}`);
-        filterSet.add(`email.ilike.${targetCompact}`);
+        filterSet.add(`username.ilike.${compactId}`);
+        filterSet.add(`email.ilike.${compactId}`);
         if (idLocalPart) {
           filterSet.add(`username.ilike.${idLocalPart}`);
           filterSet.add(`email.ilike.${idLocalPart}@%`);
-        }
-        if (safeId !== compactId && safeId.length > 0) {
-          filterSet.add(`name.ilike.${safeId}`);
-          filterSet.add(`username.ilike.${safeId}`);
-        } else if (safeId) {
-          filterSet.add(`name.ilike.${safeId}`);
         }
 
         const { data, error } = await supabase
@@ -890,9 +883,8 @@ export class SupabaseService {
         // Fallback if `username` column is missing in an older Supabase table schema
         if (error) {
           const fallbackFilters = [
-            `email.ilike.${targetCompact}`,
-            ...(idLocalPart ? [`email.ilike.${idLocalPart}@%`] : []),
-            `name.ilike.${safeId || targetCompact}`,
+            `email.ilike.${compactId}`,
+            ...(idLocalPart ? [`email.ilike.${idLocalPart}@%`, `title.ilike.%||USR:${idLocalPart}%`] : []),
           ];
           const { data: fbData, error: fbErr } = await supabase
             .from('profiles')
@@ -912,7 +904,7 @@ export class SupabaseService {
     if (skipDedupe) {
       return fetcher();
     }
-    return this.dedupeGet(`profile_candidates:${compactId || safeId}`, fetcher);
+    return this.dedupeGet(`profile_candidates:${compactId}`, fetcher);
   }
 
   /**
