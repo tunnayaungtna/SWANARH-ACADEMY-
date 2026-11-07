@@ -13,7 +13,12 @@ import {
   Sparkles,
   ChevronDown,
   ChevronUp,
+  Edit3,
+  Clock,
+  AlertCircle,
+  RotateCcw,
 } from 'lucide-react';
+import { AttendanceStatus } from '../types/classroom';
 
 interface DashboardAttendanceWidgetProps {
   courses: Course[];
@@ -33,6 +38,10 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
   const [sessionTitle, setSessionTitle] = useState('');
   const [expandedRoster, setExpandedRoster] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [editingSessionIds, setEditingSessionIds] = useState<Record<string, boolean>>({});
+  const [dashboardRosterFilter, setDashboardRosterFilter] = useState<
+    'all' | 'checked_in' | 'not_checked_in'
+  >('all');
 
   if (courses.length === 0) return null;
 
@@ -77,13 +86,26 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
     onRefresh();
   };
 
-  const handleStudentMarkPresent = (sessionId: string, courseTitle: string) => {
-    const res = ClassroomDB.studentCheckIn(sessionId, currentUser);
+  const handleStudentMarkPresent = (
+    sessionId: string,
+    courseTitle: string,
+    status: AttendanceStatus | 'clear' = 'present'
+  ) => {
+    const res = ClassroomDB.studentCheckIn(sessionId, currentUser, status);
     if (!res.success && res.error) {
       showToast(res.error);
       return;
     }
-    showToast(`✅ "${courseTitle}" အတွက် Mark Present (တက်ရောက်သည်) မှတ်တမ်းတင်ပြီးပါပြီ!`);
+    setEditingSessionIds((prev) => ({ ...prev, [sessionId]: false }));
+    if (status === 'clear') {
+      showToast(`🔄 "${courseTitle}" အတွက် Attendance မှတ်တမ်းကို ပြန်ဖျက်ပြီးပါပြီ။`);
+    } else if (status === 'late') {
+      showToast(`⏰ "${courseTitle}" အတွက် Late (နောက်ကျ) အဖြစ် ပြင်ဆင်မှတ်တမ်းတင်ပြီးပါပြီ!`);
+    } else if (status === 'excused') {
+      showToast(`📝 "${courseTitle}" အတွက် Excused (ခွင့်တိုင်) အဖြစ် ပြင်ဆင်မှတ်တမ်းတင်ပြီးပါပြီ!`);
+    } else {
+      showToast(`✅ "${courseTitle}" အတွက် Mark Present (တက်ရောက်သည်) မှတ်တမ်းတင်ပြီးပါပြီ!`);
+    }
     onRefresh();
   };
 
@@ -217,15 +239,91 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
                       <div className="text-[11px] text-emerald-800 dark:text-emerald-300 font-medium truncate">
                         🟢 {openSession.title} ({openSession.displayDate})
                       </div>
-                      {isMarkedPresent ? (
-                        <div className="w-full py-2 px-3 rounded-xl bg-emerald-100 dark:bg-emerald-950/90 border border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-200 text-xs font-bold flex items-center justify-center gap-1.5">
-                          <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                          <span>Marked Present ({myRecord?.checkedInAt})</span>
+                      {myRecord ? (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex-1 py-2 px-3 rounded-xl bg-emerald-100 dark:bg-emerald-950/90 border border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-200 text-xs font-bold flex items-center justify-center gap-1.5">
+                              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                              <span>
+                                {myRecord.status === 'present'
+                                  ? 'Present (တက်ရောက်)'
+                                  : myRecord.status === 'late'
+                                  ? 'Late (နောက်ကျ)'
+                                  : myRecord.status === 'excused'
+                                  ? 'Excused (ခွင့်တိုင်)'
+                                  : 'Absent'}{' '}
+                                {myRecord.checkedInAt ? `(${myRecord.checkedInAt})` : ''}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setEditingSessionIds((prev) => ({
+                                  ...prev,
+                                  [openSession.id]: !prev[openSession.id],
+                                }))
+                              }
+                              className="py-2 px-3 rounded-xl bg-white dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950 text-indigo-600 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 text-xs font-bold flex items-center gap-1 cursor-pointer shrink-0"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                              <span>{editingSessionIds[openSession.id] ? 'ပိတ်မည်' : 'ပြန်ပြင်မည်'}</span>
+                            </button>
+                          </div>
+
+                          {editingSessionIds[openSession.id] && (
+                            <div className="p-2.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 space-y-2">
+                              <div className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                                Attendance မပိတ်မီ ပြန်လည်ရွေးချယ်ရန် -
+                              </div>
+                              <div className="grid grid-cols-2 gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleStudentMarkPresent(openSession.id, course.title, 'present')
+                                  }
+                                  className="py-1.5 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                                >
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  <span>Present</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleStudentMarkPresent(openSession.id, course.title, 'late')
+                                  }
+                                  className="py-1.5 px-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                                >
+                                  <Clock className="w-3 h-3" />
+                                  <span>Late</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleStudentMarkPresent(openSession.id, course.title, 'excused')
+                                  }
+                                  className="py-1.5 px-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                                >
+                                  <AlertCircle className="w-3 h-3" />
+                                  <span>Excused</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleStudentMarkPresent(openSession.id, course.title, 'clear')
+                                  }
+                                  className="py-1.5 px-2 rounded-lg bg-rose-50 dark:bg-rose-950/70 hover:bg-rose-100 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-700 text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                                >
+                                  <RotateCcw className="w-3 h-3" />
+                                  <span>ပြန်ဖျက်မည်</span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <button
                           type="button"
-                          onClick={() => handleStudentMarkPresent(openSession.id, course.title)}
+                          onClick={() => handleStudentMarkPresent(openSession.id, course.title, 'present')}
                           className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white text-xs font-bold shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
                         >
                           <Hand className="w-4 h-4" />
@@ -448,95 +546,189 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
         </div>
 
         {expandedRoster && (
-          <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase">
-                  <th className="py-2.5 px-3.5">Student</th>
-                  <th className="py-2.5 px-3 text-center">Present</th>
-                  <th className="py-2.5 px-3 text-center">Late</th>
-                  <th className="py-2.5 px-3 text-center">Absent</th>
-                  <th className="py-2.5 px-3.5">Total Attendance %</th>
-                  <th className="py-2.5 px-3.5 text-right">Today's Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {enrolledStudentsInActive.map((stu) => {
-                  const st = ClassroomDB.getStudentAttendanceStats(activeCourse.id, stu.id);
-                  const totalPct = ClassroomDB.calculateTotalAttendancePercentage(
-                    activeCourse.id,
-                    stu.id
-                  );
-                  const latestSess = activeOpenSession || activeCourseSessions[0];
-                  const latestRec = latestSess?.records[stu.id];
+          <div className="mt-3 space-y-2.5">
+            {(() => {
+              const latestSess = activeOpenSession || activeCourseSessions[0];
+              const checkedCount = latestSess
+                ? enrolledStudentsInActive.filter((s) => {
+                    const r = latestSess.records[s.id];
+                    return Boolean(
+                      r && (r.status === 'present' || r.status === 'late' || r.status === 'excused')
+                    );
+                  }).length
+                : 0;
+              const notCheckedCount = enrolledStudentsInActive.length - checkedCount;
+              const filteredDashStudents = enrolledStudentsInActive.filter((s) => {
+                if (!latestSess || dashboardRosterFilter === 'all') return true;
+                const r = latestSess.records[s.id];
+                const isChk = Boolean(
+                  r && (r.status === 'present' || r.status === 'late' || r.status === 'excused')
+                );
+                return dashboardRosterFilter === 'checked_in' ? isChk : !isChk;
+              });
 
-                  return (
-                    <tr key={stu.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30">
-                      <td className="py-2.5 px-3.5 font-semibold text-slate-900 dark:text-white">
-                        {stu.name}{' '}
-                        <span className="text-[11px] font-mono text-slate-400">
-                          (@{stu.username})
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-center font-mono font-bold text-emerald-600">
-                        {st.presentCount}
-                      </td>
-                      <td className="py-2.5 px-3 text-center font-mono font-bold text-amber-600">
-                        {st.lateCount}
-                      </td>
-                      <td className="py-2.5 px-3 text-center font-mono font-bold text-rose-600">
-                        {st.absentCount}
-                      </td>
-                      <td className="py-2.5 px-3.5">
-                        <div className="flex items-center gap-2">
-                          <div className="w-24 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${
-                                totalPct >= 75
-                                  ? 'bg-emerald-500'
-                                  : totalPct >= 50
-                                  ? 'bg-amber-500'
-                                  : 'bg-rose-500'
-                              }`}
-                              style={{ width: `${totalPct}%` }}
-                            />
-                          </div>
-                          <span className="font-mono font-bold text-slate-900 dark:text-white">
-                            {totalPct}%
-                          </span>
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3.5 text-right">
-                        {latestSess ? (
-                          latestRec?.status === 'present' ? (
-                            <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
-                              ✓ Present ({latestRec.checkedInAt})
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                ClassroomDB.instructorMarkAttendance(
-                                  latestSess.id,
-                                  stu,
-                                  'present'
-                                );
-                                onRefresh();
-                              }}
-                              className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold cursor-pointer"
+              return (
+                <>
+                  {latestSess && (
+                    <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 text-xs">
+                      <span className="font-bold text-slate-700 dark:text-slate-300">
+                        📅 {latestSess.displayDate} — {latestSess.title}
+                      </span>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setDashboardRosterFilter('all')}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
+                            dashboardRosterFilter === 'all'
+                              ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
+                              : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                          }`}
+                        >
+                          အားလုံး ({enrolledStudentsInActive.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDashboardRosterFilter('checked_in')}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
+                            dashboardRosterFilter === 'checked_in'
+                              ? 'bg-emerald-600 text-white'
+                              : 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                          }`}
+                        >
+                          ✅ နှိပ်ပြီးသူ ({checkedCount})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDashboardRosterFilter('not_checked_in')}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
+                            dashboardRosterFilter === 'not_checked_in'
+                              ? 'bg-rose-600 text-white'
+                              : 'bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                          }`}
+                        >
+                          ⏳ မနှိပ်ရသေးသူ ({notCheckedCount})
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase">
+                          <th className="py-2.5 px-3.5">Student</th>
+                          <th className="py-2.5 px-3 text-center">Present</th>
+                          <th className="py-2.5 px-3 text-center">Late</th>
+                          <th className="py-2.5 px-3 text-center">Absent</th>
+                          <th className="py-2.5 px-3.5">Total Attendance %</th>
+                          <th className="py-2.5 px-3.5 text-right">Today&apos;s Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {filteredDashStudents.map((stu) => {
+                          const st = ClassroomDB.getStudentAttendanceStats(
+                            activeCourse.id,
+                            stu.id
+                          );
+                          const totalPct = ClassroomDB.calculateTotalAttendancePercentage(
+                            activeCourse.id,
+                            stu.id
+                          );
+                          const latestRec = latestSess?.records[stu.id];
+                          const isCheckedIn = Boolean(
+                            latestRec &&
+                              (latestRec.status === 'present' ||
+                                latestRec.status === 'late' ||
+                                latestRec.status === 'excused')
+                          );
+
+                          return (
+                            <tr
+                              key={stu.id}
+                              className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30"
                             >
-                              Mark Present
-                            </button>
-                          )
-                        ) : (
-                          <span className="text-slate-400">No session</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                              <td className="py-2.5 px-3.5 font-semibold text-slate-900 dark:text-white">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span>{stu.name}</span>
+                                  <span className="text-[11px] font-mono text-slate-400">
+                                    (@{stu.username})
+                                  </span>
+                                  {latestSess &&
+                                    (isCheckedIn ? (
+                                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300">
+                                        ✅ နှိပ်ပြီး
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300">
+                                        ⏳ မနှိပ်ရသေး
+                                      </span>
+                                    ))}
+                                </div>
+                              </td>
+                              <td className="py-2.5 px-3 text-center font-mono font-bold text-emerald-600">
+                                {st.presentCount}
+                              </td>
+                              <td className="py-2.5 px-3 text-center font-mono font-bold text-amber-600">
+                                {st.lateCount}
+                              </td>
+                              <td className="py-2.5 px-3 text-center font-mono font-bold text-rose-600">
+                                {st.absentCount}
+                              </td>
+                              <td className="py-2.5 px-3.5">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-24 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                                    <div
+                                      className={`h-full rounded-full ${
+                                        totalPct >= 75
+                                          ? 'bg-emerald-500'
+                                          : totalPct >= 50
+                                          ? 'bg-amber-500'
+                                          : 'bg-rose-500'
+                                      }`}
+                                      style={{ width: `${totalPct}%` }}
+                                    />
+                                  </div>
+                                  <span className="font-mono font-bold text-slate-900 dark:text-white">
+                                    {totalPct}%
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="py-2.5 px-3.5 text-right">
+                                {latestSess ? (
+                                  isCheckedIn ? (
+                                    <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
+                                      ✓ {latestRec?.status === 'late' ? 'Late' : latestRec?.status === 'excused' ? 'Excused' : 'Present'} (
+                                      {latestRec?.checkedInAt})
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        ClassroomDB.instructorMarkAttendance(
+                                          latestSess.id,
+                                          stu,
+                                          'present'
+                                        );
+                                        onRefresh();
+                                      }}
+                                      className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold cursor-pointer"
+                                    >
+                                      Mark Present
+                                    </button>
+                                  )
+                                ) : (
+                                  <span className="text-slate-400">No session</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         )}
       </div>

@@ -1425,7 +1425,12 @@ export class ClassroomDB {
     initialCourseId?: string;
     initialCourseIds?: string[];
     skipCloudUpsert?: boolean;
-  }): { user: User | null; error?: string } {
+  }): {
+    user: User | null;
+    error?: string;
+    conflictType?: 'email' | 'username' | 'both';
+    existingUser?: User;
+  } {
     const currentLogged = this.getCurrentUser();
     if (currentLogged && currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin') {
       return {
@@ -1441,19 +1446,40 @@ export class ClassroomDB {
     }
 
     const users = this.getAllUsers();
-    const cleanUsername = data.username.trim().replace(/^@+/, '').toLowerCase();
-    const cleanEmail = data.email.trim().toLowerCase();
+    let cleanUsername = data.username.trim().replace(/^@+/, '').toLowerCase();
+    if (!cleanUsername) {
+      cleanUsername = `user${Math.floor(1000 + Math.random() * 9000)}`;
+    }
+    let cleanEmail = data.email.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      cleanEmail = `${cleanUsername}@swanarh.edu`;
+    }
     const defaultPwd = data.role === 'admin' ? 'admin123' : data.role === 'co_admin' ? 'coadmin123' : 'student123';
     const cleanPassword = data.password?.trim() || defaultPwd;
 
-    // Check duplicate username or email
-    const duplicate = users.find(
-      (u) => u.username.toLowerCase() === cleanUsername || u.email.toLowerCase() === cleanEmail
-    );
-    if (duplicate) {
+    // Strictly check duplicate username or email — warn and DO NOT auto-add!
+    const existingByUsername = users.find((u) => u.username.toLowerCase() === cleanUsername);
+    const existingByEmail = users.find((u) => u.email.toLowerCase() === cleanEmail);
+    if (existingByUsername || existingByEmail) {
+      const conflictType: 'email' | 'username' | 'both' =
+        existingByUsername && existingByEmail
+          ? 'both'
+          : existingByEmail
+          ? 'email'
+          : 'username';
+      const existingOwner = (existingByEmail || existingByUsername)!;
+      const errorText =
+        conflictType === 'both'
+          ? `⚠️ သတိပေးချက်: Username "@${cleanUsername}" နှင့် Email "${cleanEmail}" တို့သည် စနစ်ထဲရှိ "${existingOwner.name}" (@${existingOwner.username}) အကောင့်တွင် ရှိပြီးသားဖြစ်နေပါသည်။ တန်းမထည့်ပေးပါ။`
+          : conflictType === 'email'
+          ? `⚠️ သတိပေးချက်: Email "${cleanEmail}" သည် စနစ်ထဲရှိ "${existingOwner.name}" (@${existingOwner.username}) အကောင့်တွင် ရှိပြီးသားဖြစ်နေပါသည်။ တန်းမထည့်ပေးပါ။`
+          : `⚠️ သတိပေးချက်: Username "@${cleanUsername}" သည် စနစ်ထဲရှိ "${existingOwner.name}" (${existingOwner.email}) အကောင့်တွင် ရှိပြီးသားဖြစ်နေပါသည်။ တန်းမထည့်ပေးပါ။`;
+
       return {
         user: null,
-        error: `User with username "${data.username}" or email "${data.email}" already exists. (အဆိုပါ username သို့မဟုတ် email ဖြင့် အကောင့်ရှိပြီးဖြစ်ပါသည်)`,
+        conflictType,
+        existingUser: existingOwner,
+        error: errorText,
       };
     }
 
@@ -1469,7 +1495,12 @@ export class ClassroomDB {
         ? ''
         : data.avatar?.trim() || avatarPool[users.length % avatarPool.length];
 
-    const newUserId = `user-${data.role}-${Date.now()}`;
+    let uniqueTs = Date.now();
+    const existingIdSet = new Set(users.map((u) => u.id));
+    while (existingIdSet.has(`user-${data.role}-${uniqueTs}`)) {
+      uniqueTs++;
+    }
+    const newUserId = `user-${data.role}-${uniqueTs}`;
     const newUser: User = {
       id: newUserId,
       name: data.name.trim(),
@@ -3444,13 +3475,33 @@ export class ClassroomDB {
               return;
             }
             const existing = attMap.get(ratt.id);
+            const isRecentAttWrite = this.isRecentLocalWrite(ratt.id);
+            let mergedRecords: Record<string, AttendanceRecord>;
+            if (isRecentAttWrite && existing) {
+              mergedRecords = {
+                ...(ratt.records || {}),
+                ...(existing.records || {}),
+              };
+              // If the logged-in student just cleared/undid their attendance locally, keep it cleared
+              if (
+                loggedUser &&
+                loggedUser.role === 'student' &&
+                existing.records &&
+                !existing.records[loggedUser.id]
+              ) {
+                delete mergedRecords[loggedUser.id];
+              }
+            } else {
+              mergedRecords = {
+                ...(existing?.records || {}),
+                ...(ratt.records || {}),
+              };
+            }
             attMap.set(ratt.id, {
               ...existing,
               ...ratt,
-              records: {
-                ...(existing?.records || {}),
-                ...(ratt.records || {}),
-              },
+              isOpen: isRecentAttWrite && existing ? existing.isOpen : ratt.isOpen,
+              records: mergedRecords,
             });
           });
           const merged = Array.from(attMap.values());
@@ -4748,6 +4799,7 @@ export class ClassroomDB {
       }
       return s;
     });
+    this.markLocalWrite(sessionId);
     this.setItem(STORAGE_KEYS.ATTENDANCE, updated);
     if (updatedSession) {
       const targetSess = updatedSession as AttendanceSession;
@@ -4824,9 +4876,11 @@ export class ClassroomDB {
 
   static studentCheckIn(
     sessionId: string,
-    student: User
+    student: User,
+    status: AttendanceStatus | 'clear' = 'present',
+    note?: string
   ): { success: boolean; error?: string } {
-    const rateCheck = this.checkRateLimit('attendance_checkin', student.id, 10, 60);
+    const rateCheck = this.checkRateLimit('attendance_checkin', student.id, 30, 60);
     if (!rateCheck.allowed) {
       return {
         success: false,
@@ -4843,7 +4897,10 @@ export class ClassroomDB {
       return { success: false, error: 'Attendance session မတွေ့ရှိပါ။' };
     }
     if (!target.isOpen) {
-      return { success: false, error: 'ဤအတန်းချိန်အတွက် Attendance ပိတ်ထားပါသည်။' };
+      return {
+        success: false,
+        error: 'ဤအတန်းချိန်အတွက် Attendance ပိတ်သွားပြီဖြစ်သောကြောင့် ပြင်ဆင်၍ မရနိုင်တော့ပါ။',
+      };
     }
 
     // Verify student is enrolled in the course
@@ -4856,6 +4913,17 @@ export class ClassroomDB {
     let updatedSession: AttendanceSession | null = null;
     const updated = sessions.map((s) => {
       if (s.id === sessionId) {
+        if (status === 'clear') {
+          const nextRecords = { ...s.records };
+          delete nextRecords[student.id];
+          updatedSession = {
+            ...s,
+            records: nextRecords,
+          };
+          return updatedSession;
+        }
+
+        const prevRec = s.records[student.id];
         updatedSession = {
           ...s,
           records: {
@@ -4863,9 +4931,10 @@ export class ClassroomDB {
             [student.id]: {
               studentId: student.id,
               studentName: student.name,
-              status: 'present' as AttendanceStatus,
-              checkedInAt: nowTime,
+              status: status as AttendanceStatus,
+              checkedInAt: status === 'absent' ? undefined : nowTime,
               checkedInBy: 'student' as const,
+              note: note !== undefined ? note.trim() || undefined : prevRec?.note,
             },
           },
         };
@@ -4874,6 +4943,7 @@ export class ClassroomDB {
       return s;
     });
 
+    this.markLocalWrite(sessionId);
     this.setItem(STORAGE_KEYS.ATTENDANCE, updated);
     if (updatedSession) {
       try {
@@ -4923,6 +4993,7 @@ export class ClassroomDB {
       return s;
     });
 
+    this.markLocalWrite(sessionId);
     this.setItem(STORAGE_KEYS.ATTENDANCE, updated);
     if (updatedSession) {
       try {
@@ -4967,6 +5038,7 @@ export class ClassroomDB {
       return s;
     });
 
+    this.markLocalWrite(sessionId);
     this.setItem(STORAGE_KEYS.ATTENDANCE, updated);
     if (updatedSession) {
       try {

@@ -24,6 +24,12 @@ import {
   Hand,
   Calendar,
   Download,
+  Edit3,
+  RotateCcw,
+  Search,
+  Copy,
+  UserCheck,
+  UserX,
 } from 'lucide-react';
 
 interface AttendanceViewProps {
@@ -55,6 +61,11 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [sessionToDelete, setSessionToDelete] = useState<AttendanceSession | null>(null);
   const [visibleRosterLimit, setVisibleRosterLimit] = useState<number>(60);
+  const [editingStudentSessionIds, setEditingStudentSessionIds] = useState<Record<string, boolean>>({});
+  const [rollCallFilter, setRollCallFilter] = useState<
+    'all' | 'checked_in' | 'not_checked_in' | 'present' | 'late' | 'excused' | 'absent'
+  >('all');
+  const [rollCallSearch, setRollCallSearch] = useState<string>('');
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -121,13 +132,27 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
     onRefresh();
   };
 
-  const handleStudentCheckIn = (sessionId: string) => {
-    const res = ClassroomDB.studentCheckIn(sessionId, currentUser);
+  const handleStudentCheckIn = (
+    sessionId: string,
+    status: AttendanceStatus | 'clear' = 'present'
+  ) => {
+    const res = ClassroomDB.studentCheckIn(sessionId, currentUser, status);
     if (!res.success && res.error) {
       showToast(res.error);
       return;
     }
-    showToast('✅ Present (တက်ရောက်သည်) မှတ်တမ်းတင်ပြီးပါပြီ!');
+    setEditingStudentSessionIds((prev) => ({ ...prev, [sessionId]: false }));
+    if (status === 'clear') {
+      showToast('🔄 သင်၏ Attendance မှတ်တမ်းကို ပြန်ဖျက်ပြီးပါပြီ။ ပြန်လည်ရွေးချယ်နှိပ်နိုင်ပါသည်။');
+    } else if (status === 'present') {
+      showToast('✅ Present (တက်ရောက်သည်) အဖြစ် မှတ်တမ်းတင်ပြီးပါပြီ!');
+    } else if (status === 'late') {
+      showToast('⏰ Late (နောက်ကျတက်ရောက်) အဖြစ် ပြင်ဆင်မှတ်တမ်းတင်ပြီးပါပြီ!');
+    } else if (status === 'excused') {
+      showToast('📝 Excused (ခွင့်တိုင်ကြားသည်) အဖြစ် ပြင်ဆင်မှတ်တမ်းတင်ပြီးပါပြီ!');
+    } else {
+      showToast('🔄 Attendance အခြေအနေကို ပြန်လည်ပြင်ဆင်ပြီးပါပြီ!');
+    }
     onRefresh();
   };
 
@@ -143,6 +168,99 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   const handleMarkAllPresent = (sessionId: string) => {
     ClassroomDB.markAllStudentsAttendance(sessionId, enrolledStudents, 'present');
     showToast('ကျောင်းသားအားလုံးကို Present (တက်ရောက်) အဖြစ် မှတ်သားပြီးပါပြီ။');
+    onRefresh();
+  };
+
+  // Breakdown of Checked-in vs Not Checked-in students for activeSession
+  const checkedInStudents = activeSession
+    ? enrolledStudents.filter((stu) => {
+        const rec = activeSession.records[stu.id];
+        return Boolean(
+          rec && (rec.status === 'present' || rec.status === 'late' || rec.status === 'excused')
+        );
+      })
+    : [];
+
+  const notCheckedInStudents = activeSession
+    ? enrolledStudents.filter((stu) => {
+        const rec = activeSession.records[stu.id];
+        return !rec || rec.status === 'absent';
+      })
+    : [];
+
+  const presentStudentsCount = activeSession
+    ? enrolledStudents.filter((stu) => activeSession.records[stu.id]?.status === 'present').length
+    : 0;
+  const lateStudentsCount = activeSession
+    ? enrolledStudents.filter((stu) => activeSession.records[stu.id]?.status === 'late').length
+    : 0;
+  const excusedStudentsCount = activeSession
+    ? enrolledStudents.filter((stu) => activeSession.records[stu.id]?.status === 'excused').length
+    : 0;
+  const absentMarkedStudentsCount = activeSession
+    ? enrolledStudents.filter((stu) => activeSession.records[stu.id]?.status === 'absent').length
+    : 0;
+
+  const filteredRollCallStudents = enrolledStudents.filter((stu) => {
+    if (rollCallSearch.trim()) {
+      const q = rollCallSearch.trim().toLowerCase();
+      const matchName = stu.name.toLowerCase().includes(q);
+      const matchUser = stu.username.toLowerCase().includes(q);
+      const matchPhone = stu.phone ? stu.phone.toLowerCase().includes(q) : false;
+      if (!matchName && !matchUser && !matchPhone) return false;
+    }
+    if (!activeSession || rollCallFilter === 'all') return true;
+    const rec = activeSession.records[stu.id];
+    const isCheckedIn = Boolean(
+      rec && (rec.status === 'present' || rec.status === 'late' || rec.status === 'excused')
+    );
+    if (rollCallFilter === 'checked_in') return isCheckedIn;
+    if (rollCallFilter === 'not_checked_in') return !isCheckedIn;
+    if (rollCallFilter === 'present') return rec?.status === 'present';
+    if (rollCallFilter === 'late') return rec?.status === 'late';
+    if (rollCallFilter === 'excused') return rec?.status === 'excused';
+    if (rollCallFilter === 'absent') return !rec || rec.status === 'absent';
+    return true;
+  });
+
+  const handleCopyAttendanceGroupList = (mode: 'checked_in' | 'not_checked_in') => {
+    if (!activeSession) return;
+    const targetList = mode === 'checked_in' ? checkedInStudents : notCheckedInStudents;
+    const header =
+      mode === 'checked_in'
+        ? `✅ Attendance နှိပ်ပြီးသူများ စာရင်း — ${course.code} (${activeSession.displayDate} - ${activeSession.title}) [${targetList.length}/${enrolledStudents.length} ဦး]`
+        : `⏳ Attendance မနှိပ်ရသေးသူများ စာရင်း — ${course.code} (${activeSession.displayDate} - ${activeSession.title}) [${targetList.length}/${enrolledStudents.length} ဦး]`;
+
+    const lines = targetList.map((stu, idx) => {
+      const rec = activeSession.records[stu.id];
+      const statusText =
+        mode === 'checked_in'
+          ? rec?.status === 'late'
+            ? ' [Late]'
+            : rec?.status === 'excused'
+            ? ' [Excused]'
+            : ' [Present]'
+          : '';
+      return `${idx + 1}. ${stu.name} (@${stu.username})${statusText}`;
+    });
+
+    const fullText = [header, '━━━━━━━━━━━━━━━━━━━━', ...lines].join('\n');
+    navigator.clipboard.writeText(fullText);
+    showToast(
+      mode === 'checked_in'
+        ? `📋 Attendance နှိပ်ပြီးသူ (${targetList.length}) ဦး စာရင်းကို Copy ကူးပြီးပါပြီ!`
+        : `📋 Attendance မနှိပ်ရသေးသူ (${targetList.length}) ဦး စာရင်းကို Copy ကူးပြီးပါပြီ!`
+    );
+  };
+
+  const handleMarkRemainingAsAbsent = (sessionId: string) => {
+    if (!activeSession || notCheckedInStudents.length === 0) return;
+    notCheckedInStudents.forEach((stu) => {
+      ClassroomDB.instructorMarkAttendance(sessionId, stu, 'absent');
+    });
+    showToast(
+      `⚠️ Attendance မနှိပ်ရသေးသူ (${notCheckedInStudents.length}) ဦးကို Absent (ပျက်ကွက်) အဖြစ် မှတ်သားပြီးပါပြီ။`
+    );
     onRefresh();
   };
 
@@ -301,52 +419,146 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
           {/* Open Daily Check-in Banner for Students */}
           {openSessions.length > 0 && (
             <div className="neu-card rounded-3xl p-4 sm:p-5 space-y-3 ring-2 ring-emerald-400/50">
-              <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-bold text-xs sm:text-sm">
-                <Sparkles className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                <span>Open Attendance — ယနေ့ အတန်းချိန် တက်ရောက်ကြောင်း နှိပ်ရန်</span>
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-bold text-xs sm:text-sm">
+                  <Sparkles className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  <span>Open Attendance — ယနေ့ အတန်းချိန် တက်ရောက်ကြောင်း နှိပ်ရန် (မပိတ်မီ ပြန်ပြင်နိုင်ပါသည်)</span>
+                </div>
+                <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
+                  🟢 Attendance ဖွင့်ထားဆဲ
+                </span>
               </div>
 
               <div className="space-y-2.5">
                 {openSessions.map((sess) => {
                   const myRecord = sess.records[currentUser.id];
-                  const isAlreadyPresent =
-                    myRecord?.status === 'present' || myRecord?.status === 'late';
+                  const isEditingThis = Boolean(editingStudentSessionIds[sess.id]);
 
                   return (
                     <div
                       key={sess.id}
-                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-2xl neu-inset-sm"
+                      className="flex flex-col gap-3 p-3.5 rounded-2xl neu-inset-sm"
                     >
-                      <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
-                            {sess.displayDate}
-                          </span>
-                          <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                            {sess.title}
-                          </h4>
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
+                              {sess.displayDate}
+                            </span>
+                            <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                              {sess.title}
+                            </h4>
+                          </div>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                            ဆရာ {sess.openedBy} မှ Attendance ဖွင့်ပေးထားပါသည်။ Attendance မပိတ်ခင် မိမိနှိပ်ထားသည်ကို ပြန်ပြင်နိုင်ပါသည်။
+                          </p>
                         </div>
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                          ဆရာ {sess.openedBy} မှ Attendance ဖွင့်ပေးထားပါသည်။
-                        </p>
+
+                        {myRecord ? (
+                          <div className="flex flex-wrap items-center gap-2 shrink-0">
+                            {renderStatusBadge(myRecord.status)}
+                            {myRecord.checkedInAt && (
+                              <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                                ({myRecord.checkedInAt})
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setEditingStudentSessionIds((prev) => ({
+                                  ...prev,
+                                  [sess.id]: !prev[sess.id],
+                                }))
+                              }
+                              className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-indigo-600 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                              <span>{isEditingThis ? 'မပြင်တော့ပါ (Cancel)' : 'ပြန်ပြင်မည် (Edit)'}</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleStudentCheckIn(sess.id, 'present')}
+                              className="px-4 py-2.5 rounded-xl neu-btn-emerald text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
+                            >
+                              <Hand className="w-4 h-4" />
+                              <span>Mark Present (တက်ရောက်သည်)</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleStudentCheckIn(sess.id, 'late')}
+                              className="px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/60 hover:bg-amber-100 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <Clock className="w-3.5 h-3.5" />
+                              <span>Late (နောက်ကျ)</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleStudentCheckIn(sess.id, 'excused')}
+                              className="px-3 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 text-indigo-800 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-700 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <AlertCircle className="w-3.5 h-3.5" />
+                              <span>Excused (ခွင့်တိုင်)</span>
+                            </button>
+                          </div>
+                        )}
                       </div>
 
-                      {isAlreadyPresent ? (
-                        <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/80 border border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 text-xs font-bold shrink-0">
-                          <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                          <span>
-                            တက်ရောက်ပြီး ({myRecord.checkedInAt || 'Recorded'})
+                      {/* Edit Attendance Drawer when student clicks "ပြန်ပြင်မည် (Edit)" while session is open */}
+                      {myRecord && isEditingThis && (
+                        <div className="pt-2.5 border-t border-slate-200/70 dark:border-slate-700/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 animate-fade-in">
+                          <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                            ✏️ Attendance မပိတ်မီ ပြောင်းလဲလိုသော အခြေအနေကို ရွေးချယ်ပါ -
                           </span>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleStudentCheckIn(sess.id, 'present')}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                                myRecord.status === 'present'
+                                  ? 'bg-emerald-600 text-white shadow-xs ring-2 ring-emerald-400/50'
+                                  : 'bg-white dark:bg-slate-800 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 hover:bg-emerald-50'
+                              }`}
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>Present (တက်ရောက်)</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleStudentCheckIn(sess.id, 'late')}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                                myRecord.status === 'late'
+                                  ? 'bg-amber-500 text-white shadow-xs ring-2 ring-amber-400/50'
+                                  : 'bg-white dark:bg-slate-800 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-700 hover:bg-amber-50'
+                              }`}
+                            >
+                              <Clock className="w-3.5 h-3.5" />
+                              <span>Late (နောက်ကျ)</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleStudentCheckIn(sess.id, 'excused')}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                                myRecord.status === 'excused'
+                                  ? 'bg-indigo-600 text-white shadow-xs ring-2 ring-indigo-400/50'
+                                  : 'bg-white dark:bg-slate-800 text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-700 hover:bg-indigo-50'
+                              }`}
+                            >
+                              <AlertCircle className="w-3.5 h-3.5" />
+                              <span>Excused (ခွင့်တိုင်)</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleStudentCheckIn(sess.id, 'clear')}
+                              className="px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-700 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              <span>ပြန်ဖျက်မည် (Undo Check-in)</span>
+                            </button>
+                          </div>
                         </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => handleStudentCheckIn(sess.id)}
-                          className="px-4 py-2.5 rounded-xl neu-btn-emerald text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0"
-                        >
-                          <Hand className="w-4 h-4" />
-                          <span>Mark Present (တက်ရောက်သည်)</span>
-                        </button>
                       )}
                     </div>
                   );
@@ -401,16 +613,56 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                         )}
                       </div>
 
-                      <div className="flex items-center gap-2 self-start sm:self-auto">
+                      <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
                         {sess.isOpen && !myRec && (
                           <button
                             type="button"
-                            onClick={() => handleStudentCheckIn(sess.id)}
+                            onClick={() => handleStudentCheckIn(sess.id, 'present')}
                             className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer flex items-center gap-1.5"
                           >
                             <Hand className="w-3.5 h-3.5" />
                             <span>Present (တက်ရောက်သည်)</span>
                           </button>
+                        )}
+                        {sess.isOpen && myRec && (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {myRec.status !== 'present' && (
+                              <button
+                                type="button"
+                                onClick={() => handleStudentCheckIn(sess.id, 'present')}
+                                className="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/70 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-[11px] font-bold cursor-pointer"
+                              >
+                                Present သို့ပြောင်းမည်
+                              </button>
+                            )}
+                            {myRec.status !== 'late' && (
+                              <button
+                                type="button"
+                                onClick={() => handleStudentCheckIn(sess.id, 'late')}
+                                className="px-2.5 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/70 hover:bg-amber-100 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-700 text-[11px] font-bold cursor-pointer"
+                              >
+                                Late
+                              </button>
+                            )}
+                            {myRec.status !== 'excused' && (
+                              <button
+                                type="button"
+                                onClick={() => handleStudentCheckIn(sess.id, 'excused')}
+                                className="px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/70 hover:bg-indigo-100 text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-700 text-[11px] font-bold cursor-pointer"
+                              >
+                                Excused
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleStudentCheckIn(sess.id, 'clear')}
+                              className="px-2.5 py-1 rounded-lg bg-rose-50 dark:bg-rose-950/70 hover:bg-rose-100 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-700 text-[11px] font-bold cursor-pointer flex items-center gap-1"
+                              title="Attendance မပိတ်မီ မှတ်တမ်းပြန်ဖျက်ရန်"
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                              <span>ပြန်ဖျက်မည်</span>
+                            </button>
+                          </div>
                         )}
                         {renderStatusBadge(myRec?.status)}
                       </div>
@@ -584,113 +836,390 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                 ဤအတန်းတွင် ကျောင်းသား စာရင်းသွင်းထားခြင်း မရှိသေးပါ။
               </div>
             ) : (
-              <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                {enrolledStudents.slice(0, visibleRosterLimit).map((stu) => {
-                  const rec = activeSession.records[stu.id];
-                  const currentStatus: AttendanceStatus = rec?.status || 'absent';
-
-                  return (
-                    <div
-                      key={stu.id}
-                      className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/70 dark:hover:bg-slate-800/30 transition-colors"
+              <div>
+                {/* Checked-In vs Not Checked-In Summary & Filter Control Bar for Admin & Co-Admin */}
+                <div className="p-4 sm:p-5 bg-slate-50/70 dark:bg-slate-800/40 border-b border-slate-200/70 dark:border-slate-800 space-y-3.5">
+                  {/* Top Summary Stat Cards (Clickable to Filter Immediately) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setRollCallFilter('all')}
+                      className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                        rollCallFilter === 'all'
+                          ? 'bg-indigo-50 dark:bg-indigo-950/70 border-indigo-400 dark:border-indigo-600 ring-2 ring-indigo-400/20'
+                          : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-indigo-300'
+                      }`}
                     >
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className="p-2 rounded-xl bg-indigo-600 text-white">
+                          <Users className="w-4 h-4" />
+                        </div>
                         <div>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
-                              {stu.name}
-                            </span>
-                            <span className="text-[11px] font-mono text-slate-400">
-                              @{stu.username}
-                            </span>
-                            {stu.rulesAccepted && (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-[10px] font-bold">
-                                <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                                <span>သိရှိ လိုက်နာပါမည်</span>
-                              </span>
-                            )}
+                          <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                            စုစုပေါင်း ကျောင်းသား (All Students)
                           </div>
-                          <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                            {rec?.checkedInAt ? (
-                              <span className="text-emerald-600 dark:text-emerald-400 font-mono">
-                                ✓ Checked in at {rec.checkedInAt} (
-                                {rec.checkedInBy === 'student'
-                                  ? 'Student Self Check-in'
-                                  : 'Instructor Marked'}
-                                )
-                              </span>
-                            ) : (
-                              <span>Not checked in yet</span>
-                            )}
+                          <div className="text-base sm:text-lg font-extrabold font-mono text-slate-900 dark:text-white">
+                            {enrolledStudents.length} ဦး
                           </div>
                         </div>
                       </div>
+                      <span className="text-[10px] font-bold px-2 py-1 rounded-lg bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300">
+                        အားလုံးပြမည်
+                      </span>
+                    </button>
 
-                      {/* 4-State Roll Call Buttons */}
-                      <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setRollCallFilter('checked_in')}
+                      className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                        rollCallFilter === 'checked_in'
+                          ? 'bg-emerald-50 dark:bg-emerald-950/70 border-emerald-500 dark:border-emerald-500 ring-2 ring-emerald-500/20'
+                          : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-emerald-400'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <div className="p-2 rounded-xl bg-emerald-600 text-white">
+                          <UserCheck className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300">
+                            ✅ Attendance နှိပ်ပြီးသူ (Checked-In)
+                          </div>
+                          <div className="text-base sm:text-lg font-extrabold font-mono text-emerald-800 dark:text-emerald-200">
+                            {checkedInStudents.length} ဦး{' '}
+                            <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                              (
+                              {enrolledStudents.length > 0
+                                ? Math.round(
+                                    (checkedInStudents.length / enrolledStudents.length) * 100
+                                  )
+                                : 0}
+                              %)
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-bold px-2 py-1 rounded-lg bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200">
+                        နှိပ်ပြီးသူသာ ကြည့်မည်
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setRollCallFilter('not_checked_in')}
+                      className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                        rollCallFilter === 'not_checked_in'
+                          ? 'bg-rose-50 dark:bg-rose-950/70 border-rose-500 dark:border-rose-500 ring-2 ring-rose-500/20'
+                          : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-rose-400'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <div className="p-2 rounded-xl bg-rose-600 text-white">
+                          <UserX className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="text-[11px] font-bold text-rose-700 dark:text-rose-300">
+                            ⏳ Attendance မနှိပ်ရသေးသူ (Not Checked-In)
+                          </div>
+                          <div className="text-base sm:text-lg font-extrabold font-mono text-rose-800 dark:text-rose-200">
+                            {notCheckedInStudents.length} ဦး{' '}
+                            <span className="text-xs font-semibold text-rose-600 dark:text-rose-400">
+                              (
+                              {enrolledStudents.length > 0
+                                ? Math.round(
+                                    (notCheckedInStudents.length / enrolledStudents.length) * 100
+                                  )
+                                : 0}
+                              %)
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-bold px-2 py-1 rounded-lg bg-rose-100 dark:bg-rose-900/60 text-rose-800 dark:text-rose-200">
+                        မနှိပ်ရသေးသူသာ ကြည့်မည်
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* Filter Tabs + Search + Quick Copy & Bulk Mark Actions */}
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setRollCallFilter('all')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          rollCallFilter === 'all'
+                            ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-2xs'
+                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                        }`}
+                      >
+                        အားလုံး ({enrolledStudents.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRollCallFilter('checked_in')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                          rollCallFilter === 'checked_in'
+                            ? 'bg-emerald-600 text-white shadow-2xs'
+                            : 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                        }`}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>နှိပ်ပြီးသူများ ({checkedInStudents.length})</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRollCallFilter('not_checked_in')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                          rollCallFilter === 'not_checked_in'
+                            ? 'bg-rose-600 text-white shadow-2xs'
+                            : 'bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                        }`}
+                      >
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>မနှိပ်ရသေးသူများ ({notCheckedInStudents.length})</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRollCallFilter('present')}
+                        className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
+                          rollCallFilter === 'present'
+                            ? 'bg-emerald-700 text-white'
+                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                        }`}
+                      >
+                        Present ({presentStudentsCount})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRollCallFilter('late')}
+                        className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
+                          rollCallFilter === 'late'
+                            ? 'bg-amber-500 text-white'
+                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                        }`}
+                      >
+                        Late ({lateStudentsCount})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRollCallFilter('excused')}
+                        className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
+                          rollCallFilter === 'excused'
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                        }`}
+                      >
+                        Excused ({excusedStudentsCount})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRollCallFilter('absent')}
+                        className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
+                          rollCallFilter === 'absent'
+                            ? 'bg-rose-700 text-white'
+                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                        }`}
+                      >
+                        Absent ({absentMarkedStudentsCount})
+                      </button>
+                    </div>
+
+                    {/* Search & Copy Action Buttons */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="relative flex-1 sm:w-56">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={rollCallSearch}
+                          onChange={(e) => setRollCallSearch(e.target.value)}
+                          placeholder="အမည် / @username ရှာရန်..."
+                          className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleCopyAttendanceGroupList('not_checked_in')}
+                        disabled={notCheckedInStudents.length === 0}
+                        className="px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 text-[11px] font-bold transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                        title="Attendance မနှိပ်ရသေးသူများ စာရင်းကို Copy ကူးယူရန်"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>မနှိပ်ရသေးသူ ({notCheckedInStudents.length}) Copy</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleCopyAttendanceGroupList('checked_in')}
+                        disabled={checkedInStudents.length === 0}
+                        className="px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[11px] font-bold transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                        title="Attendance နှိပ်ပြီးသူများ စာရင်းကို Copy ကူးယူရန်"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>နှိပ်ပြီးသူ ({checkedInStudents.length}) Copy</span>
+                      </button>
+
+                      {notCheckedInStudents.length > 0 && (
                         <button
                           type="button"
-                          onClick={() =>
-                            handleInstructorMark(activeSession.id, stu, 'present')
-                          }
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 ${
-                            currentStatus === 'present' && rec
-                              ? 'bg-emerald-600 text-white shadow-2xs'
-                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 hover:text-emerald-700'
-                          }`}
-                        >
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>Present</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleInstructorMark(activeSession.id, stu, 'late')
-                          }
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 ${
-                            currentStatus === 'late'
-                              ? 'bg-amber-500 text-white shadow-2xs'
-                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-amber-50 dark:hover:bg-amber-950/50 hover:text-amber-700'
-                          }`}
-                        >
-                          <Clock className="w-3.5 h-3.5" />
-                          <span>Late</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleInstructorMark(activeSession.id, stu, 'excused')
-                          }
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 ${
-                            currentStatus === 'excused'
-                              ? 'bg-indigo-600 text-white shadow-2xs'
-                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 hover:text-indigo-700'
-                          }`}
-                        >
-                          <AlertCircle className="w-3.5 h-3.5" />
-                          <span>Excused</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleInstructorMark(activeSession.id, stu, 'absent')
-                          }
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 ${
-                            !rec || currentStatus === 'absent'
-                              ? 'bg-rose-600 text-white shadow-2xs'
-                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-rose-50 dark:hover:bg-rose-950/50 hover:text-rose-700'
-                          }`}
+                          onClick={() => handleMarkRemainingAsAbsent(activeSession.id)}
+                          className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
+                          title="Attendance မနှိပ်ရသေးသူအားလုံးကို Absent သတ်မှတ်ရန်"
                         >
                           <XCircle className="w-3.5 h-3.5" />
-                          <span>Absent</span>
+                          <span>ကျန်သူအားလုံး Absent ခြစ်မည်</span>
                         </button>
-                      </div>
+                      )}
                     </div>
-                  );
-                })}
+                  </div>
+                </div>
+
+                {filteredRollCallStudents.length === 0 ? (
+                  <div className="p-8 text-center text-xs text-slate-500 dark:text-slate-400">
+                    ရွေးချယ်ထားသော စစ်ထုတ်မှုအောက်တွင် ကျောင်းသားမရှိပါ။
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {filteredRollCallStudents.slice(0, visibleRosterLimit).map((stu, idx) => {
+                      const rec = activeSession.records[stu.id];
+                      const currentStatus: AttendanceStatus = rec?.status || 'absent';
+                      const isCheckedIn = Boolean(
+                        rec &&
+                          (rec.status === 'present' ||
+                            rec.status === 'late' ||
+                            rec.status === 'excused')
+                      );
+
+                      return (
+                        <div
+                          key={stu.id}
+                          className={`p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors ${
+                            isCheckedIn
+                              ? 'hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20'
+                              : 'hover:bg-rose-50/30 dark:hover:bg-rose-950/20'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-[11px] font-mono font-bold text-slate-400">
+                                  #{idx + 1}
+                                </span>
+                                <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                                  {stu.name}
+                                </span>
+                                <span className="text-[11px] font-mono text-slate-400">
+                                  @{stu.username}
+                                </span>
+                                {isCheckedIn ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-[10px] font-extrabold">
+                                    <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                                    <span>✅ Attendance နှိပ်ပြီး</span>
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-100 dark:bg-rose-950/90 text-rose-800 dark:text-rose-300 border border-rose-300 dark:border-rose-700 text-[10px] font-extrabold">
+                                    <Clock className="w-3 h-3 text-rose-600 dark:text-rose-400 shrink-0" />
+                                    <span>⏳ Attendance မနှိပ်ရသေး</span>
+                                  </span>
+                                )}
+                                {stu.rulesAccepted && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[10px] font-semibold">
+                                    <span>သိရှိ လိုက်နာပါမည်</span>
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                                {rec?.checkedInAt ? (
+                                  <span
+                                    className={`font-mono ${
+                                      isCheckedIn
+                                        ? 'text-emerald-600 dark:text-emerald-400'
+                                        : 'text-rose-600 dark:text-rose-400'
+                                    }`}
+                                  >
+                                    {isCheckedIn ? '✓' : '✕'} {rec.checkedInAt} တွင် မှတ်တမ်းတင်ထားသည် (
+                                    {rec.checkedInBy === 'student'
+                                      ? 'ကျောင်းသားကိုယ်တိုင် နှိပ်ထားသည်'
+                                      : 'Admin / Co-Admin မှ ခြစ်ပေးထားသည်'}
+                                    )
+                                  </span>
+                                ) : (
+                                  <span className="text-amber-600 dark:text-amber-400 font-medium">
+                                    ⚠️ ဤကျောင်းသားသည် Attendance မနှိပ်ရသေးပါ (Not checked in yet)
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* 4-State Roll Call Buttons */}
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleInstructorMark(activeSession.id, stu, 'present')
+                              }
+                              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                                currentStatus === 'present' && rec
+                                  ? 'bg-emerald-600 text-white shadow-2xs'
+                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 hover:text-emerald-700'
+                              }`}
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>Present</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleInstructorMark(activeSession.id, stu, 'late')
+                              }
+                              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                                currentStatus === 'late'
+                                  ? 'bg-amber-500 text-white shadow-2xs'
+                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-amber-50 dark:hover:bg-amber-950/50 hover:text-amber-700'
+                              }`}
+                            >
+                              <Clock className="w-3.5 h-3.5" />
+                              <span>Late</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleInstructorMark(activeSession.id, stu, 'excused')
+                              }
+                              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                                currentStatus === 'excused'
+                                  ? 'bg-indigo-600 text-white shadow-2xs'
+                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 hover:text-indigo-700'
+                              }`}
+                            >
+                              <AlertCircle className="w-3.5 h-3.5" />
+                              <span>Excused</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleInstructorMark(activeSession.id, stu, 'absent')
+                              }
+                              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                                !rec || currentStatus === 'absent'
+                                  ? 'bg-rose-600 text-white shadow-2xs'
+                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-rose-50 dark:hover:bg-rose-950/50 hover:text-rose-700'
+                              }`}
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              <span>Absent</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>

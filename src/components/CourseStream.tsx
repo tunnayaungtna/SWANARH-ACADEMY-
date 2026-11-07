@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Course, CoursePost, User, VideoAsset, Attachment } from '../types/classroom';
+import { Course, CoursePost, User, VideoAsset, Attachment, AttendanceStatus } from '../types/classroom';
 import { SecureVideoPlayer } from './SecureVideoPlayer';
 import { EditPostModal } from './EditPostModal';
 import { PinSwapModal } from './PinSwapModal';
@@ -127,6 +127,34 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
     .sort((a, b) => (a.pinOrder || 99) - (b.pinOrder || 99));
   const scheduledPosts = posts.filter((p) => p.status === 'scheduled');
   const currentPinnedCount = posts.filter((p) => p.isPinned).length;
+  const openAttendanceSessions = ClassroomDB.getAttendanceSessions(course.id).filter(
+    (s) => s.isOpen
+  );
+  const [editingStreamAttIds, setEditingStreamAttIds] = useState<Record<string, boolean>>({});
+
+  const handleStreamStudentAttendance = (
+    sessionId: string,
+    status: AttendanceStatus | 'clear' = 'present'
+  ) => {
+    const res = ClassroomDB.studentCheckIn(sessionId, currentUser, status);
+    if (!res.success && res.error) {
+      setRateLimitError(res.error);
+      setTimeout(() => setRateLimitError(null), 4000);
+      return;
+    }
+    setEditingStreamAttIds((prev) => ({ ...prev, [sessionId]: false }));
+    if (status === 'clear') {
+      setSuccessToast('🔄 သင်၏ Attendance မှတ်တမ်းကို ပြန်ဖျက်ပြီးပါပြီ။ ပြန်လည်ရွေးချယ်နှိပ်နိုင်ပါသည်။');
+    } else if (status === 'late') {
+      setSuccessToast('⏰ Late (နောက်ကျတက်ရောက်) အဖြစ် ပြင်ဆင်မှတ်တမ်းတင်ပြီးပါပြီ!');
+    } else if (status === 'excused') {
+      setSuccessToast('📝 Excused (ခွင့်တိုင်ကြားသည်) အဖြစ် ပြင်ဆင်မှတ်တမ်းတင်ပြီးပါပြီ!');
+    } else {
+      setSuccessToast('✅ Present (တက်ရောက်သည်) အဖြစ် မှတ်တမ်းတင်ပြီးပါပြီ!');
+    }
+    setTimeout(() => setSuccessToast(null), 3500);
+    onRefresh();
+  };
 
   // Live 3-second watcher in CourseStream so scheduled posts transition to #1 in the Stream at the exact scheduled moment
   useEffect(() => {
@@ -648,6 +676,169 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Live Open Attendance Banner in Stream (Students can Mark or Edit before session closes) */}
+      {!isInstructor && openAttendanceSessions.length > 0 && (
+        <div className="neu-card rounded-3xl p-4 sm:p-5 space-y-3 ring-2 ring-emerald-400/50">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-bold text-xs sm:text-sm">
+              <CalendarCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+              <span>Open Attendance — အတန်းတက်ရောက်ကြောင်း နှိပ်ရန် (မပိတ်မီ ပြန်ပြင်နိုင်ပါသည်)</span>
+            </div>
+            {onOpenAttendance && (
+              <button
+                type="button"
+                onClick={onOpenAttendance}
+                className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+              >
+                Attendance မှတ်တမ်းအပြည့်အစုံ ကြည့်ရန် →
+              </button>
+            )}
+          </div>
+
+          <div className="space-y-2.5">
+            {openAttendanceSessions.map((sess) => {
+              const myRec = sess.records[currentUser.id];
+              const isEditingThis = Boolean(editingStreamAttIds[sess.id]);
+
+              return (
+                <div
+                  key={sess.id}
+                  className="flex flex-col gap-2.5 p-3.5 rounded-2xl neu-inset-sm"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
+                          {sess.displayDate}
+                        </span>
+                        <h4 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                          {sess.title}
+                        </h4>
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        ဆရာ {sess.openedBy} မှ Attendance ဖွင့်ပေးထားပါသည်။ Attendance မပိတ်ခင် မိမိနှိပ်ထားသည်ကို ပြန်ပြင်နိုင်ပါသည်။
+                      </p>
+                    </div>
+
+                    {myRec ? (
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700">
+                          <CheckCircle className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                          <span>
+                            {myRec.status === 'present'
+                              ? 'Present (တက်ရောက်)'
+                              : myRec.status === 'late'
+                              ? 'Late (နောက်ကျ)'
+                              : myRec.status === 'excused'
+                              ? 'Excused (ခွင့်တိုင်)'
+                              : 'Absent'}
+                            {myRec.checkedInAt ? ` (${myRec.checkedInAt})` : ''}
+                          </span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditingStreamAttIds((prev) => ({
+                              ...prev,
+                              [sess.id]: !prev[sess.id],
+                            }))
+                          }
+                          className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950 text-indigo-600 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>{isEditingThis ? 'မပြင်တော့ပါ' : 'ပြန်ပြင်မည် (Edit)'}</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleStreamStudentAttendance(sess.id, 'present')}
+                          className="px-4 py-2 rounded-xl neu-btn-emerald text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Hand className="w-3.5 h-3.5" />
+                          <span>Mark Present (တက်ရောက်သည်)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleStreamStudentAttendance(sess.id, 'late')}
+                          className="px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/60 hover:bg-amber-100 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <Clock className="w-3.5 h-3.5" />
+                          <span>Late</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleStreamStudentAttendance(sess.id, 'excused')}
+                          className="px-3 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 text-indigo-800 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-700 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <AlertCircle className="w-3.5 h-3.5" />
+                          <span>Excused</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {myRec && isEditingThis && (
+                    <div className="pt-2 border-t border-slate-200/70 dark:border-slate-700/70 flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                        ✏️ Attendance မပိတ်မီ ပြောင်းလဲရွေးချယ်ရန် -
+                      </span>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleStreamStudentAttendance(sess.id, 'present')}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer ${
+                            myRec.status === 'present'
+                              ? 'bg-emerald-600 text-white'
+                              : 'bg-white dark:bg-slate-800 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700'
+                          }`}
+                        >
+                          <CheckCircle className="w-3.5 h-3.5" />
+                          <span>Present (တက်ရောက်)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleStreamStudentAttendance(sess.id, 'late')}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer ${
+                            myRec.status === 'late'
+                              ? 'bg-amber-500 text-white'
+                              : 'bg-white dark:bg-slate-800 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-700'
+                          }`}
+                        >
+                          <Clock className="w-3.5 h-3.5" />
+                          <span>Late (နောက်ကျ)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleStreamStudentAttendance(sess.id, 'excused')}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer ${
+                            myRec.status === 'excused'
+                              ? 'bg-indigo-600 text-white'
+                              : 'bg-white dark:bg-slate-800 text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-700'
+                          }`}
+                        >
+                          <AlertCircle className="w-3.5 h-3.5" />
+                          <span>Excused (ခွင့်တိုင်)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleStreamStudentAttendance(sess.id, 'clear')}
+                          className="px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-700 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>ပြန်ဖျက်မည်</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Scheduled Posts Management Drawer (Admin/Instructor Only) */}
       {isInstructor && scheduledPosts.length > 0 && (

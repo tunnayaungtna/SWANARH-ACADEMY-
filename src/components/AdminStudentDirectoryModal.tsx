@@ -142,6 +142,22 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
   >([]);
   const [copiedBatchIds, setCopiedBatchIds] = useState<Record<string, boolean>>({});
   const [copiedAllBatchSuccess, setCopiedAllBatchSuccess] = useState(false);
+  const [pasteCustomOverrides, setPasteCustomOverrides] = useState<
+    Record<number, { username?: string; email?: string }>
+  >({});
+  const [batchSkippedDuplicates, setBatchSkippedDuplicates] = useState<
+    Array<{
+      index: number;
+      name: string;
+      username: string;
+      email: string;
+      phone?: string;
+      reason: string;
+      existingAccountName?: string;
+      existingAccountUsername?: string;
+      existingAccountEmail?: string;
+    }>
+  >([]);
 
   const getOfficialLoginUrl = () => {
     if (typeof window !== 'undefined') {
@@ -208,7 +224,11 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     }
   };
 
-  const generateUsernameFromName = (rawName: string, extraTaken?: Set<string>): string => {
+  const generateUsernameFromName = (
+    rawName: string,
+    extraTaken?: Set<string>,
+    ensureUnique: boolean = false
+  ): string => {
     const trimmed = rawName.trim();
     if (!trimmed) return '';
 
@@ -371,7 +391,11 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
       base = `user${Math.floor(100 + Math.random() * 900)}`;
     }
 
-    // 4. Ensure uniqueness against existing accounts and current batch
+    // 4. Only auto-increment if ensureUnique is explicitly requested;
+    // otherwise return the natural base username so existing username/email conflicts are detected and warned!
+    if (!ensureUnique) {
+      return base;
+    }
     const existingUsernames = new Set(allUsers.map((u) => u.username.toLowerCase()));
     if (extraTaken) {
       extraTaken.forEach((u) => existingUsernames.add(u.toLowerCase()));
@@ -723,17 +747,153 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     return 'male';
   };
 
+  type FormFieldKey = 'name' | 'email' | 'phone' | 'occupation' | 'gender' | 'address';
+
+  const matchStudentFormLine = (
+    rawLine: string
+  ): { field: FormFieldKey; value: string } | null => {
+    const cleaned = rawLine
+      .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g, '')
+      .replace(/\u00A0/g, ' ')
+      .trim();
+    if (!cleaned) return null;
+
+    const stripped = cleaned
+      .replace(/^(?:\(?[\d၀-၉]+\)?[.)။:\-\s]*|#[0-9]+\s*|[-•*▪▸👤📧📞💼📍🔑🔒🎓]+\s*)+/, '')
+      .trim();
+    if (!stripped) return null;
+
+    // 1. Name ("အမည်(Full Name):", "အမည်:", "Full Name:", "အမည်(ဒေါ်စန္ဒာဝင်း)", etc.)
+    const nameParenMatch = stripped.match(
+      /^(?:အမည်|နာမည်)?\s*[(\uff08]\s*(?:full\s*name\s*[:：;။=\-–—.]?\s*)?([^)\uff09]*)[)\uff09]?\s*[:：;။=\-–—.]?\s*(.*)$/i
+    );
+    if (
+      nameParenMatch &&
+      (/^(?:အမည်|နာမည်)/i.test(stripped) || /^\(\s*full\s*name/i.test(stripped))
+    ) {
+      const inside = nameParenMatch[1].trim();
+      const after = nameParenMatch[2].trim();
+      const isInsidePlaceholder =
+        !inside || /^(?:full\s*name|name|အမည်|နာမည်)$/i.test(inside);
+      return {
+        field: 'name',
+        value: after || (isInsidePlaceholder ? '' : inside),
+      };
+    }
+    const nameSimpleMatch = stripped.match(
+      /^(?:အမည်\s*\/\s*full\s*name|full\s*name|student\s*name|အမည်|နာမည်|name)(?:\s*[:：;။=\-–—.]\s*|\s+|$)(.*)$/i
+    );
+    if (nameSimpleMatch) {
+      return { field: 'name', value: nameSimpleMatch[1].trim() };
+    }
+
+    // 2. Email ("Email:", "E-mail:", "Gmail:", "အီးမေးလ်:")
+    const emailMatch = stripped.match(
+      /^(?:e-?mail(?:\s*address)?|အီးမေးလ်|မေးလ်|gmail)(?:\s*[:：;။=\-–—.]\s*|\s+|$)(.*)$/i
+    );
+    if (emailMatch) {
+      return { field: 'email', value: emailMatch[1].trim() };
+    }
+
+    // 3. Phone ("ဖုန်းနံပါတ်(Phone):", "ဖုန်းနံပါတ်:", "ဖုန်း:", "Phone:", "Ph:")
+    const phoneParenMatch = stripped.match(
+      /^(?:ဖုန်းနံပါတ်|ဖုန်း)?\s*[(\uff08]\s*(?:phone(?:\s*no)?\s*[:：;။=\-–—.]?\s*)?([^)\uff09]*)[)\uff09]?\s*[:：;။=\-–—.]?\s*(.*)$/i
+    );
+    if (
+      phoneParenMatch &&
+      (/^(?:ဖုန်းနံပါတ်|ဖုန်း)/i.test(stripped) || /^\(\s*phone/i.test(stripped))
+    ) {
+      const inside = phoneParenMatch[1].trim();
+      const after = phoneParenMatch[2].trim();
+      const isInsidePlaceholder =
+        !inside || /^(?:phone|phone\s*no|ph|ဖုန်း|ဖုန်းနံပါတ်)$/i.test(inside);
+      return {
+        field: 'phone',
+        value: after || (isInsidePlaceholder ? '' : inside),
+      };
+    }
+    const phoneSimpleMatch = stripped.match(
+      /^(?:ဖုန်းနံပါတ်|ဖုန်း|phone\s*(?:no|number)?|ph\s*(?:no)?)(?:\s*[:：;။=\-–—.]\s*|\s+|$)(.*)$/i
+    );
+    if (phoneSimpleMatch) {
+      return { field: 'phone', value: phoneSimpleMatch[1].trim() };
+    }
+
+    // 4. Occupation / Education ("အလုပ်အကိုင်/ပညာအရည်အချင်း:", "အလုပ်အကိုင်:", "ပညာအရည်အချင်း:")
+    const occMatch = stripped.match(
+      /^(?:အလုပ်အကိုင်\s*[\/၊,]\s*ပညာအရည်အချင်း(?:\s*[(\uff08][^)\uff09]*[)\uff09])?|အလုပ်အကိုင်(?:နှင့်|နှင့်)\s*ပညာအရည်အချင်း|အလုပ်အကိုင်|ပညာအရည်အချင်း|occupation\s*\/?\s*education|occupation|education|qualification|title)(?:\s*[:：;။=\-–—.]\s*|\s+|$)(.*)$/i
+    );
+    if (occMatch) {
+      return { field: 'occupation', value: occMatch[1].trim() };
+    }
+
+    // 5. Gender ("ကျား/မ(Gender):", "ကျား/မ:", "Gender:")
+    const genderParenMatch = stripped.match(
+      /^(?:ကျား\s*[\/၊,]\s*မ|လိင်)?\s*[(\uff08]\s*(?:gender\s*[:：;။=\-–—.]?\s*)?([^)\uff09]*)[)\uff09]?\s*[:：;။=\-–—.]?\s*(.*)$/i
+    );
+    if (
+      genderParenMatch &&
+      (/^(?:ကျား\s*[\/၊,]\s*မ|လိင်)/i.test(stripped) || /^\(\s*gender/i.test(stripped))
+    ) {
+      const inside = genderParenMatch[1].trim();
+      const after = genderParenMatch[2].trim();
+      const isInsidePlaceholder =
+        !inside || /^(?:gender|sex|ကျား\/မ|ကျား၊မ)$/i.test(inside);
+      return {
+        field: 'gender',
+        value: after || (isInsidePlaceholder ? '' : inside),
+      };
+    }
+    const genderSimpleMatch = stripped.match(
+      /^(?:ကျား\s*[\/၊,]\s*မ|လိင်|gender|sex)(?:\s*[:：;။=\-–—.]\s*|\s+|$)(.*)$/i
+    );
+    if (genderSimpleMatch) {
+      return { field: 'gender', value: genderSimpleMatch[1].trim() };
+    }
+
+    // 6. Address ("နေရပ်လိပ်စာ(Address):", "နေရပ်လိပ်စာ:", "လိပ်စာ:", "Address:")
+    const addrParenMatch = stripped.match(
+      /^(?:နေရပ်လိပ်စာ|နေရပ်|လိပ်စာ)?\s*[(\uff08]\s*(?:address\s*[:：;။=\-–—.]?\s*)?([^)\uff09]*)[)\uff09]?\s*[:：;။=\-–—.]?\s*(.*)$/i
+    );
+    if (
+      addrParenMatch &&
+      (/^(?:နေရပ်လိပ်စာ|နေရပ်|လိပ်စာ)/i.test(stripped) || /^\(\s*address/i.test(stripped))
+    ) {
+      const inside = addrParenMatch[1].trim();
+      const after = addrParenMatch[2].trim();
+      const isInsidePlaceholder =
+        !inside || /^(?:address|လိပ်စာ|နေရပ်လိပ်စာ|နေရပ်)$/i.test(inside);
+      return {
+        field: 'address',
+        value: after || (isInsidePlaceholder ? '' : inside),
+      };
+    }
+    const addrSimpleMatch = stripped.match(
+      /^(?:နေရပ်လိပ်စာ|နေရပ်|လိပ်စာ|address)(?:\s*[:：;။=\-–—.]\s*|\s+|$)(.*)$/i
+    );
+    if (addrSimpleMatch) {
+      return { field: 'address', value: addrSimpleMatch[1].trim() };
+    }
+
+    return null;
+  };
+
   // Smart Multi-Format Parser: Supports both labeled Student Registration Form blocks AND 1-line entries
   const parseQuickPasteLines = (raw: string) => {
     if (!raw || !raw.trim()) return [];
 
-    const rawLines = raw.split(/\r?\n/);
+    // Clean zero-width/directional characters and split inline concatenated labels onto separate lines
+    const cleanedRaw = raw
+      .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g, '')
+      .replace(/\u00A0/g, ' ')
+      .replace(
+        /([^\n])\s+(?=(?:\(?[\d၀-၉]+\)?[.)။\s]*)?(?:အမည်\s*[(\uff08:]|ဖုန်းနံပါတ်\s*[(\uff08:]|အလုပ်အကိုင်\s*\/|ကျား\s*\/\s*မ|နေရပ်လိပ်စာ\s*[(\uff08:]|Email\s*[:：]))/gi,
+        '$1\n'
+      );
 
-    // Check if text contains labeled form fields like "အမည်(Full Name):", "ဖုန်းနံပါတ်(Phone):", etc.
-    const labelLineRegex =
-      /^(?:[\d၀-၉]+[.)။\s]*|[-•*]\s*)?(အမည်\s*\(\s*full\s*name\s*\)|အမည်|နာမည်|full\s*name|name|email|e-mail|အီးမေးလ်|gmail|ဖုန်းနံပါတ်\s*\(\s*phone\s*\)|ဖုန်းနံပါတ်|ဖုန်း|phone\s*no|phone|ph|အလုပ်အကိုင်\s*\/\s*ပညာအရည်အချင်း|အလုပ်အကိုင်|ပညာအရည်အချင်း|occupation|education|title|ကျား\s*\/\s*မ\s*\(\s*gender\s*\)|ကျား\s*\/\s*မ|လိင်|gender|sex|နေရပ်လိပ်စာ\s*\(\s*address\s*\)|နေရပ်လိပ်စာ|နေရပ်|လိပ်စာ|address)\s*[:：=\-]\s*(.*)$/i;
-
-    const hasLabeledLines = rawLines.some((l) => labelLineRegex.test(l.trim()));
+    const rawLines = cleanedRaw.split(/\r?\n/);
+    const nonEmptyLines = rawLines.map((l) => l.trim()).filter(Boolean);
+    const hasLabeledLines = nonEmptyLines.some((l) => matchStudentFormLine(l) !== null);
 
     const assignedInPreview = new Set<string>();
 
@@ -745,109 +905,276 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
         occupation: string;
         gender: 'male' | 'female';
         address: string;
+        seenFields: Set<FormFieldKey>;
+        lastField: FormFieldKey | null;
       }
 
       const blocks: DraftBlock[] = [];
-      let current: DraftBlock | null = null;
+      const getCurrent = (): DraftBlock | null =>
+        blocks.length > 0 ? blocks[blocks.length - 1] : null;
 
-      const ensureCurrent = (): DraftBlock => {
-        if (!current) {
-          current = {
-            name: '',
-            email: '',
-            phone: '',
-            occupation: pasteDefaultOccupation.trim(),
-            gender: 'male',
-            address: '',
-          };
-          blocks.push(current);
-        }
-        return current;
+      const startNewBlock = (initialName: string = ''): DraftBlock => {
+        const blk: DraftBlock = {
+          name: initialName,
+          email: '',
+          phone: '',
+          occupation: pasteDefaultOccupation.trim(),
+          gender: 'male',
+          address: '',
+          seenFields: new Set<FormFieldKey>(),
+          lastField: initialName ? 'name' : null,
+        };
+        if (initialName) blk.seenFields.add('name');
+        blocks.push(blk);
+        return blk;
       };
 
-      for (const rawLine of rawLines) {
-        const trimmed = rawLine.trim();
-        if (!trimmed) continue;
+      const ensureCurrent = (): DraftBlock => {
+        const cur = getCurrent();
+        if (!cur) {
+          return startNewBlock();
+        }
+        return cur;
+      };
 
-        const match = trimmed.match(labelLineRegex);
-        if (match) {
-          const rawKey = match[1].toLowerCase().replace(/\s+/g, '');
-          const val = match[2].trim();
+      const applyFieldValue = (blk: DraftBlock, field: FormFieldKey, val: string) => {
+        const cleanVal = val.trim();
+        if (!cleanVal) return;
+        if (field === 'name') {
+          blk.name = cleanVal;
+        } else if (field === 'email') {
+          blk.email = cleanVal.replace(/\s+/g, '');
+        } else if (field === 'phone') {
+          blk.phone = normalizeMyanmarDigits(cleanVal);
+        } else if (field === 'occupation') {
+          blk.occupation = cleanVal;
+        } else if (field === 'gender') {
+          blk.gender = parseGenderValue(cleanVal);
+        } else if (field === 'address') {
+          blk.address = cleanVal;
+        }
+      };
 
-          if (rawKey.includes('အမည်') || rawKey.includes('နာမည်') || rawKey.includes('name')) {
-            // If current block already has a name, start a new student block!
-            if (current && current.name) {
-              current = {
-                name: val,
-                email: '',
-                phone: '',
-                occupation: pasteDefaultOccupation.trim(),
-                gender: 'male',
-                address: '',
-              };
-              blocks.push(current);
-            } else {
-              const blk = ensureCurrent();
-              blk.name = val;
+      for (let i = 0; i < nonEmptyLines.length; i++) {
+        const line = nonEmptyLines[i];
+        // Ignore pure separator lines (e.g. "---", "===", "━━━")
+        if (/^[-=_━*•~]{3,}$/.test(line)) {
+          continue;
+        }
+
+        const cur = getCurrent();
+        const matched = matchStudentFormLine(line);
+        if (matched) {
+          const { field, value } = matched;
+
+          if (field === 'name') {
+            if (
+              cur &&
+              (cur.seenFields.has('name') ||
+                cur.name ||
+                cur.email ||
+                cur.phone ||
+                cur.address ||
+                cur.seenFields.size > 0)
+            ) {
+              startNewBlock();
             }
-          } else if (rawKey.includes('email') || rawKey.includes('e-mail') || rawKey.includes('အီးမေးလ်') || rawKey.includes('gmail')) {
             const blk = ensureCurrent();
-            blk.email = val;
-          } else if (rawKey.includes('ဖုန်း') || rawKey.includes('phone') || rawKey === 'ph') {
+            blk.seenFields.add('name');
+            blk.lastField = 'name';
+            if (value) {
+              applyFieldValue(blk, 'name', value);
+            }
+          } else {
+            // If we see a repeated field (e.g., a second "Email:" or "ဖုန်းနံပါတ်:") when the current block already has data,
+            // it means a new student block started without an "အမည်:" label!
+            if (
+              cur &&
+              cur.seenFields.has(field) &&
+              (cur.name || cur.email || cur.phone || cur.address)
+            ) {
+              startNewBlock();
+            }
             const blk = ensureCurrent();
-            blk.phone = normalizeMyanmarDigits(val);
-          } else if (
-            rawKey.includes('အလုပ်အကိုင်') ||
-            rawKey.includes('ပညာအရည်အချင်း') ||
-            rawKey.includes('occupation') ||
-            rawKey.includes('education') ||
-            rawKey.includes('title')
-          ) {
-            const blk = ensureCurrent();
-            if (val) blk.occupation = val;
-          } else if (rawKey.includes('ကျား') || rawKey.includes('လိင်') || rawKey.includes('gender') || rawKey.includes('sex')) {
-            const blk = ensureCurrent();
-            blk.gender = parseGenderValue(val);
-          } else if (rawKey.includes('လိပ်စာ') || rawKey.includes('နေရပ်') || rawKey.includes('address')) {
-            const blk = ensureCurrent();
-            blk.address = val;
+            blk.seenFields.add(field);
+            blk.lastField = field;
+            if (value) {
+              applyFieldValue(blk, field, value);
+            }
+          }
+        } else {
+          // Unlabeled line!
+          // 1) Check if the previous label had an empty value on its line (e.g. "အမည်(Full Name):\nဒေါ်စန္ဒာဝင်း")
+          if (cur && cur.lastField) {
+            const lf = cur.lastField;
+            const isLfEmpty =
+              (lf === 'name' && !cur.name) ||
+              (lf === 'email' && !cur.email) ||
+              (lf === 'phone' && !cur.phone) ||
+              (lf === 'occupation' &&
+                (!cur.occupation || cur.occupation === pasteDefaultOccupation.trim())) ||
+              (lf === 'address' && !cur.address);
+
+            if (isLfEmpty) {
+              applyFieldValue(cur, lf, line);
+              continue;
+            }
+          }
+
+          // 2) Check if the next line is a non-name field label (like "Email:" or "ဖုန်းနံပါတ်:") while current block is empty or already has fields:
+          // That means this unlabeled line is the student's Name written without an "အမည်:" prefix!
+          const nextLine = i + 1 < nonEmptyLines.length ? nonEmptyLines[i + 1] : '';
+          const nextMatch = nextLine ? matchStudentFormLine(nextLine) : null;
+          if (nextMatch && nextMatch.field !== 'name') {
+            if (
+              !cur ||
+              cur.name ||
+              cur.email ||
+              cur.phone ||
+              cur.address ||
+              cur.seenFields.size > 0
+            ) {
+              startNewBlock(line.replace(/^(?:\(?[\d၀-၉]+\)?[.)။:\-\s]+|[-•*]\s*)/, '').trim());
+              continue;
+            } else if (!cur.name) {
+              cur.name = line.replace(/^(?:\(?[\d၀-၉]+\)?[.)။:\-\s]+|[-•*]\s*)/, '').trim();
+              cur.seenFields.add('name');
+              continue;
+            }
+          }
+
+          // 3) Otherwise, if current block has no name yet, use this line as name; or append to address/occupation
+          const blk = ensureCurrent();
+          if (!blk.name) {
+            blk.name = line.replace(/^(?:\(?[\d၀-၉]+\)?[.)။:\-\s]+|[-•*]\s*)/, '').trim();
+            blk.seenFields.add('name');
+          } else if (blk.lastField === 'address') {
+            blk.address = blk.address ? `${blk.address}၊ ${line}` : line;
+          } else if (blk.lastField === 'occupation') {
+            blk.occupation = blk.occupation ? `${blk.occupation} / ${line}` : line;
           }
         }
       }
 
-      return blocks
-        .filter((b) => b.name.trim().length > 0)
+      const rawItems = blocks
+        .filter(
+          (b) =>
+            b.name.trim().length > 0 ||
+            b.email.trim().length > 0 ||
+            b.phone.trim().length > 0 ||
+            b.address.trim().length > 0
+        )
         .map((b, idx) => {
-          const cleanName = b.name.trim();
-          const autoUsername = generateUsernameFromName(cleanName, assignedInPreview);
-          assignedInPreview.add(autoUsername);
+          const fallbackName =
+            b.email.includes('@')
+              ? b.email.split('@')[0]
+              : b.phone
+              ? `Student ${b.phone}`
+              : `Student ${idx + 1}`;
+          const cleanName = b.name.trim() || fallbackName;
+          const baseUsername = generateUsernameFromName(cleanName, undefined, false);
+          const suggestedUnique = generateUsernameFromName(cleanName, assignedInPreview, true);
+          assignedInPreview.add(suggestedUnique);
 
-          const rawEmail = b.email.trim().toLowerCase();
+          const rawEmail = b.email.trim().replace(/\s+/g, '').toLowerCase();
           const hasValidEmail = rawEmail.includes('@') && rawEmail.includes('.');
-          const finalEmail = hasValidEmail ? rawEmail : `${autoUsername}@swanarh.edu`;
+          const defaultEmail = hasValidEmail ? rawEmail : `${baseUsername}@swanarh.edu`;
 
           return {
             index: idx + 1,
             name: cleanName,
-            username: autoUsername,
-            email: finalEmail,
+            baseUsername,
+            suggestedUniqueUsername: suggestedUnique,
+            defaultEmail,
             phone: b.phone.trim(),
             occupation: b.occupation.trim() || pasteDefaultOccupation.trim(),
             gender: b.gender,
             address: b.address.trim(),
           };
         });
+
+      const seenBatchUsernames = new Map<string, number>();
+      const seenBatchEmails = new Map<string, number>();
+
+      return rawItems.map((item) => {
+        const override = pasteCustomOverrides[item.index];
+        const finalUsername = (
+          override?.username !== undefined ? override.username : item.baseUsername
+        )
+          .trim()
+          .replace(/^@+/, '')
+          .toLowerCase();
+        const finalEmail = (
+          override?.email !== undefined ? override.email : item.defaultEmail
+        )
+          .trim()
+          .toLowerCase();
+
+        const existingByUsername = allUsers.find(
+          (u) => u.username.toLowerCase() === finalUsername
+        );
+        const existingByEmail = allUsers.find(
+          (u) => u.email.toLowerCase() === finalEmail
+        );
+        const prevBatchUserIdx = seenBatchUsernames.get(finalUsername);
+        const prevBatchEmailIdx = seenBatchEmails.get(finalEmail);
+
+        seenBatchUsernames.set(finalUsername, item.index);
+        seenBatchEmails.set(finalEmail, item.index);
+
+        let hasConflict = false;
+        let conflictType: 'email' | 'username' | 'both' | 'batch_duplicate' | null = null;
+        let conflictMessage: string | null = null;
+        const existingOwner = existingByEmail || existingByUsername;
+
+        if (existingByUsername && existingByEmail) {
+          hasConflict = true;
+          conflictType = 'both';
+          conflictMessage = `Username "@${finalUsername}" နှင့် Email "${finalEmail}" တို့သည် စနစ်ထဲရှိ "${existingOwner!.name}" (@${existingOwner!.username}) အကောင့်တွင် ရှိပြီးသားဖြစ်နေပါသည်။`;
+        } else if (existingByEmail) {
+          hasConflict = true;
+          conflictType = 'email';
+          conflictMessage = `Email "${finalEmail}" သည် စနစ်ထဲရှိ "${existingByEmail.name}" (@${existingByEmail.username}) အကောင့်တွင် ရှိပြီးသားဖြစ်နေပါသည်။`;
+        } else if (existingByUsername) {
+          hasConflict = true;
+          conflictType = 'username';
+          conflictMessage = `Username "@${finalUsername}" သည် စနစ်ထဲရှိ "${existingByUsername.name}" (${existingByUsername.email}) အကောင့်တွင် ရှိပြီးသားဖြစ်နေပါသည်။`;
+        } else if (prevBatchEmailIdx !== undefined || prevBatchUserIdx !== undefined) {
+          hasConflict = true;
+          conflictType = 'batch_duplicate';
+          const dupIdx = prevBatchEmailIdx ?? prevBatchUserIdx;
+          conflictMessage = `ယခု Paste စာရင်းထဲရှိ အပေါ်မှ ကျောင်းသား (#${dupIdx}) နှင့် Username သို့မဟုတ် Email ထပ်နေပါသည်။`;
+        }
+
+        return {
+          index: item.index,
+          name: item.name,
+          username: finalUsername,
+          email: finalEmail,
+          phone: item.phone,
+          occupation: item.occupation,
+          gender: item.gender,
+          address: item.address,
+          suggestedUniqueUsername: item.suggestedUniqueUsername,
+          hasConflict,
+          conflictType,
+          conflictMessage,
+          existingOwner,
+        };
+      });
     }
 
     // Fallback: 1-line-per-student format (e.g. "မောင်မင်းခန့်, 0912345678, B.C.Sc, ရန်ကုန်")
-    const lines = rawLines
+    const lines = nonEmptyLines
       .map((l) =>
         l
-          .trim()
           .replace(/^(?:[\d၀-၉]+[.)။:\-\s]+|\([\d၀-၉]+\)\s*|[-•*]\s*)/, '')
           .trim()
       )
       .filter(Boolean);
+
+    const seenBatchUsernames = new Map<string, number>();
+    const seenBatchEmails = new Map<string, number>();
 
     return lines
       .map((line, idx) => {
@@ -885,24 +1212,89 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
           }
         }
 
-        const autoUsername = generateUsernameFromName(rawStudentName, assignedInPreview);
-        assignedInPreview.add(autoUsername);
+        const rowIndex = idx + 1;
+        const baseUsername = generateUsernameFromName(rawStudentName, undefined, false);
+        const suggestedUnique = generateUsernameFromName(rawStudentName, assignedInPreview, true);
+        assignedInPreview.add(suggestedUnique);
+
+        const override = pasteCustomOverrides[rowIndex];
+        const finalUsername = (
+          override?.username !== undefined ? override.username : baseUsername
+        )
+          .trim()
+          .replace(/^@+/, '')
+          .toLowerCase();
+        const defaultEmail = parsedEmail || `${finalUsername}@swanarh.edu`;
+        const finalEmail = (
+          override?.email !== undefined ? override.email : defaultEmail
+        )
+          .trim()
+          .toLowerCase();
+
+        const existingByUsername = allUsers.find(
+          (u) => u.username.toLowerCase() === finalUsername
+        );
+        const existingByEmail = allUsers.find(
+          (u) => u.email.toLowerCase() === finalEmail
+        );
+        const prevBatchUserIdx = seenBatchUsernames.get(finalUsername);
+        const prevBatchEmailIdx = seenBatchEmails.get(finalEmail);
+
+        seenBatchUsernames.set(finalUsername, rowIndex);
+        seenBatchEmails.set(finalEmail, rowIndex);
+
+        let hasConflict = false;
+        let conflictType: 'email' | 'username' | 'both' | 'batch_duplicate' | null = null;
+        let conflictMessage: string | null = null;
+        const existingOwner = existingByEmail || existingByUsername;
+
+        if (existingByUsername && existingByEmail) {
+          hasConflict = true;
+          conflictType = 'both';
+          conflictMessage = `Username "@${finalUsername}" နှင့် Email "${finalEmail}" တို့သည် စနစ်ထဲရှိ "${existingOwner!.name}" (@${existingOwner!.username}) အကောင့်တွင် ရှိပြီးသားဖြစ်နေပါသည်။`;
+        } else if (existingByEmail) {
+          hasConflict = true;
+          conflictType = 'email';
+          conflictMessage = `Email "${finalEmail}" သည် စနစ်ထဲရှိ "${existingByEmail.name}" (@${existingByEmail.username}) အကောင့်တွင် ရှိပြီးသားဖြစ်နေပါသည်။`;
+        } else if (existingByUsername) {
+          hasConflict = true;
+          conflictType = 'username';
+          conflictMessage = `Username "@${finalUsername}" သည် စနစ်ထဲရှိ "${existingByUsername.name}" (${existingByUsername.email}) အကောင့်တွင် ရှိပြီးသားဖြစ်နေပါသည်။`;
+        } else if (prevBatchEmailIdx !== undefined || prevBatchUserIdx !== undefined) {
+          hasConflict = true;
+          conflictType = 'batch_duplicate';
+          const dupIdx = prevBatchEmailIdx ?? prevBatchUserIdx;
+          conflictMessage = `ယခု Paste စာရင်းထဲရှိ အပေါ်မှ ကျောင်းသား (#${dupIdx}) နှင့် Username သို့မဟုတ် Email ထပ်နေပါသည်။`;
+        }
 
         return {
-          index: idx + 1,
+          index: rowIndex,
           name: rawStudentName,
-          username: autoUsername,
-          email: parsedEmail || `${autoUsername}@swanarh.edu`,
+          username: finalUsername,
+          email: finalEmail,
           phone: parsedPhone,
           occupation: parsedOccupation,
           gender: parsedGender,
           address: parsedAddress,
+          suggestedUniqueUsername: suggestedUnique,
+          hasConflict,
+          conflictType,
+          conflictMessage,
+          existingOwner,
         };
       })
       .filter((item): item is NonNullable<typeof item> => item !== null);
   };
 
   const parsedPastePreview = parseQuickPasteLines(pasteRawText);
+  const pasteConflictItems = parsedPastePreview.filter((p) => p.hasConflict);
+  const pasteValidNewItems = parsedPastePreview.filter((p) => !p.hasConflict);
+  const singleExistingByUsername = username.trim()
+    ? allUsers.find((u) => u.username.toLowerCase() === username.trim().replace(/^@+/, '').toLowerCase())
+    : undefined;
+  const singleExistingByEmail = email.trim()
+    ? allUsers.find((u) => u.email.toLowerCase() === email.trim().toLowerCase())
+    : undefined;
 
   // Apply pasted Student Form directly into Single Account fields (or switch to Batch Mode if 2+ students)
   const applySmartAutoFillToSingleForm = (raw: string) => {
@@ -1025,21 +1417,49 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
       loginUrl: string;
     }> = [];
 
-    const assignedUsernames = new Set<string>();
+    const skippedList: Array<{
+      index: number;
+      name: string;
+      username: string;
+      email: string;
+      phone?: string;
+      reason: string;
+      existingAccountName?: string;
+      existingAccountUsername?: string;
+      existingAccountEmail?: string;
+    }> = [];
+
     const newStudentIds: string[] = [];
+    const cloudSignUpTasks: Array<Promise<unknown>> = [];
 
     for (const item of parsedPastePreview) {
-      const finalUsername = generateUsernameFromName(item.name, assignedUsernames);
-      assignedUsernames.add(finalUsername);
+      // Strictly DO NOT auto-add if Email or Username already exists!
+      if (item.hasConflict) {
+        skippedList.push({
+          index: item.index,
+          name: item.name,
+          username: item.username,
+          email: item.email,
+          phone: item.phone || undefined,
+          reason:
+            item.conflictMessage ||
+            'Username သို့မဟုတ် Email သည် စနစ်ထဲတွင် ရှိပြီးသားဖြစ်နေပါသည်။',
+          existingAccountName: item.existingOwner?.name,
+          existingAccountUsername: item.existingOwner?.username,
+          existingAccountEmail: item.existingOwner?.email,
+        });
+        continue;
+      }
 
+      const finalUsername = item.username.trim().replace(/^@+/, '').toLowerCase();
       const finalPassword =
         pastePasswordMode === 'random'
           ? generateShortEasyPassword()
           : pasteSharedPassword.trim() || 'student123';
 
       const finalEmail =
-        item.email && item.email.includes('@') && !item.email.endsWith('@swanarh.edu')
-          ? item.email.toLowerCase()
+        item.email && item.email.includes('@')
+          ? item.email.trim().toLowerCase()
           : `${finalUsername}@swanarh.edu`;
 
       const res = ClassroomDB.registerNewUser({
@@ -1065,27 +1485,56 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
           username: res.user.username,
           password: finalPassword,
           role: 'student',
-          email: finalEmail,
-          occupation: item.occupation || undefined,
-          phone: item.phone || undefined,
+          email: res.user.email,
+          occupation: item.occupation || res.user.title || undefined,
+          phone: item.phone || res.user.phone || undefined,
           gender: item.gender === 'female' ? 'မ (Female)' : 'ကျား (Male)',
-          address: item.address || undefined,
+          address: item.address || res.user.address || undefined,
           courseName: enrolledLabel,
           loginUrl: loginLink,
         });
 
-        await SupabaseService.signUpWithSupabase(finalEmail, finalPassword, {
-          id: res.user.id,
-          name: res.user.name,
-          username: res.user.username,
-          role: 'student',
-          phone: res.user.phone,
-          avatar: '',
-          title: res.user.title,
-          gender: item.gender || 'male',
-          address: res.user.address,
-        }).catch(() => {});
+        cloudSignUpTasks.push(
+          SupabaseService.signUpWithSupabase(res.user.email, finalPassword, {
+            id: res.user.id,
+            name: res.user.name,
+            username: res.user.username,
+            role: 'student',
+            phone: res.user.phone,
+            avatar: '',
+            title: res.user.title,
+            gender: item.gender || 'male',
+            address: res.user.address,
+          }).catch(() => {})
+        );
+      } else {
+        skippedList.push({
+          index: item.index,
+          name: item.name,
+          username: finalUsername,
+          email: finalEmail,
+          phone: item.phone || undefined,
+          reason:
+            res.error ||
+            'Username သို့မဟုတ် Email သည် စနစ်ထဲတွင် ရှိပြီးသားဖြစ်နေပါသည်။',
+          existingAccountName: res.existingUser?.name,
+          existingAccountUsername: res.existingUser?.username,
+          existingAccountEmail: res.existingUser?.email,
+        });
       }
+    }
+
+    if (createdList.length === 0 && skippedList.length > 0) {
+      setBatchSkippedDuplicates(skippedList);
+      setErrorMsg(
+        `⚠️ သတိပေးချက်: ထည့်သွင်းသော ကျောင်းသား (${skippedList.length}) ဦးလုံးသည် Existing Email သို့မဟုတ် Username ရှိပြီးသားဖြစ်နေသောကြောင့် တန်းမထည့်ပေးပါ။ အောက်ပါ သတိပေးချက်စာရင်းတွင် စစ်ဆေးပါ။`
+      );
+      setIsSubmitting(false);
+      return;
+    }
+
+    if (cloudSignUpTasks.length > 0) {
+      await Promise.allSettled(cloudSignUpTasks);
     }
 
     if (enrolledCoursesList.length > 0 && newStudentIds.length > 0) {
@@ -1100,21 +1549,29 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     }
 
     setBatchCreatedCredentials(createdList);
+    setBatchSkippedDuplicates(skippedList);
     setCopiedBatchIds({});
     setCopiedAllBatchSuccess(false);
     setCreatedCredentials(null);
     setPasteRawText('');
+    setPasteCustomOverrides({});
     setShowNewForm(false);
     setIsSubmitting(false);
     setTimeout(() => {
       scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
     }, 60);
 
-    setToastMsg(
-      `🎉 ကျောင်းသားအကောင့်သစ် (${createdList.length}) ဦးကို တစ်ပြိုင်နက် ဖွင့်လှစ်ပြီး အတန်းသွင်းပေးပြီးပါပြီ! တစ်ဦးချင်းစီအတွက် Copy ခလုတ်နှိပ်၍ ပေးပို့နိုင်ပါပြီ။`
-    );
+    if (skippedList.length > 0) {
+      setToastMsg(
+        `✅ အကောင့်သစ် (${createdList.length}) ဦး ဖွင့်ပေးပြီးပါပြီ! ⚠️ Existing Email/Username ရှိပြီးသား (${skippedList.length}) ဦးကို တန်းမထည့်ဘဲ သတိပေးချက် ပြသထားပါသည်။`
+      );
+    } else {
+      setToastMsg(
+        `🎉 ကျောင်းသားအကောင့်သစ် (${createdList.length}) ဦးကို တစ်ပြိုင်နက် ဖွင့်လှစ်ပြီး အတန်းသွင်းပေးပြီးပါပြီ! တစ်ဦးချင်းစီအတွက် Copy ခလုတ်နှိပ်၍ ပေးပို့နိုင်ပါပြီ။`
+      );
+    }
     onRefresh();
-    setTimeout(() => setToastMsg(null), 7000);
+    setTimeout(() => setToastMsg(null), 8000);
   };
 
   const handleCopySingleBatchItem = (item: {
@@ -1472,6 +1929,68 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
               </div>
             )}
 
+            {/* Skipped Existing Email / Username Warning Banner (Never Auto-Added) */}
+            {batchSkippedDuplicates.length > 0 && (
+              <div className="p-3.5 sm:p-4 bg-amber-50/95 dark:bg-amber-950/50 border-2 border-amber-400 dark:border-amber-600 rounded-2xl shadow-xs text-xs space-y-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                    <div className="min-w-0 space-y-0.5">
+                      <h4 className="font-extrabold text-amber-950 dark:text-amber-100 text-xs sm:text-sm">
+                        ⚠️ သတိပေးချက် — Existing Email / Username ရှိပြီးသားဖြစ်နေ၍ တန်းမထည့်ပေးထားသော အကောင့် ({batchSkippedDuplicates.length}) ဦး
+                      </h4>
+                      <p className="text-[11px] text-amber-900/90 dark:text-amber-200/90 leading-relaxed">
+                        အောက်ပါ ကျောင်းသားများ၏ Email သို့မဟုတ် Username သည် စနစ်ထဲတွင် ရှိပြီးသားဖြစ်နေသောကြောင့် <strong>အကောင့်အသစ် တန်းမဖွင့်ပေးထားပါ (Copy စာရင်းထဲသို့လည်း တန်းမထည့်ထားပါ)</strong>။
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setBatchSkippedDuplicates([])}
+                    className="text-amber-700 dark:text-amber-300 hover:text-amber-950 dark:hover:text-white font-bold px-2 py-1 rounded-lg cursor-pointer shrink-0"
+                    title="သတိပေးချက် ပိတ်မည်"
+                  >
+                    ✕ ပိတ်မည်
+                  </button>
+                </div>
+
+                <div className="space-y-1.5">
+                  {batchSkippedDuplicates.map((dup, i) => (
+                    <div
+                      key={`${dup.index}-${dup.username}-${i}`}
+                      className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px]"
+                    >
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono font-bold text-amber-700 dark:text-amber-400">
+                            #{dup.index}
+                          </span>
+                          <span className="font-bold text-slate-900 dark:text-white">
+                            👤 {dup.name}
+                          </span>
+                          <span className="font-mono text-indigo-600 dark:text-indigo-300 font-semibold">
+                            @{dup.username}
+                          </span>
+                          <span className="font-mono text-slate-600 dark:text-slate-300">
+                            📧 {dup.email}
+                          </span>
+                          {dup.phone && (
+                            <span className="font-mono text-slate-500">📞 {dup.phone}</span>
+                          )}
+                        </div>
+                        <div className="text-rose-600 dark:text-rose-400 font-semibold">
+                          ⚠️ {dup.reason}
+                        </div>
+                      </div>
+                      <span className="px-2.5 py-1 rounded-lg bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-200 font-bold text-[10px] shrink-0 self-start sm:self-center">
+                        🚫 တန်းမထည့်ထားပါ (Skipped)
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Batch Created Accounts Credentials Panel (Quick Text Paste Mode Results) */}
             {batchCreatedCredentials.length > 0 && (
               <div className="p-3.5 sm:p-4 bg-emerald-50/90 dark:bg-emerald-950/40 border-2 border-emerald-400 dark:border-emerald-700 rounded-2xl shadow-xs text-xs space-y-3">
@@ -1513,12 +2032,12 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                   </div>
                 </div>
 
-                <div className="max-h-64 overflow-y-auto space-y-1.5 pr-1">
+                <div className="space-y-2 pr-1">
                   {batchCreatedCredentials.map((item, idx) => {
                     const isCopied = Boolean(copiedBatchIds[item.id]);
                     return (
                       <div
-                        key={item.id}
+                        key={`${item.id}-${idx}`}
                         className={`p-2.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 transition-colors ${
                           isCopied
                             ? 'bg-emerald-100/70 dark:bg-emerald-900/30 border-emerald-300 dark:border-emerald-700'
@@ -1982,7 +2501,11 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                         setEmail(e.target.value);
                         setIsEmailManuallyEdited(Boolean(e.target.value));
                       }}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl font-mono text-slate-900 dark:text-white"
+                      className={`w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border rounded-xl font-mono text-slate-900 dark:text-white ${
+                        singleExistingByEmail
+                          ? 'border-rose-500 dark:border-rose-500 ring-2 ring-rose-500/20'
+                          : 'border-slate-300 dark:border-slate-700'
+                      }`}
                       required
                     />
                   </div>
@@ -2056,6 +2579,57 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                     />
                   </div>
                 </div>
+
+                {/* Live Warning Banner in Single Mode when Email or Username already exists */}
+                {(singleExistingByUsername || singleExistingByEmail) && (
+                  <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/60 border-2 border-amber-400 dark:border-amber-600 text-amber-950 dark:text-amber-100 space-y-2 text-xs">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                        <div className="space-y-0.5">
+                          <div className="font-extrabold text-rose-700 dark:text-rose-300">
+                            ⚠️ သတိပေးချက် — Existing Email / Username ရှိပြီးသားဖြစ်နေပါသည် (တန်းမထည့်ပေးပါ)
+                          </div>
+                          {singleExistingByUsername && (
+                            <div className="text-[11px]">
+                              • Username <strong className="font-mono">@{username}</strong> သည် စနစ်ထဲရှိ{' '}
+                              <strong>
+                                {singleExistingByUsername.name} (@{singleExistingByUsername.username} |{' '}
+                                {singleExistingByUsername.email})
+                              </strong>{' '}
+                              အကောင့်တွင် ရှိပြီးသားဖြစ်နေပါသည်။
+                            </div>
+                          )}
+                          {singleExistingByEmail && (
+                            <div className="text-[11px]">
+                              • Email <strong className="font-mono">{email}</strong> သည် စနစ်ထဲရှိ{' '}
+                              <strong>
+                                {singleExistingByEmail.name} (@{singleExistingByEmail.username})
+                              </strong>{' '}
+                              အကောင့်တွင် ရှိပြီးသားဖြစ်နေပါသည်။
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      {singleExistingByUsername && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const uniqueU = generateUsernameFromName(name || username, undefined, true);
+                            setUsername(uniqueU);
+                            setIsUsernameManuallyEdited(true);
+                            if (!isEmailManuallyEdited || email.endsWith('@swanarh.edu')) {
+                              setEmail(`${uniqueU}@swanarh.edu`);
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[11px] cursor-pointer shrink-0 self-start sm:self-center"
+                        >
+                          ✨ လူသစ်ဖြစ်ပါက @{generateUsernameFromName(name || username, undefined, true)} သို့ ပြောင်းမည်
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* Initial Class Enrollment for Students */}
                 {selectedRole === 'student' && (
@@ -2266,33 +2840,76 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                           )}
                         </div>
 
-                        {/* Live Preview Cards with All 6 Auto-Extracted Fields */}
+                        {/* Live Preview Cards with All 6 Auto-Extracted Fields & Duplicate Warnings */}
                         <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-700 space-y-2">
-                          <div className="flex items-center justify-between text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                          <div className="flex items-center justify-between text-[11px] font-bold text-slate-600 dark:text-slate-300 flex-wrap gap-1">
                             <span>🔍 အကွက်များထဲ အလိုအလျောက် ခွဲခြားဖြည့်ထားသော စာရင်း (Auto-Filled Preview)</span>
-                            <span className="text-emerald-600 dark:text-emerald-400">{parsedPastePreview.length} ဦး</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-emerald-600 dark:text-emerald-400">
+                                အသစ်ဖွင့်မည်: {pasteValidNewItems.length} ဦး
+                              </span>
+                              {pasteConflictItems.length > 0 && (
+                                <span className="px-2 py-0.5 rounded-full bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 font-extrabold">
+                                  ⚠️ ရှိပြီးသား: {pasteConflictItems.length} ဦး (တန်းမထည့်ပါ)
+                                </span>
+                              )}
+                            </div>
                           </div>
+
+                          {pasteConflictItems.length > 0 && (
+                            <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/60 border border-amber-400 dark:border-amber-600 text-[11px] text-amber-950 dark:text-amber-100 space-y-1">
+                              <div className="font-extrabold text-rose-700 dark:text-rose-300 flex items-center gap-1.5">
+                                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                                <span>
+                                  သတိပေးချက်: အောက်ပါ စာရင်းထဲမှ ({pasteConflictItems.length}) ဦးသည် Existing Email သို့မဟုတ် Username ရှိပြီးသားဖြစ်နေပါသည်!
+                                </span>
+                              </div>
+                              <p className="text-[10px] leading-relaxed">
+                                ရှိပြီးသား အကောင့်များကို <strong>တန်းမထည့်ပေးပါ</strong>။ အကယ်၍ နာမည်တူ လူသစ်ဖြစ်ပါက သက်ဆိုင်ရာကတ်ရှိ <strong>&ldquo;လူသစ်ဖြစ်ပါက Username ပြောင်းမည်&rdquo;</strong> ကို နှိပ်ပါ (သို့မဟုတ် Username/Email ပြင်ပါ)။ မပြင်ပါက အသစ် ({pasteValidNewItems.length}) ဦးကိုသာ အကောင့်ဖွင့်ပေးပါမည်။
+                              </p>
+                            </div>
+                          )}
+
                           {parsedPastePreview.length === 0 ? (
                             <div className="text-[11px] text-slate-400 py-6 text-center">
                               ဘယ်ဘက်အကွက်တွင် ကျောင်းသားပို့လာသော Form စာသားကို Paste ချလိုက်ပါက အမည်၊ Username၊ Email၊ ဖုန်း၊ အလုပ်အကိုင်၊ ကျား/မ၊ လိပ်စာ တို့ကို အလိုအလျောက် ခွဲခြားဖြည့်ပေးပါမည်...
                             </div>
                           ) : (
-                            <div className="max-h-48 overflow-y-auto space-y-2 pr-1 text-[11px]">
+                            <div className="max-h-96 overflow-y-auto space-y-2 pr-1 text-[11px]">
                               {parsedPastePreview.map((p) => (
                                 <div
-                                  key={`${p.index}-${p.username}`}
-                                  className="p-2.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 space-y-1 shadow-2xs"
+                                  key={`${p.index}-${p.name}`}
+                                  className={`p-2.5 rounded-xl border space-y-1.5 shadow-2xs transition-colors ${
+                                    p.hasConflict
+                                      ? 'bg-rose-50/90 dark:bg-rose-950/40 border-2 border-rose-400 dark:border-rose-600'
+                                      : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700'
+                                  }`}
                                 >
-                                  <div className="flex items-center justify-between gap-2">
-                                    <div className="font-bold text-slate-900 dark:text-white truncate">
-                                      <span className="text-slate-400 mr-1.5">#{p.index}</span>
+                                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                                    <div className="font-bold text-slate-900 dark:text-white truncate flex items-center gap-1.5 flex-wrap">
+                                      <span className="text-slate-400">#{p.index}</span>
                                       <span>👤 {p.name}</span>
-                                      <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
                                         {p.gender === 'female' ? '♀ မ' : '♂ ကျား'}
                                       </span>
+                                      {p.hasConflict ? (
+                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-600 text-white font-extrabold">
+                                          ⚠️ ရှိပြီးသား (တန်းမထည့်ပါ)
+                                        </span>
+                                      ) : (
+                                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-bold">
+                                          ✓ အသစ်ဖွင့်မည်
+                                        </span>
+                                      )}
                                     </div>
                                     <div className="shrink-0 font-mono flex items-center gap-2">
-                                      <span className="text-indigo-600 dark:text-indigo-300 font-bold">
+                                      <span
+                                        className={`font-bold ${
+                                          p.hasConflict
+                                            ? 'text-rose-600 dark:text-rose-400 line-through'
+                                            : 'text-indigo-600 dark:text-indigo-300'
+                                        }`}
+                                      >
                                         @{p.username}
                                       </span>
                                       <span className="text-emerald-600 dark:text-emerald-400 font-bold">
@@ -2300,6 +2917,87 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                                       </span>
                                     </div>
                                   </div>
+
+                                  {p.hasConflict && (
+                                    <div className="p-2 rounded-lg bg-white/90 dark:bg-slate-900/90 border border-rose-300 dark:border-rose-700 space-y-1.5 text-[10px]">
+                                      <div className="font-bold text-rose-700 dark:text-rose-300">
+                                        ⚠️ {p.conflictMessage} (ဤအကောင့်ကို တန်းမထည့်ပေးပါ)
+                                      </div>
+                                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                                        <div>
+                                          <label className="block text-[9px] font-bold text-slate-500 mb-0.5">
+                                            Username ပြင်ရန် (လူသစ်ဖြစ်ပါက):
+                                          </label>
+                                          <input
+                                            type="text"
+                                            value={p.username}
+                                            onChange={(e) => {
+                                              const nextU = e.target.value
+                                                .toLowerCase()
+                                                .replace(/[^a-z0-9_.]/g, '');
+                                              setPasteCustomOverrides((prev) => ({
+                                                ...prev,
+                                                [p.index]: {
+                                                  ...prev[p.index],
+                                                  username: nextU,
+                                                  ...(p.email.endsWith('@swanarh.edu')
+                                                    ? { email: `${nextU}@swanarh.edu` }
+                                                    : {}),
+                                                },
+                                              }));
+                                            }}
+                                            className="w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono text-[10px]"
+                                          />
+                                        </div>
+                                        <div>
+                                          <label className="block text-[9px] font-bold text-slate-500 mb-0.5">
+                                            Email ပြင်ရန်:
+                                          </label>
+                                          <input
+                                            type="text"
+                                            value={p.email}
+                                            onChange={(e) => {
+                                              const nextE = e.target.value.trim().toLowerCase();
+                                              setPasteCustomOverrides((prev) => ({
+                                                ...prev,
+                                                [p.index]: {
+                                                  ...prev[p.index],
+                                                  email: nextE,
+                                                },
+                                              }));
+                                            }}
+                                            className="w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono text-[10px]"
+                                          />
+                                        </div>
+                                      </div>
+                                      {(p.conflictType === 'username' ||
+                                        p.conflictType === 'both' ||
+                                        p.conflictType === 'batch_duplicate') &&
+                                        p.suggestedUniqueUsername !== p.username && (
+                                          <div className="flex justify-end">
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                setPasteCustomOverrides((prev) => ({
+                                                  ...prev,
+                                                  [p.index]: {
+                                                    ...prev[p.index],
+                                                    username: p.suggestedUniqueUsername,
+                                                    ...(p.email.endsWith('@swanarh.edu')
+                                                      ? { email: `${p.suggestedUniqueUsername}@swanarh.edu` }
+                                                      : {}),
+                                                  },
+                                                }));
+                                              }}
+                                              className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] cursor-pointer"
+                                            >
+                                              ✨ လူသစ်ဖြစ်ပါက @{p.suggestedUniqueUsername} သို့ ပြောင်းမည်
+                                            </button>
+                                          </div>
+                                        )}
+                                    </div>
+                                  )}
+
                                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] text-slate-600 dark:text-slate-300 pt-0.5 border-t border-slate-100 dark:border-slate-700/60">
                                     <div className="truncate">📧 Email: <span className="font-mono">{p.email}</span></div>
                                     <div className="truncate">📞 ဖုန်း: <span className="font-mono">{p.phone || '—'}</span></div>
@@ -2380,14 +3078,16 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                       </button>
                       <button
                         type="submit"
-                        disabled={isSubmitting || parsedPastePreview.length === 0}
+                        disabled={isSubmitting || pasteValidNewItems.length === 0}
                         className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
                       >
                         <Sparkles className="w-4 h-4" />
                         <span>
                           {isSubmitting
-                            ? `Creating ${parsedPastePreview.length} Accounts...`
-                            : `ကျောင်းသား (${parsedPastePreview.length}) ဦးလုံးကို တစ်ပြိုင်နက် အကောင့်ဖွင့်မည်`}
+                            ? `Creating ${pasteValidNewItems.length} Accounts...`
+                            : pasteConflictItems.length > 0
+                            ? `အကောင့်သစ် (${pasteValidNewItems.length}) ဦးသာ ဖွင့်မည် (ရှိပြီးသား ${pasteConflictItems.length} ဦး တန်းမထည့်ပါ)`
+                            : `ကျောင်းသား (${pasteValidNewItems.length}) ဦးလုံးကို တစ်ပြိုင်နက် အကောင့်ဖွင့်မည်`}
                         </span>
                       </button>
                     </div>
