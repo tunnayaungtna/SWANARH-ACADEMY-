@@ -75,6 +75,7 @@ const STORAGE_KEYS = {
   AUDIT_LOGS: 'classroom_os_audit_logs_v1',
   SESSION_SEAL: 'classroom_os_session_seal_v1',
   CLOUD_CONFIRMED_POSTS: 'classroom_os_cloud_confirmed_posts_v1',
+  CLOUD_CONFIRMED_ATTENDANCE: 'classroom_os_cloud_confirmed_attendance_v1',
 };
 
 // Rate limiting in-memory / storage tracker
@@ -225,6 +226,27 @@ export class ClassroomDB {
     }
   }
 
+  private static getCloudConfirmedAttendanceIds(): Set<string> {
+    return new Set(this.getItem<string[]>(STORAGE_KEYS.CLOUD_CONFIRMED_ATTENDANCE, []));
+  }
+
+  private static markAttendanceCloudConfirmed(ids: string | string[]): void {
+    const list = Array.isArray(ids) ? ids : [ids];
+    if (!list.length) return;
+    const current = this.getCloudConfirmedAttendanceIds();
+    let changed = false;
+    list.forEach((id) => {
+      if (id && !current.has(id)) {
+        current.add(id);
+        changed = true;
+      }
+    });
+    if (changed) {
+      const bounded = Array.from(current).slice(-500);
+      this.setItem(STORAGE_KEYS.CLOUD_CONFIRMED_ATTENDANCE, bounded);
+    }
+  }
+
   static getDeviceId(): string {
     try {
       let devId = localStorage.getItem(STORAGE_KEYS.DEVICE_ID);
@@ -280,13 +302,24 @@ export class ClassroomDB {
     if (!id) return;
     const now = Date.now();
     const map = this.getItem<Record<string, number>>(STORAGE_KEYS.RECENT_WRITES, {});
-    const next: Record<string, number> = { [id]: now };
+    const next: Record<string, number> = {};
     for (const [k, ts] of Object.entries(map)) {
-      if (now - ts < 600_000) {
+      if (k !== id && now - ts < 600_000) {
         next[k] = ts;
       }
     }
+    next[id] = now;
     this.setItem(STORAGE_KEYS.RECENT_WRITES, next);
+  }
+
+  private static clearLocalWrite(id: string): void {
+    if (!id) return;
+    const map = this.getItem<Record<string, number>>(STORAGE_KEYS.RECENT_WRITES, {});
+    if (id in map) {
+      const next = { ...map };
+      delete next[id];
+      this.setItem(STORAGE_KEYS.RECENT_WRITES, next);
+    }
   }
 
   private static isRecentLocalWrite(id: string, maxAgeMs: number = 600_000): boolean {
@@ -2818,8 +2851,8 @@ export class ClassroomDB {
     const onlyProfiles = Boolean(options?.onlyProfiles);
     const isBackground = Boolean(options?.background);
     const now = Date.now();
-    const COOLDOWN_MS = 20_000; // 20s background cooldown for fast cross-device propagation
-    const CATALOG_TTL_MS = 45_000; // 45s catalog refresh so classroom/user edits & deletions propagate quickly
+    const COOLDOWN_MS = 8_000; // 8s background cooldown for fast cross-device propagation
+    const CATALOG_TTL_MS = 35_000; // 35s catalog refresh so classroom/user edits & deletions propagate quickly
 
     if (!force) {
       if (onlyProfiles && now - this.lastProfilePullAt < COOLDOWN_MS) {
@@ -2916,12 +2949,16 @@ export class ClassroomDB {
         const currentCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter(
           (c) => !deletedSet.has(c.id)
         );
-        // Scope student queries only to their enrolled courses to save Supabase egress
-        const studentScopedCourseIds =
+        // Scope student queries only to their enrolled courses when non-empty to save Supabase egress
+        const enrolledIdsForStudent =
           loggedUser && loggedUser.role === 'student'
             ? currentCourses
                 .filter((c) => c.enrolledStudentIds.includes(loggedUser.id))
                 .map((c) => c.id)
+            : undefined;
+        const studentScopedCourseIds =
+          enrolledIdsForStudent && enrolledIdsForStudent.length > 0
+            ? enrolledIdsForStudent
             : undefined;
 
         const [
@@ -3447,66 +3484,14 @@ export class ClassroomDB {
 
         // 6. Authoritative Attendance Sessions Reconciliation
         if (remoteAttendance !== null) {
-          const remoteAttIds = new Set(remoteAttendance.map((ratt) => ratt.id));
-          const scopedCourseSet = studentScopedCourseIds ? new Set(studentScopedCourseIds) : null;
-          const localAttendance = this.getItem<AttendanceSession[]>(
-            STORAGE_KEYS.ATTENDANCE,
-            INITIAL_ATTENDANCE_SESSIONS
-          ).filter((att) => !deletedSet.has(att.id) && !deletedSet.has(att.courseId));
-          const prevJson = JSON.stringify(localAttendance);
-          const attMap = new Map<string, AttendanceSession>();
-
-          localAttendance.forEach((att) => {
-            const isInQueriedScope = !scopedCourseSet || scopedCourseSet.has(att.courseId);
-            if (!cloudActive || !isInQueriedScope || remoteAttIds.has(att.id) || this.isRecentLocalWrite(att.id)) {
-              attMap.set(att.id, att);
-            } else {
-              newlyDiscoveredRemoteDeletions.push(att.id);
-              deletedSet.add(att.id);
-            }
-          });
-
-          remoteAttendance.forEach((ratt) => {
-            if (deletedSet.has(ratt.id) || deletedSet.has(ratt.courseId)) {
-              if (!this.purgedRemoteIds.has(ratt.id)) {
-                this.purgedRemoteIds.add(ratt.id);
-                SupabaseService.deleteAttendanceSession(ratt.id).catch(() => {});
-              }
-              return;
-            }
-            const existing = attMap.get(ratt.id);
-            const isRecentAttWrite = this.isRecentLocalWrite(ratt.id);
-            let mergedRecords: Record<string, AttendanceRecord>;
-            if (isRecentAttWrite && existing) {
-              mergedRecords = {
-                ...(ratt.records || {}),
-                ...(existing.records || {}),
-              };
-              // If the logged-in student just cleared/undid their attendance locally, keep it cleared
-              if (
-                loggedUser &&
-                loggedUser.role === 'student' &&
-                existing.records &&
-                !existing.records[loggedUser.id]
-              ) {
-                delete mergedRecords[loggedUser.id];
-              }
-            } else {
-              mergedRecords = {
-                ...(existing?.records || {}),
-                ...(ratt.records || {}),
-              };
-            }
-            attMap.set(ratt.id, {
-              ...existing,
-              ...ratt,
-              isOpen: isRecentAttWrite && existing ? existing.isOpen : ratt.isOpen,
-              records: mergedRecords,
-            });
-          });
-          const merged = Array.from(attMap.values());
-          if (JSON.stringify(merged) !== prevJson) {
-            this.setItem(STORAGE_KEYS.ATTENDANCE, merged);
+          const attUpdated = this.reconcileRemoteAttendanceSessions(
+            remoteAttendance,
+            studentScopedCourseIds,
+            cloudActive,
+            deletedSet,
+            newlyDiscoveredRemoteDeletions
+          );
+          if (attUpdated) {
             updated = true;
           }
         }
@@ -3534,6 +3519,192 @@ export class ClassroomDB {
     })();
 
     return this.activePullPromise;
+  }
+
+  /**
+   * Authoritative Attendance Sessions Reconciliation:
+   * - Synchronizes Open/Close state (`isOpen`) immediately across all Admin, Co-Admin, and Student devices
+   *   using `statusUpdatedAtMs` so student check-ins or stale caches NEVER block or revert Open/Close actions.
+   * - Merges per-student check-in records without losing concurrent check-ins.
+   */
+  private static reconcileRemoteAttendanceSessions(
+    remoteAttendance: AttendanceSession[],
+    studentScopedCourseIds?: string[],
+    cloudActive: boolean = true,
+    externalDeletedSet?: Set<string>,
+    externalNewDeletions?: string[]
+  ): boolean {
+    const deletedSet = externalDeletedSet || new Set(this.getDeletedIds());
+    const newlyDiscoveredRemoteDeletions = externalNewDeletions || [];
+    const remoteAttIds = new Set(remoteAttendance.map((ratt) => ratt.id));
+    this.markAttendanceCloudConfirmed(remoteAttendance.map((ratt) => ratt.id));
+    const confirmedCloudAtt = this.getCloudConfirmedAttendanceIds();
+
+    const scopedCourseSet =
+      studentScopedCourseIds && studentScopedCourseIds.length > 0
+        ? new Set(studentScopedCourseIds)
+        : null;
+    const localAttendance = this.getItem<AttendanceSession[]>(
+      STORAGE_KEYS.ATTENDANCE,
+      INITIAL_ATTENDANCE_SESSIONS
+    ).filter((att) => !deletedSet.has(att.id) && !deletedSet.has(att.courseId));
+    const prevJson = JSON.stringify(localAttendance);
+    const attMap = new Map<string, AttendanceSession>();
+    const attToPushToCloud: AttendanceSession[] = [];
+
+    localAttendance.forEach((att) => {
+      const isInQueriedScope = !scopedCourseSet || scopedCourseSet.has(att.courseId);
+      const isInitialDemo = /^att-sess-\d{1,4}$/.test(att.id || '');
+      const wasConfirmedInCloud = confirmedCloudAtt.has(att.id);
+
+      if (remoteAttIds.has(att.id)) {
+        attMap.set(att.id, att);
+      } else if (
+        !cloudActive ||
+        !isInQueriedScope ||
+        this.isRecentLocalWrite(att.id, 30_000) ||
+        (!wasConfirmedInCloud && !isInitialDemo) ||
+        (remoteAttendance.length === 0 && !isInitialDemo)
+      ) {
+        attMap.set(att.id, att);
+        if (!isInitialDemo) {
+          attToPushToCloud.push(att);
+        }
+      } else {
+        newlyDiscoveredRemoteDeletions.push(att.id);
+        deletedSet.add(att.id);
+      }
+    });
+
+    remoteAttendance.forEach((ratt) => {
+      if (deletedSet.has(ratt.id) || deletedSet.has(ratt.courseId)) {
+        if (!this.purgedRemoteIds.has(ratt.id)) {
+          this.purgedRemoteIds.add(ratt.id);
+          SupabaseService.deleteAttendanceSession(ratt.id).catch(() => {});
+        }
+        return;
+      }
+
+      const existing = attMap.get(ratt.id);
+      const isRecentOpenToggle = this.isRecentLocalWrite(`att-open:${ratt.id}`, 8_000);
+      const localStatusMs = existing?.statusUpdatedAtMs || 0;
+      const remoteStatusMs = ratt.statusUpdatedAtMs || 0;
+
+      // Resolve isOpen authoritatively:
+      // 1. If this device toggled Open/Close in the last 8 seconds AND its timestamp is >= remote, keep local isOpen.
+      // 2. If both have explicit statusUpdatedAtMs timestamps and local is strictly newer, keep local isOpen and push to cloud.
+      // 3. Otherwise, ALWAYS accept remote `ratt.isOpen` immediately!
+      let resolvedIsOpen = ratt.isOpen;
+      let resolvedStatusMs = remoteStatusMs || localStatusMs || undefined;
+
+      if (existing) {
+        if (isRecentOpenToggle && localStatusMs >= remoteStatusMs) {
+          resolvedIsOpen = existing.isOpen;
+          resolvedStatusMs = localStatusMs || Date.now();
+          if (existing.isOpen !== ratt.isOpen) {
+            attToPushToCloud.push({
+              ...existing,
+              statusUpdatedAtMs: resolvedStatusMs,
+            });
+          }
+        } else if (localStatusMs > 0 && remoteStatusMs > 0 && localStatusMs > remoteStatusMs) {
+          resolvedIsOpen = existing.isOpen;
+          resolvedStatusMs = localStatusMs;
+          if (existing.isOpen !== ratt.isOpen) {
+            attToPushToCloud.push({
+              ...existing,
+              statusUpdatedAtMs: resolvedStatusMs,
+            });
+          }
+        }
+      }
+
+      // Reconcile student check-in records:
+      // Start with authoritative remote records, then overlay any student record modified on this device within the last 15s
+      const mergedRecords: Record<string, AttendanceRecord> = {
+        ...(ratt.records || {}),
+      };
+
+      if (existing?.records) {
+        for (const [stuId, localRec] of Object.entries(existing.records)) {
+          if (this.isRecentLocalWrite(`att-rec:${ratt.id}:${stuId}`, 15_000)) {
+            mergedRecords[stuId] = localRec;
+          }
+        }
+      }
+
+      // If a student just cleared/undid their check-in on this device within the last 15s, keep it cleared
+      const loggedUser = this.getCurrentUser();
+      if (
+        loggedUser &&
+        loggedUser.role === 'student' &&
+        this.isRecentLocalWrite(`att-clear:${ratt.id}:${loggedUser.id}`, 15_000)
+      ) {
+        delete mergedRecords[loggedUser.id];
+      }
+
+      attMap.set(ratt.id, {
+        ...existing,
+        ...ratt,
+        isOpen: resolvedIsOpen,
+        statusUpdatedAtMs: resolvedStatusMs,
+        records: mergedRecords,
+      });
+    });
+
+    if (!externalNewDeletions && newlyDiscoveredRemoteDeletions.length > 0) {
+      this.recordDeletedIds(newlyDiscoveredRemoteDeletions);
+    }
+
+    const merged = Array.from(attMap.values()).sort(
+      (a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)
+    );
+
+    if (attToPushToCloud.length > 0) {
+      const uniqueToPush = Array.from(new Map(attToPushToCloud.map((a) => [a.id, a])).values());
+      uniqueToPush.forEach((sess) => {
+        SupabaseService.upsertAttendanceSession(sess, { force: true })
+          .then((ok) => {
+            if (ok) this.markAttendanceCloudConfirmed(sess.id);
+          })
+          .catch(() => {});
+      });
+    }
+
+    if (JSON.stringify(merged) !== prevJson) {
+      this.setItem(STORAGE_KEYS.ATTENDANCE, merged);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Fast, lightweight live Attendance sync from Supabase (called every few seconds while viewing Attendance or Dashboard)
+   * so Open/Close actions and Student Check-in counts reflect across all Admin, Co-Admin, and Student devices within seconds.
+   */
+  private static activeAttendanceSyncPromise: Promise<boolean> | null = null;
+  static async syncAttendanceFromCloud(): Promise<boolean> {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return false;
+    }
+    if (this.activeAttendanceSyncPromise) {
+      return this.activeAttendanceSyncPromise;
+    }
+    this.activeAttendanceSyncPromise = (async () => {
+      try {
+        const remoteAttendance = await SupabaseService.getRemoteAttendanceSessions();
+        if (!remoteAttendance) return false;
+        const cloudActive =
+          remoteAttendance.length > 0 ||
+          localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) === 'true';
+        return this.reconcileRemoteAttendanceSessions(remoteAttendance, undefined, cloudActive);
+      } catch {
+        return false;
+      } finally {
+        this.activeAttendanceSyncPromise = null;
+      }
+    })();
+    return this.activeAttendanceSyncPromise;
   }
 
   /**
@@ -4716,7 +4887,7 @@ export class ClassroomDB {
     );
     return sessions
       .filter((s) => s.courseId === courseId)
-      .sort((a, b) => b.date.localeCompare(a.date));
+      .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
   }
 
   static createAttendanceSession(
@@ -4742,22 +4913,57 @@ export class ClassroomDB {
           year: 'numeric',
         });
 
+    const nowMs = Date.now();
     const newSession: AttendanceSession = {
-      id: `att-sess-${Date.now()}`,
+      id: `att-sess-${nowMs}`,
       courseId,
       date,
       displayDate,
       title: title.trim() || `Daily Class Check-in (${displayDate})`,
       isOpen,
       openedBy: currentUser.name,
-      createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      createdAt: new Date(nowMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      statusUpdatedAtMs: nowMs,
       records: {},
     };
 
+    // If creating a new OPEN session for this course, automatically close any previous open sessions for the same course
+    // so students and admins never have stale open sessions from earlier days left open!
+    const autoClosedSessions: AttendanceSession[] = [];
+    const updatedExisting = sessions.map((s) => {
+      if (isOpen && s.courseId === courseId && s.isOpen) {
+        const closedOld: AttendanceSession = {
+          ...s,
+          isOpen: false,
+          statusUpdatedAtMs: nowMs,
+        };
+        this.markLocalWrite(`att-open:${closedOld.id}`);
+        autoClosedSessions.push(closedOld);
+        return closedOld;
+      }
+      return s;
+    });
+
     this.markLocalWrite(newSession.id);
-    this.setItem(STORAGE_KEYS.ATTENDANCE, [newSession, ...sessions]);
+    this.markLocalWrite(`att-open:${newSession.id}`);
+    this.setItem(STORAGE_KEYS.ATTENDANCE, [newSession, ...updatedExisting]);
+
     try {
-      SupabaseService.upsertAttendanceSession(newSession).catch(() => {});
+      SupabaseService.upsertAttendanceSession(newSession, {
+        force: true,
+        onlyUpdateOpenState: true,
+      })
+        .then((ok) => {
+          if (ok) this.markAttendanceCloudConfirmed(newSession.id);
+        })
+        .catch(() => {});
+
+      autoClosedSessions.forEach((oldSess) => {
+        SupabaseService.upsertAttendanceSession(oldSess, {
+          force: true,
+          onlyUpdateOpenState: true,
+        }).catch(() => {});
+      });
     } catch {
       // ignore
     }
@@ -4782,8 +4988,12 @@ export class ClassroomDB {
     return newSession;
   }
 
-  static toggleAttendanceSessionOpen(sessionId: string, isOpen: boolean): AttendanceSession | null {
-    const currentLogged = this.getCurrentUser();
+  static toggleAttendanceSessionOpen(
+    sessionId: string,
+    isOpen: boolean,
+    actorUser?: User
+  ): AttendanceSession | null {
+    const currentLogged = actorUser || this.getCurrentUser();
     if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
       return null;
     }
@@ -4791,20 +5001,57 @@ export class ClassroomDB {
       STORAGE_KEYS.ATTENDANCE,
       INITIAL_ATTENDANCE_SESSIONS
     );
+    const targetCourseId = sessions.find((s) => s.id === sessionId)?.courseId;
+    const nowMs = Date.now();
     let updatedSession: AttendanceSession | null = null;
+    const otherModifiedSessions: AttendanceSession[] = [];
+
     const updated = sessions.map((s) => {
       if (s.id === sessionId) {
-        updatedSession = { ...s, isOpen };
+        updatedSession = {
+          ...s,
+          isOpen,
+          statusUpdatedAtMs: nowMs,
+        };
         return updatedSession;
+      }
+      // When opening a session for a course, or when closing attendance for a course,
+      // also close any other lingering open sessions in the same course so no stale session remains open
+      if (targetCourseId && s.courseId === targetCourseId && s.isOpen) {
+        const closedOther: AttendanceSession = {
+          ...s,
+          isOpen: false,
+          statusUpdatedAtMs: nowMs,
+        };
+        this.markLocalWrite(`att-open:${closedOther.id}`);
+        otherModifiedSessions.push(closedOther);
+        return closedOther;
       }
       return s;
     });
+
     this.markLocalWrite(sessionId);
+    this.markLocalWrite(`att-open:${sessionId}`);
     this.setItem(STORAGE_KEYS.ATTENDANCE, updated);
+
     if (updatedSession) {
       const targetSess = updatedSession as AttendanceSession;
       try {
-        SupabaseService.upsertAttendanceSession(targetSess).catch(() => {});
+        SupabaseService.upsertAttendanceSession(targetSess, {
+          force: true,
+          onlyUpdateOpenState: true,
+        })
+          .then((ok) => {
+            if (ok) this.markAttendanceCloudConfirmed(targetSess.id);
+          })
+          .catch(() => {});
+
+        otherModifiedSessions.forEach((otherSess) => {
+          SupabaseService.upsertAttendanceSession(otherSess, {
+            force: true,
+            onlyUpdateOpenState: true,
+          }).catch(() => {});
+        });
       } catch {
         // ignore
       }
@@ -4830,6 +5077,73 @@ export class ClassroomDB {
       });
     }
     return updatedSession;
+  }
+
+  /**
+   * Closes ALL open attendance sessions for a given courseId across local storage and Supabase SQL database
+   */
+  static closeAllOpenAttendanceForCourse(courseId: string, actorUser?: User): number {
+    const currentLogged = actorUser || this.getCurrentUser();
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
+      return 0;
+    }
+    const sessions = this.getItem<AttendanceSession[]>(
+      STORAGE_KEYS.ATTENDANCE,
+      INITIAL_ATTENDANCE_SESSIONS
+    );
+    const nowMs = Date.now();
+    const closedList: AttendanceSession[] = [];
+    const updated = sessions.map((s) => {
+      if (s.courseId === courseId && s.isOpen) {
+        const nextSess: AttendanceSession = {
+          ...s,
+          isOpen: false,
+          statusUpdatedAtMs: nowMs,
+        };
+        this.markLocalWrite(nextSess.id);
+        this.markLocalWrite(`att-open:${nextSess.id}`);
+        closedList.push(nextSess);
+        return nextSess;
+      }
+      return s;
+    });
+
+    if (closedList.length > 0) {
+      this.setItem(STORAGE_KEYS.ATTENDANCE, updated);
+      closedList.forEach((sess) => {
+        try {
+          SupabaseService.upsertAttendanceSession(sess, {
+            force: true,
+            onlyUpdateOpenState: true,
+          })
+            .then((ok) => {
+              if (ok) this.markAttendanceCloudConfirmed(sess.id);
+            })
+            .catch(() => {});
+        } catch {
+          // ignore
+        }
+      });
+
+      const primarySess = closedList[0];
+      const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+      const course = allCourses.find((c) => c.id === courseId);
+      this.recordAuditLog({
+        actor: currentLogged,
+        category: 'academic',
+        actionCode: 'ATTENDANCE_CLOSED',
+        actionLabel: 'Attendance ပိတ်ခြင်း (Attendance Closed)',
+        severity: 'info',
+        targetType: 'attendance',
+        targetId: primarySess.id,
+        targetName: primarySess.title,
+        courseId: course?.id || courseId,
+        courseCode: course?.code,
+        courseTitle: course?.title,
+        summary: `"${primarySess.title}" (${primarySess.displayDate}) Attendance Session ကို ပိတ်သိမ်း (Closed) ခဲ့ပါသည်။`,
+      });
+    }
+    return closedList.length;
   }
 
   static deleteAttendanceSession(sessionId: string): boolean {
@@ -4911,11 +5225,14 @@ export class ClassroomDB {
 
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     let updatedSession: AttendanceSession | null = null;
+    let studentRecordToSync: AttendanceRecord | null = null;
+
     const updated = sessions.map((s) => {
       if (s.id === sessionId) {
         if (status === 'clear') {
           const nextRecords = { ...s.records };
           delete nextRecords[student.id];
+          studentRecordToSync = null;
           updatedSession = {
             ...s,
             records: nextRecords,
@@ -4924,18 +5241,19 @@ export class ClassroomDB {
         }
 
         const prevRec = s.records[student.id];
+        studentRecordToSync = {
+          studentId: student.id,
+          studentName: student.name,
+          status: status as AttendanceStatus,
+          checkedInAt: status === 'absent' ? undefined : nowTime,
+          checkedInBy: 'student' as const,
+          note: note !== undefined ? note.trim() || undefined : prevRec?.note,
+        };
         updatedSession = {
           ...s,
           records: {
             ...s.records,
-            [student.id]: {
-              studentId: student.id,
-              studentName: student.name,
-              status: status as AttendanceStatus,
-              checkedInAt: status === 'absent' ? undefined : nowTime,
-              checkedInBy: 'student' as const,
-              note: note !== undefined ? note.trim() || undefined : prevRec?.note,
-            },
+            [student.id]: studentRecordToSync,
           },
         };
         return updatedSession;
@@ -4943,11 +5261,54 @@ export class ClassroomDB {
       return s;
     });
 
-    this.markLocalWrite(sessionId);
+    if (status === 'clear') {
+      this.clearLocalWrite(`att-rec:${sessionId}:${student.id}`);
+      this.markLocalWrite(`att-clear:${sessionId}:${student.id}`);
+    } else {
+      this.clearLocalWrite(`att-clear:${sessionId}:${student.id}`);
+      this.markLocalWrite(`att-rec:${sessionId}:${student.id}`);
+    }
+
     this.setItem(STORAGE_KEYS.ATTENDANCE, updated);
+
     if (updatedSession) {
+      const fallbackSess = updatedSession as AttendanceSession;
       try {
-        SupabaseService.upsertAttendanceSession(updatedSession).catch(() => {});
+        SupabaseService.syncStudentCheckInToCloud(
+          sessionId,
+          student.id,
+          studentRecordToSync,
+          fallbackSess
+        )
+          .then((res) => {
+            if (res.closedRemotely) {
+              // Session was already closed by Admin/Co-Admin in Supabase! Revert local check-in and mark session closed
+              this.clearLocalWrite(`att-rec:${sessionId}:${student.id}`);
+              this.clearLocalWrite(`att-clear:${sessionId}:${student.id}`);
+              const currentSessions = this.getItem<AttendanceSession[]>(
+                STORAGE_KEYS.ATTENDANCE,
+                INITIAL_ATTENDANCE_SESSIONS
+              );
+              const syncedClosed = currentSessions.map((cs) => {
+                if (cs.id === sessionId) {
+                  return {
+                    ...cs,
+                    isOpen: false,
+                    statusUpdatedAtMs: res.remoteStatusUpdatedAtMs || Date.now(),
+                    records: res.mergedRecords || cs.records,
+                  };
+                }
+                return cs;
+              });
+              this.setItem(STORAGE_KEYS.ATTENDANCE, syncedClosed);
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new Event('storage'));
+              }
+            } else if (res.success && res.mergedRecords) {
+              this.markAttendanceCloudConfirmed(sessionId);
+            }
+          })
+          .catch(() => {});
       } catch {
         // ignore
       }
@@ -4993,11 +5354,13 @@ export class ClassroomDB {
       return s;
     });
 
-    this.markLocalWrite(sessionId);
+    this.markLocalWrite(`att-rec:${sessionId}:${student.id}`);
     this.setItem(STORAGE_KEYS.ATTENDANCE, updated);
     if (updatedSession) {
       try {
-        SupabaseService.upsertAttendanceSession(updatedSession).catch(() => {});
+        SupabaseService.upsertAttendanceSession(updatedSession, {
+          preserveRemoteOpenState: true,
+        }).catch(() => {});
       } catch {
         // ignore
       }
@@ -5024,6 +5387,7 @@ export class ClassroomDB {
       if (s.id === sessionId) {
         const nextRecords: Record<string, AttendanceRecord> = { ...s.records };
         students.forEach((stu) => {
+          this.markLocalWrite(`att-rec:${sessionId}:${stu.id}`);
           nextRecords[stu.id] = {
             studentId: stu.id,
             studentName: stu.name,
@@ -5038,11 +5402,12 @@ export class ClassroomDB {
       return s;
     });
 
-    this.markLocalWrite(sessionId);
     this.setItem(STORAGE_KEYS.ATTENDANCE, updated);
     if (updatedSession) {
       try {
-        SupabaseService.upsertAttendanceSession(updatedSession).catch(() => {});
+        SupabaseService.upsertAttendanceSession(updatedSession, {
+          preserveRemoteOpenState: true,
+        }).catch(() => {});
       } catch {
         // ignore
       }

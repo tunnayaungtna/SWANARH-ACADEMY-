@@ -8,6 +8,7 @@ import {
   AssignmentSubmission,
   Quiz,
   AttendanceSession,
+  AttendanceRecord,
   NotificationItem,
   AuditLogEntry,
 } from '../types/classroom';
@@ -578,6 +579,47 @@ const DEVICE_SESSION_MARKER_PREFIX = '||DEV_SES:';
 const USERNAME_MARKER_PREFIX = '||USR:';
 const PASSWORD_ENC_MARKER_PREFIX = '||PWD_ENC:';
 const COURSE_ORDER_MARKER_PREFIX = '||ORDER:';
+const ATT_STATE_MARKER_PREFIX = '||ATT_STATE:';
+
+function encodeAttendanceOpenedBy(session: AttendanceSession): string {
+  const cleanOpenedBy =
+    (session.openedBy || 'Instructor').split(ATT_STATE_MARKER_PREFIX)[0].trim() || 'Instructor';
+  const ts =
+    typeof session.statusUpdatedAtMs === 'number' &&
+    Number.isFinite(session.statusUpdatedAtMs) &&
+    session.statusUpdatedAtMs > 0
+      ? Math.round(session.statusUpdatedAtMs)
+      : Date.now();
+  return `${cleanOpenedBy}${ATT_STATE_MARKER_PREFIX}${session.isOpen ? '1' : '0'}~${ts}`;
+}
+
+function decodeAttendanceOpenedBy(
+  rawOpenedBy?: string | null,
+  rawIsOpen?: unknown
+): {
+  openedBy: string;
+  isOpen: boolean;
+  statusUpdatedAtMs?: number;
+} {
+  const str = String(rawOpenedBy || 'Instructor');
+  const colIsOpen = Boolean(rawIsOpen);
+  if (str.includes(ATT_STATE_MARKER_PREFIX)) {
+    const [cleanName, stateRaw] = str.split(ATT_STATE_MARKER_PREFIX);
+    const [flagStr, tsRaw] = (stateRaw || '').trim().split('~');
+    const parsedTs = Number(tsRaw);
+    const resolvedOpen =
+      flagStr === '0' ? false : flagStr === '1' ? true : colIsOpen;
+    return {
+      openedBy: (cleanName || 'Instructor').trim() || 'Instructor',
+      isOpen: resolvedOpen && colIsOpen,
+      statusUpdatedAtMs: Number.isFinite(parsedTs) && parsedTs > 0 ? parsedTs : undefined,
+    };
+  }
+  return {
+    openedBy: str.trim() || 'Instructor',
+    isOpen: colIsOpen,
+  };
+}
 
 function encodeCourseThemeWithOrder(course: Course): string {
   const baseTheme = (course.themeColor || 'indigo').split(COURSE_ORDER_MARKER_PREFIX)[0].trim() || 'indigo';
@@ -1250,7 +1292,8 @@ export class SupabaseService {
       let query = supabase
         .from('attendance_sessions')
         .select('id,course_id,date,display_date,title,is_open,opened_by,records,created_at')
-        .limit(150);
+        .order('created_at', { ascending: false })
+        .limit(300);
 
       if (courseIds && courseIds.length > 0 && courseIds.length <= 25) {
         query = query.in('course_id', courseIds);
@@ -1259,17 +1302,34 @@ export class SupabaseService {
       const { data, error } = await query;
       if (error || !data) return null;
 
-      return data.map((row) => ({
-        id: row.id,
-        courseId: row.course_id,
-        date: row.date,
-        displayDate: row.display_date || row.date,
-        title: row.title || 'Class Attendance',
-        isOpen: Boolean(row.is_open),
-        openedBy: row.opened_by || 'Instructor',
-        createdAt: row.created_at || new Date().toISOString(),
-        records: row.records && typeof row.records === 'object' ? row.records : {},
-      }));
+      return data.map((row) => {
+        const decodedState = decodeAttendanceOpenedBy(
+          row.opened_by as string | null,
+          row.is_open
+        );
+        const rawRecords =
+          row.records && typeof row.records === 'object'
+            ? (row.records as Record<string, AttendanceRecord>)
+            : {};
+        const cleanRecords: Record<string, AttendanceRecord> = {};
+        for (const [k, v] of Object.entries(rawRecords)) {
+          if (k !== '__session_meta__' && v && typeof v === 'object' && 'status' in v) {
+            cleanRecords[k] = v;
+          }
+        }
+        return {
+          id: row.id,
+          courseId: row.course_id,
+          date: row.date,
+          displayDate: row.display_date || row.date,
+          title: row.title || 'Class Attendance',
+          isOpen: Boolean(row.is_open),
+          openedBy: decodedState.openedBy,
+          createdAt: row.created_at || new Date().toISOString(),
+          statusUpdatedAtMs: decodedState.statusUpdatedAtMs,
+          records: cleanRecords,
+        };
+      });
     } catch {
       return null;
     }
@@ -2239,33 +2299,190 @@ export class SupabaseService {
   }
 
   /**
-   * Upsert an attendance session to Supabase SQL database
+   * Upsert an attendance session to Supabase SQL database with conflict-free record merging
+   * and authoritative open/close state synchronization across all Admin, Co-Admin, and Student devices.
    */
-  static async upsertAttendanceSession(session: AttendanceSession): Promise<boolean> {
+  static async upsertAttendanceSession(
+    session: AttendanceSession,
+    options?: {
+      force?: boolean;
+      preserveRemoteOpenState?: boolean;
+      onlyUpdateOpenState?: boolean;
+    }
+  ): Promise<boolean> {
     try {
+      let mergedRecords: Record<string, AttendanceRecord> = { ...(session.records || {}) };
+      let resolvedIsOpen = Boolean(session.isOpen);
+      let resolvedStatusMs = session.statusUpdatedAtMs || Date.now();
+
+      // Fetch current remote row first so concurrent student check-ins or remote open/close changes are never clobbered
+      const { data: existingRow } = await supabase
+        .from('attendance_sessions')
+        .select('id,is_open,opened_by,records')
+        .eq('id', session.id)
+        .maybeSingle();
+
+      if (existingRow) {
+        const remoteRecords =
+          existingRow.records && typeof existingRow.records === 'object'
+            ? (existingRow.records as Record<string, AttendanceRecord>)
+            : {};
+        const cleanRemoteRecords: Record<string, AttendanceRecord> = {};
+        for (const [k, v] of Object.entries(remoteRecords)) {
+          if (k !== '__session_meta__' && v && typeof v === 'object' && 'status' in v) {
+            cleanRemoteRecords[k] = v;
+          }
+        }
+
+        // Merge remote student check-ins with local records so toggling open/close or marking a student never drops other students' check-ins
+        mergedRecords = {
+          ...cleanRemoteRecords,
+          ...(session.records || {}),
+        };
+
+        if (options?.preserveRemoteOpenState) {
+          const decodedRemote = decodeAttendanceOpenedBy(
+            existingRow.opened_by as string | null,
+            existingRow.is_open
+          );
+          resolvedIsOpen = Boolean(existingRow.is_open);
+          if (decodedRemote.statusUpdatedAtMs) {
+            resolvedStatusMs = decodedRemote.statusUpdatedAtMs;
+          }
+        }
+      }
+
+      const sessionToEncode: AttendanceSession = {
+        ...session,
+        isOpen: resolvedIsOpen,
+        statusUpdatedAtMs: resolvedStatusMs,
+        records: mergedRecords,
+      };
+
       const row = {
         id: session.id,
         course_id: session.courseId,
         date: session.date,
         display_date: session.displayDate,
         title: session.title,
-        is_open: session.isOpen,
-        opened_by: session.openedBy,
-        records: session.records || {},
+        is_open: resolvedIsOpen,
+        opened_by: encodeAttendanceOpenedBy(sessionToEncode),
+        records: mergedRecords,
       };
+
       const sigKey = `att:${session.id}`;
-      if (!this.hasChangedSignature(sigKey, row)) {
-        return true;
-      }
       const { error } = await supabase
         .from('attendance_sessions')
         .upsert(row, { onConflict: 'id' });
       if (!error) {
         this.recordSignature(sigKey, row);
+        return true;
       }
-      return !error;
+
+      // If only updating an existing row, try targeted .update() as fallback
+      if (existingRow) {
+        const { error: updErr } = await supabase
+          .from('attendance_sessions')
+          .update({
+            is_open: resolvedIsOpen,
+            opened_by: encodeAttendanceOpenedBy(sessionToEncode),
+            records: mergedRecords,
+          })
+          .eq('id', session.id);
+        if (!updErr) {
+          this.recordSignature(sigKey, row);
+          return true;
+        }
+      }
+
+      return false;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Atomic-style Student Check-In Sync:
+   * - Fetches the latest remote attendance session row from Supabase first.
+   * - If an Admin or Co-Admin has already closed the session (`is_open === false`), rejects the check-in
+   *   and returns `closedRemotely: true` so the student's browser never re-opens a closed session!
+   * - Updates ONLY the `records` column (merging this student's check-in with all other students' remote records)
+   *   without ever overwriting `is_open`!
+   */
+  static async syncStudentCheckInToCloud(
+    sessionId: string,
+    studentId: string,
+    record: AttendanceRecord | null,
+    fallbackSession: AttendanceSession
+  ): Promise<{
+    success: boolean;
+    closedRemotely?: boolean;
+    remoteIsOpen?: boolean;
+    remoteStatusUpdatedAtMs?: number;
+    mergedRecords?: Record<string, AttendanceRecord>;
+  }> {
+    try {
+      const { data: existingRow, error: fetchErr } = await supabase
+        .from('attendance_sessions')
+        .select('id,is_open,opened_by,records')
+        .eq('id', sessionId)
+        .maybeSingle();
+
+      if (!fetchErr && existingRow) {
+        const decodedRemote = decodeAttendanceOpenedBy(
+          existingRow.opened_by as string | null,
+          existingRow.is_open
+        );
+        const remoteRecords =
+          existingRow.records && typeof existingRow.records === 'object'
+            ? (existingRow.records as Record<string, AttendanceRecord>)
+            : {};
+        const cleanRemoteRecords: Record<string, AttendanceRecord> = {};
+        for (const [k, v] of Object.entries(remoteRecords)) {
+          if (k !== '__session_meta__' && v && typeof v === 'object' && 'status' in v) {
+            cleanRemoteRecords[k] = v;
+          }
+        }
+
+        // If Admin/Co-Admin already closed this attendance session on another device, do NOT allow check-in or overwrite is_open!
+        if (!existingRow.is_open) {
+          return {
+            success: false,
+            closedRemotely: true,
+            remoteIsOpen: false,
+            remoteStatusUpdatedAtMs: decodedRemote.statusUpdatedAtMs || Date.now(),
+            mergedRecords: cleanRemoteRecords,
+          };
+        }
+
+        const nextRecords: Record<string, AttendanceRecord> = { ...cleanRemoteRecords };
+        if (record === null) {
+          delete nextRecords[studentId];
+        } else {
+          nextRecords[studentId] = record;
+        }
+
+        // Update ONLY `records` so a student check-in NEVER touches `is_open` or `opened_by`
+        const { error: updateErr } = await supabase
+          .from('attendance_sessions')
+          .update({ records: nextRecords })
+          .eq('id', sessionId);
+
+        return {
+          success: !updateErr,
+          remoteIsOpen: true,
+          remoteStatusUpdatedAtMs: decodedRemote.statusUpdatedAtMs,
+          mergedRecords: nextRecords,
+        };
+      }
+
+      // Fallback if session was not in Supabase yet
+      const ok = await this.upsertAttendanceSession(fallbackSession, {
+        preserveRemoteOpenState: true,
+      });
+      return { success: ok };
+    } catch {
+      return { success: false };
     }
   }
 
@@ -2660,8 +2877,8 @@ export class SupabaseService {
         date: session.date,
         display_date: session.displayDate,
         title: session.title,
-        is_open: session.isOpen,
-        opened_by: session.openedBy,
+        is_open: Boolean(session.isOpen),
+        opened_by: encodeAttendanceOpenedBy(session),
         records: session.records || {},
       }));
       for (const batch of this.chunkArray(formattedAtt, 150)) {

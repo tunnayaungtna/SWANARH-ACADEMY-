@@ -187,6 +187,7 @@ export interface AttendanceSession {
   isOpen: boolean; // When true, students can click "Present" themselves
   openedBy: string;
   createdAt: string;
+  statusUpdatedAtMs?: number; // Epoch ms when isOpen was last opened/closed by Admin/Co-Admin
   records: Record<string, AttendanceRecord>; // keyed by studentId
 }
 

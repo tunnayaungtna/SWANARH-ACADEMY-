@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Course, User } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
 import {
@@ -43,6 +43,25 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
     'all' | 'checked_in' | 'not_checked_in'
   >('all');
 
+  useEffect(() => {
+    let mounted = true;
+    const syncNow = () => {
+      if (document.visibilityState === 'visible' && navigator.onLine !== false) {
+        ClassroomDB.syncAttendanceFromCloud().then((changed) => {
+          if (mounted && changed) {
+            onRefresh();
+          }
+        });
+      }
+    };
+    syncNow();
+    const timer = setInterval(syncNow, 5000);
+    return () => {
+      mounted = false;
+      clearInterval(timer);
+    };
+  }, [courses.length]);
+
   if (courses.length === 0) return null;
 
   const showToast = (msg: string) => {
@@ -64,6 +83,20 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
     }
 
     const todayIso = new Date().toISOString().slice(0, 10);
+    const existingTodayClosed = !customTitle?.trim()
+      ? sessions.find((s) => s.date === todayIso && !s.isOpen)
+      : undefined;
+
+    if (existingTodayClosed) {
+      ClassroomDB.toggleAttendanceSessionOpen(existingTodayClosed.id, true, currentUser);
+      setSessionTitle('');
+      showToast(
+        `✅ "${course.code}: ${course.title}" အတွက် ယနေ့ Attendance ကို ပြန်ဖွင့်ပေးလိုက်ပါပြီ! ကျောင်းသားများ "Mark Present" နှိပ်နိုင်ပါပြီ။`
+      );
+      onRefresh();
+      return;
+    }
+
     const titleToUse =
       customTitle?.trim() ||
       `Daily Attendance Check-in (${new Date().toLocaleDateString('en-US', {
@@ -80,8 +113,11 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
     onRefresh();
   };
 
-  const handleCloseClassAttendance = (sessionId: string, courseCode: string) => {
-    ClassroomDB.toggleAttendanceSessionOpen(sessionId, false);
+  const handleCloseClassAttendance = (sessionId: string, courseId: string, courseCode: string) => {
+    const closedCount = ClassroomDB.closeAllOpenAttendanceForCourse(courseId, currentUser);
+    if (closedCount === 0) {
+      ClassroomDB.toggleAttendanceSessionOpen(sessionId, false, currentUser);
+    }
     showToast(`🔒 "${courseCode}" ၏ Attendance Check-in ကို ပိတ်လိုက်ပါပြီ။`);
     onRefresh();
   };
@@ -473,7 +509,7 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
                 {openSess ? (
                   <button
                     type="button"
-                    onClick={() => handleCloseClassAttendance(openSess.id, course.code)}
+                    onClick={() => handleCloseClassAttendance(openSess.id, course.id, course.code)}
                     className="flex-1 py-2 px-3 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                   >
                     <Lock className="w-3.5 h-3.5" />

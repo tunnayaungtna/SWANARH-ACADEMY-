@@ -97,6 +97,7 @@ export default function App() {
   isLowBandwidthRef.current = isLowBandwidth;
   const [securitySettings, setSecuritySettings] = useState(() => ClassroomDB.getSecuritySettings());
   const [theme, setTheme] = useState<'light' | 'dark'>(() => ClassroomDB.getTheme());
+  const [, setRefreshTick] = useState(0);
 
   const handleToggleTheme = () => {
     const nextTheme = theme === 'light' ? 'dark' : 'light';
@@ -106,6 +107,7 @@ export default function App() {
 
   // Reload data when user changes or action taken
   const refreshData = () => {
+    setRefreshTick((t) => t + 1);
     const user = ClassroomDB.getCurrentUser();
     setCurrentUser(user);
     setAllUsers(ClassroomDB.getAllUsers());
@@ -204,11 +206,23 @@ export default function App() {
       }
     }, jitteredIntervalMs);
 
-    // 5-second live timer to immediately auto-publish any due scheduled posts to the top of the stream
+    // 5-second live timer to immediately auto-publish any due scheduled posts and sync live Attendance state across devices
     const scheduledPostsInterval = setInterval(() => {
       const publishedAny = ClassroomDB.checkAndPublishDueScheduledPosts();
       if (publishedAny) {
         refreshData();
+      }
+      if (
+        document.visibilityState === 'visible' &&
+        navigator.onLine !== false &&
+        !isLowBandwidthRef.current &&
+        ClassroomDB.getCurrentUser()
+      ) {
+        ClassroomDB.syncAttendanceFromCloud().then((attChanged) => {
+          if (attChanged) {
+            refreshData();
+          }
+        });
       }
     }, 5000);
 

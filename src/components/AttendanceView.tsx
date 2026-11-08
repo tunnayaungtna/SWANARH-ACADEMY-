@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Course,
   User,
@@ -72,8 +72,31 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
     setTimeout(() => setToastMsg(null), 3200);
   };
 
+  // Real-time multi-device Attendance synchronization (polls lightweight attendance table every 5s)
+  useEffect(() => {
+    let mounted = true;
+    const syncNow = () => {
+      if (document.visibilityState === 'visible' && navigator.onLine !== false) {
+        ClassroomDB.syncAttendanceFromCloud().then((changed) => {
+          if (mounted && changed) {
+            onRefresh();
+          }
+        });
+      }
+    };
+    syncNow();
+    const timer = setInterval(syncNow, 5000);
+    return () => {
+      mounted = false;
+      clearInterval(timer);
+    };
+  }, [course.id]);
+
+  // Prioritize any currently OPEN session if selectedSessionId is not set or no longer exists
   const activeSession: AttendanceSession | undefined =
-    sessions.find((s) => s.id === selectedSessionId) || sessions[0];
+    sessions.find((s) => s.id === selectedSessionId) ||
+    sessions.find((s) => s.isOpen) ||
+    sessions[0];
 
   // Enrolled students list (O(1) Set lookup for 2,000+ students)
   const allUsers = ClassroomDB.getAllUsers();
@@ -106,7 +129,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
 
   const handleToggleOpen = (session: AttendanceSession) => {
     const nextState = !session.isOpen;
-    ClassroomDB.toggleAttendanceSessionOpen(session.id, nextState);
+    ClassroomDB.toggleAttendanceSessionOpen(session.id, nextState, currentUser);
     showToast(
       nextState
         ? `"${session.title}" အား Open Attendance ဖွင့်ပေးလိုက်ပါပြီ။`
@@ -255,9 +278,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
 
   const handleMarkRemainingAsAbsent = (sessionId: string) => {
     if (!activeSession || notCheckedInStudents.length === 0) return;
-    notCheckedInStudents.forEach((stu) => {
-      ClassroomDB.instructorMarkAttendance(sessionId, stu, 'absent');
-    });
+    ClassroomDB.markAllStudentsAttendance(sessionId, notCheckedInStudents, 'absent');
     showToast(
       `⚠️ Attendance မနှိပ်ရသေးသူ (${notCheckedInStudents.length}) ဦးကို Absent (ပျက်ကွက်) အဖြစ် မှတ်သားပြီးပါပြီ။`
     );
