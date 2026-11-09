@@ -1676,7 +1676,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
         ) : (
           posts.slice(0, visiblePostLimit).map((post) => {
             const hasLiked = post.likes.includes(currentUser.id);
-            const isCommentsOpen = expandedComments[post.id] ?? (post.comments.length > 0);
+            const isCommentsOpen = Boolean(expandedComments[post.id]);
             const isPostScheduled = post.status === 'scheduled';
 
             return (
@@ -1971,11 +1971,14 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
 
                 {/* Social Interaction Bar */}
                 <div className="px-3.5 sm:px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
                     <button
+                      type="button"
                       onClick={() => handleToggleLike(post.id)}
-                      className={`flex items-center gap-1.5 transition-colors cursor-pointer ${
-                        hasLiked ? 'text-indigo-600 dark:text-indigo-400 font-semibold' : 'hover:text-slate-900 dark:hover:text-slate-200'
+                      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl transition-colors cursor-pointer ${
+                        hasLiked
+                          ? 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/50 font-semibold'
+                          : 'hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60'
                       }`}
                     >
                       <ThumbsUp className={`w-4 h-4 ${hasLiked ? 'fill-indigo-600 dark:fill-indigo-400' : ''}`} />
@@ -1983,16 +1986,38 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                     </button>
 
                     <button
+                      type="button"
                       onClick={() =>
                         setExpandedComments((prev) => ({
                           ...prev,
                           [post.id]: !isCommentsOpen,
                         }))
                       }
-                      className="flex items-center gap-1.5 hover:text-slate-900 dark:hover:text-slate-200 transition-colors cursor-pointer"
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
+                        isCommentsOpen
+                          ? 'text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 font-semibold ring-1 ring-indigo-200 dark:ring-indigo-800/60'
+                          : post.comments.length > 0
+                          ? 'text-slate-700 dark:text-slate-200 bg-slate-100/80 dark:bg-slate-800/70 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 hover:text-indigo-600 dark:hover:text-indigo-400 font-medium'
+                          : 'hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+                      }`}
+                      title={isCommentsOpen ? 'မှတ်ချက်များကို ပြန်သိမ်းရန်' : 'မှတ်ချက်များကို နှိပ်၍ ကြည့်ရန် / ရေးသားရန်'}
                     >
-                      <MessageSquare className="w-4 h-4" />
-                      <span>{post.comments.length} Class Comments</span>
+                      <MessageSquare className="w-4 h-4 shrink-0" />
+                      <span>
+                        {post.comments.length} Class Comments
+                      </span>
+                      <span className="text-[10px] opacity-80 hidden xs:inline">
+                        {isCommentsOpen
+                          ? '(ပြန်သိမ်းရန်)'
+                          : post.comments.length > 0
+                          ? '(နှိပ်၍ ကြည့်ရန်)'
+                          : '(မှတ်ချက်ပေးရန်)'}
+                      </span>
+                      {isCommentsOpen ? (
+                        <ChevronUp className="w-3.5 h-3.5 ml-0.5 shrink-0" />
+                      ) : (
+                        <ChevronDown className="w-3.5 h-3.5 ml-0.5 shrink-0" />
+                      )}
                     </button>
                   </div>
 
@@ -2001,9 +2026,28 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                   </span>
                 </div>
 
-                {/* Threaded Discussion Section */}
+                {/* Threaded Discussion Section (Collapsed by default, expands on click) */}
                 {isCommentsOpen && (
-                  <div className="neu-inset-sm mx-3.5 sm:mx-5 mb-4 rounded-2xl px-3.5 sm:px-5 py-4 space-y-3">
+                  <div className="neu-inset-sm mx-3.5 sm:mx-5 mb-4 rounded-2xl px-3.5 sm:px-5 py-3.5 space-y-3">
+                    <div className="flex items-center justify-between pb-2 border-b border-slate-200/70 dark:border-slate-700/60">
+                      <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                        <MessageSquare className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                        <span>အတန်းတွင်း မှတ်ချက်များ ({post.comments.length})</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedComments((prev) => ({
+                            ...prev,
+                            [post.id]: false,
+                          }))
+                        }
+                        className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-1 px-2 py-0.5 rounded-lg hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                      >
+                        <span>ပြန်သိမ်းမည်</span>
+                        <ChevronUp className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                     {/* Existing Comments */}
                     {post.comments.length > 0 && (
                       <div className="space-y-2.5">

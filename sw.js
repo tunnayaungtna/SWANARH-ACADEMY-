@@ -1,4 +1,4 @@
-const CACHE_NAME = 'swanarh-classroom-v19';
+const CACHE_NAME = 'swanarh-classroom-v20';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
@@ -10,7 +10,7 @@ const PRECACHE_ASSETS = [
   '/icon.svg',
 ];
 
-function fetchWithTimeout(request, timeoutMs) {
+function fetchWithTimeout(request, timeoutMs, fetchOptions) {
   return new Promise((resolve, reject) => {
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timer = setTimeout(() => {
@@ -18,7 +18,13 @@ function fetchWithTimeout(request, timeoutMs) {
       reject(new Error('SW navigation timeout'));
     }, timeoutMs);
 
-    fetch(request, controller ? { signal: controller.signal } : undefined)
+    const opts = Object.assign(
+      {},
+      fetchOptions || {},
+      controller ? { signal: controller.signal } : {}
+    );
+
+    fetch(request, opts)
       .then((res) => {
         clearTimeout(timer);
         resolve(res);
@@ -64,7 +70,16 @@ self.addEventListener('activate', (event) => {
           })
         )
       ),
-    ])
+    ]).then(() => {
+      // Notify all open tabs that the newest version is active
+      return self.clients.matchAll({ type: 'window' }).then((clients) => {
+        clients.forEach((client) => {
+          try {
+            client.postMessage({ type: 'SW_ACTIVATED', version: CACHE_NAME });
+          } catch {}
+        });
+      });
+    })
   );
 });
 
@@ -87,11 +102,12 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith('/api/')) return;
 
-  // Network-First with 3.5s fast timeout for HTML navigation requests:
-  // Ensures Myanmar mobile networks with packet loss/throttling never hang on a white screen
+  // Network-First with cache: 'no-cache' and 3.5s fast timeout for HTML navigation requests:
+  // Guarantees all users always receive the newest application deployment immediately when online,
+  // while falling back to the cached shell if offline or on a stalled mobile network.
   if (request.mode === 'navigate' || request.destination === 'document') {
     event.respondWith(
-      fetchWithTimeout(request, 3500)
+      fetchWithTimeout(request, 3500, { cache: 'no-cache' })
         .then((response) => {
           if (response && response.status === 200 && response.type === 'basic') {
             const cloned = response.clone();

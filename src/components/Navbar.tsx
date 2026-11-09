@@ -5,6 +5,7 @@ import { ProfilePictureModal } from './ProfilePictureModal';
 import { AcademyLogo } from './AcademyLogo';
 import { PWAInstallButton } from './PWAInstallButton';
 import { useBackHandler } from '../utils/backNavigation';
+import { performFullAppVersionUpdate } from '../utils/appUpdater';
 import {
   Bell,
   Check,
@@ -463,6 +464,17 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <button
                     onClick={() => {
                       setShowUserDropdown(false);
+                      performFullAppVersionUpdate(onRefreshNotifications);
+                    }}
+                    className="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50/70 dark:hover:bg-indigo-950/40 transition-colors cursor-pointer font-bold"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                    <span>Update App & Sync (ဗားရှင်းအသစ် ရယူရန်)</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setShowUserDropdown(false);
                       onLogout();
                     }}
                     className="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50/70 dark:hover:bg-rose-950/40 transition-colors cursor-pointer font-bold"
@@ -613,6 +625,17 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <Key className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
               <span>Change Password (စကားဝှက် ပြောင်းမည်)</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setIsMobileMenuOpen(false);
+                performFullAppVersionUpdate(onRefreshNotifications);
+              }}
+              className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-indigo-700 dark:text-indigo-300 bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-left font-bold cursor-pointer"
+            >
+              <RotateCcw className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+              <span>Update App & Sync (ဗားရှင်းအသစ် ရယူရန်)</span>
             </button>
 
             {currentUser.role === 'admin' && onOpenAuditLog && (

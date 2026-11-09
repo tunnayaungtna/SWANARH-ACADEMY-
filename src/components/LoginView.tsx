@@ -3,6 +3,7 @@ import { ClassroomDB } from '../services/storage';
 import { User, UserRole } from '../types/classroom';
 import { AcademyLogo } from './AcademyLogo';
 import { PWAInstallButton } from './PWAInstallButton';
+import { performFullAppVersionUpdate } from '../utils/appUpdater';
 import {
   ShieldCheck,
   Lock,
@@ -18,6 +19,7 @@ import {
   Users,
   Award,
   BookOpen,
+  RefreshCw,
 } from 'lucide-react';
 
 interface LoginViewProps {
@@ -44,6 +46,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
   );
   const [isDeviceLocked, setIsDeviceLocked] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isUpdatingApp, setIsUpdatingApp] = useState(false);
 
   React.useEffect(() => {
     try {
@@ -164,6 +167,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
     }
   };
 
+  const handleUpdateLoginApp = async () => {
+    if (isUpdatingApp) return;
+    setIsUpdatingApp(true);
+    await performFullAppVersionUpdate();
+  };
+
   return (
     <div className="min-h-screen neu-canvas text-slate-900 dark:text-slate-100 flex flex-col justify-between transition-colors duration-300 selection:bg-emerald-500/20">
       {/* Top Sculpted Neumorphic Header Bar */}
@@ -183,7 +192,17 @@ export const LoginView: React.FC<LoginViewProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5 shrink-0">
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleUpdateLoginApp}
+              disabled={isUpdatingApp}
+              className="neu-btn flex items-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl text-xs font-bold text-emerald-700 dark:text-emerald-400 cursor-pointer whitespace-nowrap"
+              title="Classroom App ဗားရှင်းအသစ်နှင့် နောက်ဆုံးအချက်အလက်များကို ရယူရန်"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isUpdatingApp ? 'animate-spin' : ''}`} />
+              <span>{isUpdatingApp ? 'Updating...' : 'Update App'}</span>
+            </button>
             <PWAInstallButton variant="login" />
             <button
               type="button"

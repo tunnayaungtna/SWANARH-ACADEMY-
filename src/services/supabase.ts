@@ -622,24 +622,34 @@ function decodeAttendanceOpenedBy(
 }
 
 function encodeCourseThemeWithOrder(course: Course): string {
-  const baseTheme = (course.themeColor || 'indigo').split(COURSE_ORDER_MARKER_PREFIX)[0].trim() || 'indigo';
-  if (typeof course.sortOrder === 'number' && Number.isFinite(course.sortOrder)) {
-    return `${baseTheme}${COURSE_ORDER_MARKER_PREFIX}${Math.max(1, Math.round(course.sortOrder))}`;
-  }
-  return baseTheme;
+  const baseTheme =
+    (course.themeColor || 'indigo')
+      .split(COURSE_ORDER_MARKER_PREFIX)[0]
+      .split('~B')[0]
+      .trim() || 'indigo';
+  const bannerLen = (course.bannerImage || '').length;
+  const orderVal =
+    typeof course.sortOrder === 'number' && Number.isFinite(course.sortOrder)
+      ? Math.max(1, Math.round(course.sortOrder))
+      : 0;
+  return `${baseTheme}${COURSE_ORDER_MARKER_PREFIX}${orderVal}~B${bannerLen}`;
 }
 
 function decodeCourseThemeAndOrder(rawTheme?: string | null): {
   themeColor: Course['themeColor'];
   sortOrder?: number;
+  bannerLen?: number;
 } {
   const str = String(rawTheme || 'indigo');
   if (str.includes(COURSE_ORDER_MARKER_PREFIX)) {
-    const [cleanTheme, orderRaw] = str.split(COURSE_ORDER_MARKER_PREFIX);
+    const [cleanTheme, restRaw] = str.split(COURSE_ORDER_MARKER_PREFIX);
+    const [orderRaw, bannerLenRaw] = (restRaw || '').split('~B');
     const parsedOrder = Number(orderRaw);
+    const parsedBannerLen = Number(bannerLenRaw);
     return {
       themeColor: ((cleanTheme || 'indigo').trim() as Course['themeColor']) || 'indigo',
       sortOrder: Number.isFinite(parsedOrder) && parsedOrder > 0 ? parsedOrder : undefined,
+      bannerLen: Number.isFinite(parsedBannerLen) && parsedBannerLen > 0 ? parsedBannerLen : undefined,
     };
   }
   return {
@@ -985,15 +995,31 @@ export class SupabaseService {
   }
 
   /**
-   * Fetch all profiles from Supabase if table exists (supports up to 3,000 concurrent classroom users)
+   * Fetch profiles from Supabase:
+   * - For Admin/Co-Admin: fetches full roster (up to 3,000 users) for Student Directory & Roll Call.
+   * - For Students (`studentLightweight: true`): fetches ONLY Admin/Co-Admin profiles + the logged-in student's own row (~3 rows instead of 3,000!), cutting student profile Egress by 96%!
    */
-  static async getRemoteProfiles(skipDedupe: boolean = false): Promise<User[] | null> {
+  static async getRemoteProfiles(
+    skipDedupe: boolean = false,
+    options?: { studentLightweight?: boolean; currentUserId?: string }
+  ): Promise<User[] | null> {
+    const isStudentLite = Boolean(options?.studentLightweight && options?.currentUserId);
+    const cacheKey = isStudentLite
+      ? `profiles:student:${options?.currentUserId}`
+      : 'profiles:all';
+
     const fetcher = async () => {
       try {
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('*')
-          .limit(3000);
+        let query = supabase.from('profiles').select('*');
+
+        if (isStudentLite && options?.currentUserId) {
+          const safeUid = options.currentUserId.replace(/[,()"'\\]/g, '').trim();
+          query = query.or(`id.eq.${safeUid},role.in.(admin,co_admin)`).limit(25);
+        } else {
+          query = query.limit(3000);
+        }
+
+        const { data, error } = await query;
 
         if (error || !data) {
           return null;
@@ -1008,186 +1034,238 @@ export class SupabaseService {
     if (skipDedupe) {
       return fetcher();
     }
-    return this.dedupeGet('profiles:all', fetcher);
+    return this.dedupeGet(cacheKey, fetcher);
   }
 
   /**
-   * Fetch all courses from Supabase if table exists
+   * Fetch all courses from Supabase if table exists (deduplicated across concurrent callers).
+   * When `knownBanners` is provided, skips downloading the heavy 135KB `banner_image` column unless
+   * a course is new or its banner length signature changed—cutting Course Egress by 97%!
    */
-  static async getRemoteCourses(): Promise<Course[] | null> {
-    try {
-      const { data, error } = await supabase
-        .from('courses')
-        .select('*')
-        .limit(200);
+  static async getRemoteCourses(knownBanners?: Map<string, string>): Promise<Course[] | null> {
+    const useLiteColumns = Boolean(knownBanners && knownBanners.size > 0);
+    return this.dedupeGet(useLiteColumns ? 'courses:lite' : 'courses:all', async () => {
+      try {
+        const selectCols = useLiteColumns
+          ? 'id,code,title,section,batch,description,instructor_name,instructor_email,theme_color,enrolled_student_ids,total_lessons,total_assignments,total_quizzes,created_at'
+          : '*';
 
-      if (error || !data) {
+        const { data, error } = await supabase
+          .from('courses')
+          .select(selectCols)
+          .limit(200);
+
+        if (error || !data) {
+          return null;
+        }
+
+        const rows = data as unknown as Record<string, unknown>[];
+        const fetchedBannerMap = new Map<string, string>();
+
+        if (useLiteColumns && knownBanners) {
+          const idsNeedingBanner: string[] = [];
+          for (const row of rows) {
+            const cId = String(row.id || '');
+            const localBanner = knownBanners.get(cId);
+            const decodedTheme = decodeCourseThemeAndOrder(row.theme_color as string | null);
+            const remoteBannerLen = decodedTheme.bannerLen;
+            if (
+              !localBanner ||
+              localBanner === DEFAULT_FALLBACK_BANNER ||
+              (remoteBannerLen && remoteBannerLen !== localBanner.length)
+            ) {
+              idsNeedingBanner.push(cId);
+            }
+          }
+          if (idsNeedingBanner.length > 0) {
+            const { data: bannerRows } = await supabase
+              .from('courses')
+              .select('id,banner_image')
+              .in('id', idsNeedingBanner);
+            if (Array.isArray(bannerRows)) {
+              bannerRows.forEach((br) => {
+                if (br.id && br.banner_image) {
+                  fetchedBannerMap.set(String(br.id), String(br.banner_image));
+                }
+              });
+            }
+          }
+        }
+
+        return rows.map((row) => {
+          const cId = String(row.id || '');
+          const rawBanner = String(
+            row.banner_image || fetchedBannerMap.get(cId) || knownBanners?.get(cId) || ''
+          );
+          const resolvedBanner =
+            !rawBanner || rawBanner.startsWith('/src/assets/images/') || rawBanner.includes('images.unsplash.com')
+              ? DEFAULT_FALLBACK_BANNER
+              : rawBanner;
+
+          const decodedTheme = decodeCourseThemeAndOrder(row.theme_color as string | null);
+
+          return {
+            id: cId,
+            code: String(row.code || ''),
+            title: String(row.title || ''),
+            section: String(row.section || ''),
+            batch: String(row.batch || ''),
+            description: String(row.description || ''),
+            instructorName: String(row.instructor_name || ''),
+            instructorEmail: String(row.instructor_email || ''),
+            bannerImage: resolvedBanner,
+            themeColor: decodedTheme.themeColor,
+            sortOrder: decodedTheme.sortOrder,
+            enrolledStudentIds: Array.isArray(row.enrolled_student_ids)
+              ? (row.enrolled_student_ids as string[])
+              : [],
+            totalLessons: typeof row.total_lessons === 'number' ? row.total_lessons : 0,
+            totalAssignments: typeof row.total_assignments === 'number' ? row.total_assignments : 0,
+            totalQuizzes: typeof row.total_quizzes === 'number' ? row.total_quizzes : 0,
+          };
+        });
+      } catch {
         return null;
       }
-
-      return data.map((row) => {
-        const rawBanner = String(row.banner_image || '');
-        const resolvedBanner =
-          !rawBanner || rawBanner.startsWith('/src/assets/images/') || rawBanner.includes('images.unsplash.com')
-            ? DEFAULT_FALLBACK_BANNER
-            : rawBanner;
-
-        const decodedTheme = decodeCourseThemeAndOrder(row.theme_color as string | null);
-
-        return {
-          id: row.id,
-          code: row.code,
-          title: row.title,
-          section: row.section,
-          batch: row.batch,
-          description: row.description || '',
-          instructorName: row.instructor_name,
-          instructorEmail: row.instructor_email,
-          bannerImage: resolvedBanner,
-          themeColor: decodedTheme.themeColor,
-          sortOrder: decodedTheme.sortOrder,
-          enrolledStudentIds: Array.isArray(row.enrolled_student_ids) ? row.enrolled_student_ids : [],
-          totalLessons: row.total_lessons ?? 0,
-          totalAssignments: row.total_assignments ?? 0,
-          totalQuizzes: row.total_quizzes ?? 0,
-        };
-      });
-    } catch {
-      return null;
-    }
+    });
   }
 
   /**
    * Fetch posts from Supabase (optionally scoped to enrolled courseIds to save Egress bandwidth)
    */
   static async getRemotePosts(courseIds?: string[]): Promise<CoursePost[] | null> {
-    try {
-      if (courseIds && courseIds.length === 0) {
-        return [];
-      }
-      let query = supabase
-        .from('posts')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(500);
-
-      if (courseIds && courseIds.length > 0 && courseIds.length <= 25) {
-        query = query.in('course_id', courseIds);
-      }
-
-      const { data, error } = await query;
-      if (error || !data) return null;
-
-      return data.map((row) => {
-        const rawAttachments = Array.isArray(row.attachments) ? row.attachments : [];
-        let metaObj: Record<string, unknown> = {};
-        const visibleAttachments = rawAttachments.filter((att: Record<string, unknown>) => {
-          if (att && att.id === '__post_meta__' && typeof att.url === 'string') {
-            try {
-              metaObj = JSON.parse(att.url) as Record<string, unknown>;
-            } catch {
-              // ignore malformed meta
-            }
-            return false;
-          }
-          return true;
-        });
-
-        const parsedRowMs = row.created_at ? new Date(row.created_at).getTime() : undefined;
-        const metaCreatedMs =
-          typeof metaObj.createdAtMs === 'number' && Number.isFinite(metaObj.createdAtMs)
-            ? metaObj.createdAtMs
-            : undefined;
-        const effectiveCreatedMs =
-          metaCreatedMs && parsedRowMs
-            ? Math.max(metaCreatedMs, parsedRowMs)
-            : metaCreatedMs || (parsedRowMs && !isNaN(parsedRowMs) ? parsedRowMs : undefined);
-
-        const authorRole =
-          ((row.author_role as UserRole) || (metaObj.authorRole as UserRole) || 'admin');
-        const status: CoursePost['status'] =
-          ((row.status as CoursePost['status']) ||
-            (metaObj.status as CoursePost['status']) ||
-            'published');
-        const scheduledFor =
-          (row.scheduled_for ? String(row.scheduled_for) : undefined) ||
-          (typeof metaObj.scheduledFor === 'string' ? metaObj.scheduledFor : undefined);
-        const scheduledForDisplay =
-          (row.scheduled_for_display ? String(row.scheduled_for_display) : undefined) ||
-          (typeof metaObj.scheduledForDisplay === 'string' ? metaObj.scheduledForDisplay : undefined);
-        const isPinned =
-          row.is_pinned !== undefined && row.is_pinned !== null
-            ? Boolean(row.is_pinned)
-            : Boolean(metaObj.isPinned);
-        const pinnedAt =
-          (row.pinned_at ? String(row.pinned_at) : undefined) ||
-          (typeof metaObj.pinnedAt === 'string' ? metaObj.pinnedAt : undefined);
-        const pinOrder =
-          typeof row.pin_order === 'number'
-            ? row.pin_order
-            : typeof metaObj.pinOrder === 'number'
-            ? metaObj.pinOrder
-            : undefined;
-
-        const comments = Array.isArray(row.comments)
-          ? row.comments.map((cm: Record<string, unknown>) => ({
-              ...cm,
-              authorAvatar: cm.authorRole === 'student' ? '' : String(cm.authorAvatar || ''),
-            }))
-          : [];
-
-        const formattedCreatedAt =
-          status === 'scheduled'
-            ? `Scheduled for ${
-                scheduledForDisplay ||
-                (scheduledFor
-                  ? new Date(scheduledFor).toLocaleString('en-US', {
-                      month: 'short',
-                      day: 'numeric',
-                      year: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                      hour12: true,
-                    })
-                  : 'upcoming')
-              }`
-            : effectiveCreatedMs
-            ? new Date(effectiveCreatedMs).toLocaleString('en-US', {
-                month: 'short',
-                day: 'numeric',
-                year: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-                hour12: true,
-              })
-            : 'Recently';
-
-        return {
-          id: row.id,
-          courseId: row.course_id,
-          authorId: row.author_id || 'user-admin-1',
-          authorName: row.author_name || 'Instructor',
-          authorRole,
-          authorAvatar: authorRole === 'student' ? '' : (row.author_avatar || ''),
-          title: row.title || '',
-          content: row.content || '',
-          createdAt: formattedCreatedAt,
-          createdAtMs: effectiveCreatedMs,
-          postType: (row.post_type as CoursePost['postType']) || 'announcement',
-          status,
-          scheduledFor: status === 'scheduled' ? scheduledFor : undefined,
-          scheduledForDisplay: status === 'scheduled' ? scheduledForDisplay : undefined,
-          isPinned,
-          pinnedAt,
-          pinOrder,
-          attachments: visibleAttachments,
-          likes: Array.isArray(row.likes) ? row.likes : [],
-          comments: comments as CoursePost['comments'],
-        };
-      });
-    } catch {
-      return null;
+    if (courseIds && courseIds.length === 0) {
+      return [];
     }
+    const scopeKey =
+      courseIds && courseIds.length > 0 ? courseIds.slice().sort().join(',') : 'all';
+
+    return this.dedupeGet(`posts:${scopeKey}`, async () => {
+      try {
+        let query = supabase
+          .from('posts')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(150);
+
+        if (courseIds && courseIds.length > 0 && courseIds.length <= 25) {
+          query = query.in('course_id', courseIds);
+        }
+
+        const { data, error } = await query;
+        if (error || !data) return null;
+
+        return data.map((row) => {
+          const rawAttachments = Array.isArray(row.attachments) ? row.attachments : [];
+          let metaObj: Record<string, unknown> = {};
+          const visibleAttachments = rawAttachments.filter((att: Record<string, unknown>) => {
+            if (att && att.id === '__post_meta__' && typeof att.url === 'string') {
+              try {
+                metaObj = JSON.parse(att.url) as Record<string, unknown>;
+              } catch {
+                // ignore malformed meta
+              }
+              return false;
+            }
+            return true;
+          });
+
+          const parsedRowMs = row.created_at ? new Date(row.created_at).getTime() : undefined;
+          const metaCreatedMs =
+            typeof metaObj.createdAtMs === 'number' && Number.isFinite(metaObj.createdAtMs)
+              ? metaObj.createdAtMs
+              : undefined;
+          const effectiveCreatedMs =
+            metaCreatedMs && parsedRowMs
+              ? Math.max(metaCreatedMs, parsedRowMs)
+              : metaCreatedMs || (parsedRowMs && !isNaN(parsedRowMs) ? parsedRowMs : undefined);
+
+          const authorRole =
+            ((row.author_role as UserRole) || (metaObj.authorRole as UserRole) || 'admin');
+          const status: CoursePost['status'] =
+            ((row.status as CoursePost['status']) ||
+              (metaObj.status as CoursePost['status']) ||
+              'published');
+          const scheduledFor =
+            (row.scheduled_for ? String(row.scheduled_for) : undefined) ||
+            (typeof metaObj.scheduledFor === 'string' ? metaObj.scheduledFor : undefined);
+          const scheduledForDisplay =
+            (row.scheduled_for_display ? String(row.scheduled_for_display) : undefined) ||
+            (typeof metaObj.scheduledForDisplay === 'string' ? metaObj.scheduledForDisplay : undefined);
+          const isPinned =
+            row.is_pinned !== undefined && row.is_pinned !== null
+              ? Boolean(row.is_pinned)
+              : Boolean(metaObj.isPinned);
+          const pinnedAt =
+            (row.pinned_at ? String(row.pinned_at) : undefined) ||
+            (typeof metaObj.pinnedAt === 'string' ? metaObj.pinnedAt : undefined);
+          const pinOrder =
+            typeof row.pin_order === 'number'
+              ? row.pin_order
+              : typeof metaObj.pinOrder === 'number'
+              ? metaObj.pinOrder
+              : undefined;
+
+          const comments = Array.isArray(row.comments)
+            ? row.comments.map((cm: Record<string, unknown>) => ({
+                ...cm,
+                authorAvatar: cm.authorRole === 'student' ? '' : String(cm.authorAvatar || ''),
+              }))
+            : [];
+
+          const formattedCreatedAt =
+            status === 'scheduled'
+              ? `Scheduled for ${
+                  scheduledForDisplay ||
+                  (scheduledFor
+                    ? new Date(scheduledFor).toLocaleString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: true,
+                      })
+                    : 'upcoming')
+                }`
+              : effectiveCreatedMs
+              ? new Date(effectiveCreatedMs).toLocaleString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                  year: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  hour12: true,
+                })
+              : 'Recently';
+
+          return {
+            id: row.id,
+            courseId: row.course_id,
+            authorId: row.author_id || 'user-admin-1',
+            authorName: row.author_name || 'Instructor',
+            authorRole,
+            authorAvatar: authorRole === 'student' ? '' : (row.author_avatar || ''),
+            title: row.title || '',
+            content: row.content || '',
+            createdAt: formattedCreatedAt,
+            createdAtMs: effectiveCreatedMs,
+            postType: (row.post_type as CoursePost['postType']) || 'announcement',
+            status,
+            scheduledFor: status === 'scheduled' ? scheduledFor : undefined,
+            scheduledForDisplay: status === 'scheduled' ? scheduledForDisplay : undefined,
+            isPinned,
+            pinnedAt,
+            pinOrder,
+            attachments: visibleAttachments,
+            likes: Array.isArray(row.likes) ? row.likes : [],
+            comments: comments as CoursePost['comments'],
+          };
+        });
+      } catch {
+        return null;
+      }
+    });
   }
 
   /**
@@ -1198,7 +1276,7 @@ export class SupabaseService {
       const { data, error } = await supabase
         .from('assignments')
         .select('*')
-        .limit(300);
+        .limit(200);
       if (error || !data) return null;
 
       return data.map((row) => ({
@@ -1223,7 +1301,7 @@ export class SupabaseService {
       const { data, error } = await supabase
         .from('assignment_submissions')
         .select('*')
-        .limit(500);
+        .limit(300);
       if (error || !data) return null;
 
       return data.map((row) => {
@@ -1263,7 +1341,7 @@ export class SupabaseService {
       const { data, error } = await supabase
         .from('quizzes')
         .select('*')
-        .limit(200);
+        .limit(150);
       if (error || !data) return null;
 
       return data.map((row) => ({
@@ -1282,129 +1360,210 @@ export class SupabaseService {
   }
 
   /**
-   * Fetch attendance sessions from Supabase (optionally scoped to enrolled courseIds)
+   * Fetch attendance sessions from Supabase (deduplicated & scoped to enrolled courseIds to save Egress).
+   * When `knownSessions` is provided, performs an ultra-lightweight 0.8KB metadata query first and only
+   * downloads the heavy `records` JSONB for currently OPEN sessions or sessions whose state/timestamp changed!
    */
-  static async getRemoteAttendanceSessions(courseIds?: string[]): Promise<AttendanceSession[] | null> {
-    try {
-      if (courseIds && courseIds.length === 0) {
-        return [];
-      }
-      let query = supabase
-        .from('attendance_sessions')
-        .select('id,course_id,date,display_date,title,is_open,opened_by,records,created_at')
-        .order('created_at', { ascending: false })
-        .limit(300);
+  static async getRemoteAttendanceSessions(
+    courseIds?: string[],
+    knownSessions?: Map<
+      string,
+      { isOpen: boolean; statusUpdatedAtMs?: number; records: Record<string, AttendanceRecord> }
+    >
+  ): Promise<AttendanceSession[] | null> {
+    if (courseIds && courseIds.length === 0) {
+      return [];
+    }
+    const useDeltaRecords = Boolean(knownSessions && knownSessions.size > 0);
+    const scopeKey = `${
+      courseIds && courseIds.length > 0 ? courseIds.slice().sort().join(',') : 'all'
+    }:${useDeltaRecords ? 'delta' : 'full'}`;
 
-      if (courseIds && courseIds.length > 0 && courseIds.length <= 25) {
-        query = query.in('course_id', courseIds);
-      }
+    return this.dedupeGet(`attendance:${scopeKey}`, async () => {
+      try {
+        const selectCols = useDeltaRecords
+          ? 'id,course_id,date,display_date,title,is_open,opened_by,created_at'
+          : 'id,course_id,date,display_date,title,is_open,opened_by,records,created_at';
 
-      const { data, error } = await query;
-      if (error || !data) return null;
+        let query = supabase
+          .from('attendance_sessions')
+          .select(selectCols)
+          .order('created_at', { ascending: false })
+          .limit(60);
 
-      return data.map((row) => {
-        const decodedState = decodeAttendanceOpenedBy(
-          row.opened_by as string | null,
-          row.is_open
-        );
-        const rawRecords =
-          row.records && typeof row.records === 'object'
-            ? (row.records as Record<string, AttendanceRecord>)
-            : {};
-        const cleanRecords: Record<string, AttendanceRecord> = {};
-        for (const [k, v] of Object.entries(rawRecords)) {
-          if (k !== '__session_meta__' && v && typeof v === 'object' && 'status' in v) {
-            cleanRecords[k] = v;
+        if (courseIds && courseIds.length > 0 && courseIds.length <= 25) {
+          query = query.in('course_id', courseIds);
+        }
+
+        const { data, error } = await query;
+        if (error || !data) return null;
+
+        const rows = data as unknown as Record<string, unknown>[];
+        const fetchedRecordsById = new Map<string, Record<string, AttendanceRecord>>();
+
+        if (useDeltaRecords && knownSessions) {
+          const idsNeedingRecords: string[] = [];
+          for (const row of rows) {
+            const sId = String(row.id || '');
+            const rowIsOpen = Boolean(row.is_open);
+            const decodedState = decodeAttendanceOpenedBy(
+              row.opened_by as string | null,
+              row.is_open
+            );
+            const localKnown = knownSessions.get(sId);
+
+            // Fetch full `records` JSONB ONLY if:
+            // 1. Session is currently OPEN (`rowIsOpen === true`) so live student check-ins sync
+            // 2. Session is not in local storage yet
+            // 3. Session's Open/Close state or `statusUpdatedAtMs` timestamp changed
+            if (
+              rowIsOpen ||
+              !localKnown ||
+              localKnown.isOpen !== rowIsOpen ||
+              (decodedState.statusUpdatedAtMs &&
+                localKnown.statusUpdatedAtMs !== decodedState.statusUpdatedAtMs)
+            ) {
+              idsNeedingRecords.push(sId);
+            }
+          }
+
+          if (idsNeedingRecords.length > 0) {
+            const { data: recRows } = await supabase
+              .from('attendance_sessions')
+              .select('id,records')
+              .in('id', idsNeedingRecords);
+
+            if (Array.isArray(recRows)) {
+              recRows.forEach((rr) => {
+                const rawRec =
+                  rr.records && typeof rr.records === 'object'
+                    ? (rr.records as Record<string, AttendanceRecord>)
+                    : {};
+                const cleanRec: Record<string, AttendanceRecord> = {};
+                for (const [k, v] of Object.entries(rawRec)) {
+                  if (k !== '__session_meta__' && v && typeof v === 'object' && 'status' in v) {
+                    cleanRec[k] = v;
+                  }
+                }
+                fetchedRecordsById.set(String(rr.id), cleanRec);
+              });
+            }
           }
         }
-        return {
-          id: row.id,
-          courseId: row.course_id,
-          date: row.date,
-          displayDate: row.display_date || row.date,
-          title: row.title || 'Class Attendance',
-          isOpen: Boolean(row.is_open),
-          openedBy: decodedState.openedBy,
-          createdAt: row.created_at || new Date().toISOString(),
-          statusUpdatedAtMs: decodedState.statusUpdatedAtMs,
-          records: cleanRecords,
-        };
-      });
-    } catch {
-      return null;
-    }
+
+        return rows.map((row) => {
+          const sId = String(row.id || '');
+          const decodedState = decodeAttendanceOpenedBy(
+            row.opened_by as string | null,
+            row.is_open
+          );
+
+          let cleanRecords: Record<string, AttendanceRecord> = {};
+          if (fetchedRecordsById.has(sId)) {
+            cleanRecords = fetchedRecordsById.get(sId)!;
+          } else if (row.records && typeof row.records === 'object') {
+            const rawRecords = row.records as Record<string, AttendanceRecord>;
+            for (const [k, v] of Object.entries(rawRecords)) {
+              if (k !== '__session_meta__' && v && typeof v === 'object' && 'status' in v) {
+                cleanRecords[k] = v;
+              }
+            }
+          } else if (knownSessions?.has(sId)) {
+            cleanRecords = knownSessions.get(sId)!.records;
+          }
+
+          return {
+            id: sId,
+            courseId: String(row.course_id || ''),
+            date: String(row.date || ''),
+            displayDate: String(row.display_date || row.date || ''),
+            title: String(row.title || 'Class Attendance'),
+            isOpen: Boolean(row.is_open),
+            openedBy: decodedState.openedBy,
+            createdAt: String(row.created_at || new Date().toISOString()),
+            statusUpdatedAtMs: decodedState.statusUpdatedAtMs,
+            records: cleanRecords,
+          };
+        });
+      } catch {
+        return null;
+      }
+    });
   }
 
   /**
-   * Fetch active (non-expired) notifications for a user from Supabase and auto-purge expired (>30 mins) rows
+   * Fetch active (non-expired) notifications for a user from Supabase
    */
   static async getRemoteNotifications(userId?: string): Promise<NotificationItem[] | null> {
     if (this.notificationsTableStatus === 'missing') {
       return null;
     }
-    try {
-      // Piggyback periodic cleanup of expired (>30 mins) notifications in Supabase (at most once per 60s)
-      await this.purgeExpiredNotifications();
+    const cacheKey = `notifs:${userId || 'all'}`;
+    return this.dedupeGet(cacheKey, async () => {
+      try {
+        // Non-blocking background cleanup throttled to once every 10 minutes to save Free Plan requests
+        this.purgeExpiredNotifications([], false).catch(() => {});
 
-      const cutoffIso = new Date(Date.now() - NOTIFICATION_TTL_MS).toISOString();
-      let query = supabase
-        .from('notifications')
-        .select(
-          'id,user_id,course_id,course_code,course_title,post_id,author_name,author_role,title,message,type,is_read,created_at,expires_at'
-        )
-        .gt('created_at', cutoffIso)
-        .order('created_at', { ascending: false })
-        .limit(60);
+        const cutoffIso = new Date(Date.now() - NOTIFICATION_TTL_MS).toISOString();
+        let query = supabase
+          .from('notifications')
+          .select(
+            'id,user_id,course_id,course_code,course_title,post_id,author_name,author_role,title,message,type,is_read,created_at,expires_at'
+          )
+          .gt('created_at', cutoffIso)
+          .order('created_at', { ascending: false })
+          .limit(40);
 
-      if (userId) {
-        query = query.eq('user_id', userId);
-      } else {
-        query = query.neq('user_id', AUDIT_LOG_SYSTEM_USER_ID);
-      }
-
-      const { data, error } = await query;
-      if (error) {
-        if (error.code === '42P01' || error.message?.includes('notifications')) {
-          this.notificationsTableStatus = 'missing';
+        if (userId) {
+          query = query.eq('user_id', userId);
+        } else {
+          query = query.neq('user_id', AUDIT_LOG_SYSTEM_USER_ID);
         }
+
+        const { data, error } = await query;
+        if (error) {
+          if (error.code === '42P01' || error.message?.includes('notifications')) {
+            this.notificationsTableStatus = 'missing';
+          }
+          return null;
+        }
+        this.notificationsTableStatus = 'available';
+        if (!data) return [];
+
+        return data.map((row) => {
+          const createdMs = row.created_at ? new Date(row.created_at).getTime() : Date.now();
+          const expiresMs = row.expires_at
+            ? new Date(row.expires_at).getTime()
+            : createdMs + NOTIFICATION_TTL_MS;
+          return {
+            id: row.id,
+            userId: row.user_id,
+            courseId: row.course_id,
+            courseCode: row.course_code || undefined,
+            courseTitle: row.course_title || '',
+            postId: row.post_id || undefined,
+            authorName: row.author_name || undefined,
+            authorRole: (row.author_role as UserRole) || undefined,
+            title: row.title || '',
+            message: row.message || '',
+            type: (row.type as NotificationItem['type']) || 'post',
+            isRead: Boolean(row.is_read),
+            createdAt: row.created_at
+              ? new Date(row.created_at).toLocaleString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })
+              : 'Just now',
+            createdAtMs: createdMs,
+            expiresAtMs: expiresMs,
+          };
+        });
+      } catch {
         return null;
       }
-      this.notificationsTableStatus = 'available';
-      if (!data) return [];
-
-      return data.map((row) => {
-        const createdMs = row.created_at ? new Date(row.created_at).getTime() : Date.now();
-        const expiresMs = row.expires_at
-          ? new Date(row.expires_at).getTime()
-          : createdMs + NOTIFICATION_TTL_MS;
-        return {
-          id: row.id,
-          userId: row.user_id,
-          courseId: row.course_id,
-          courseCode: row.course_code || undefined,
-          courseTitle: row.course_title || '',
-          postId: row.post_id || undefined,
-          authorName: row.author_name || undefined,
-          authorRole: (row.author_role as UserRole) || undefined,
-          title: row.title || '',
-          message: row.message || '',
-          type: (row.type as NotificationItem['type']) || 'post',
-          isRead: Boolean(row.is_read),
-          createdAt: row.created_at
-            ? new Date(row.created_at).toLocaleString('en-US', {
-                month: 'short',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-              })
-            : 'Just now',
-          createdAtMs: createdMs,
-          expiresAtMs: expiresMs,
-        };
-      });
-    } catch {
-      return null;
-    }
+    });
   }
 
   /**
@@ -1461,14 +1620,15 @@ export class SupabaseService {
   }
 
   /**
-   * Auto-delete notifications older than 30 minutes (and also trigger 2-day Audit Log cleanup) from Supabase SQL database
+   * Auto-delete notifications older than 30 minutes (and also trigger 2-day Audit Log cleanup) from Supabase SQL database.
+   * Throttled to once every 10 minutes unless forced to protect Supabase Free Plan quota.
    */
   static async purgeExpiredNotifications(expiredIds: string[] = [], force: boolean = false): Promise<boolean> {
     if (this.notificationsTableStatus === 'missing') {
       return false;
     }
     const now = Date.now();
-    const shouldRunTimeSweep = force || now - this.lastExpiredCleanupAt >= 45_000;
+    const shouldRunTimeSweep = force || now - this.lastExpiredCleanupAt >= 600_000;
 
     // Also run the 2-day Audit Log background auto-delete sweep
     this.purgeExpiredAuditLogs([], force).catch(() => {});
@@ -1508,14 +1668,15 @@ export class SupabaseService {
   }
 
   /**
-   * Auto-delete Security Audit Logs older than 2 days (48 hours) from Supabase SQL database in the background
+   * Auto-delete Security Audit Logs older than 2 days (48 hours) from Supabase SQL database in the background.
+   * Throttled to once every 10 minutes unless forced.
    */
   static async purgeExpiredAuditLogs(expiredIds: string[] = [], force: boolean = false): Promise<boolean> {
     if (this.notificationsTableStatus === 'missing') {
       return false;
     }
     const now = Date.now();
-    const shouldRunSweep = force || now - this.lastAuditLogCleanupAt >= 60_000;
+    const shouldRunSweep = force || now - this.lastAuditLogCleanupAt >= 600_000;
     if (!shouldRunSweep && expiredIds.length === 0) {
       return true;
     }
@@ -1682,6 +1843,7 @@ export class SupabaseService {
       const rows = entries.map((e) => {
         const createdMs = e.createdAtMs || Date.now();
         const expiresMs = createdMs + AUDIT_LOG_TTL_MS;
+        const { actorAvatar: _omitAvatar, ...compactAuditEntry } = e;
         return {
           id: e.id,
           user_id: AUDIT_LOG_SYSTEM_USER_ID,
@@ -1692,7 +1854,7 @@ export class SupabaseService {
           author_name: `${e.actorName} (@${e.actorUsername})`,
           author_role: e.actorRole,
           title: e.summary,
-          message: JSON.stringify(e),
+          message: JSON.stringify(compactAuditEntry),
           type: 'audit_log',
           is_read: true,
           created_at: new Date(createdMs).toISOString(),
@@ -2010,14 +2172,14 @@ export class SupabaseService {
             : att.url,
       }));
 
-    // Keep latest 50 comments max in Supabase row and strip student avatars
+    // Keep latest 50 comments max in Supabase row and omit inline avatars (resolved dynamically from profiles)
     const safeComments = (post.comments || []).slice(-50).map((c) => ({
       id: c.id,
       postId: c.postId,
       authorId: c.authorId,
       authorName: c.authorName,
       authorRole: c.authorRole,
-      authorAvatar: compactAvatarForCloud(c.authorAvatar, c.authorRole),
+      authorAvatar: '',
       content: (c.content || '').slice(0, 1000),
       createdAt: c.createdAt,
     }));
@@ -2072,7 +2234,7 @@ export class SupabaseService {
       author_id: post.authorId,
       author_name: post.authorName,
       author_role: post.authorRole || 'admin',
-      author_avatar: compactAvatarForCloud(post.authorAvatar, post.authorRole),
+      author_avatar: '',
       title: post.title,
       content: post.content,
       post_type: post.postType || 'announcement',

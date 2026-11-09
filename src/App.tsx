@@ -167,10 +167,30 @@ export default function App() {
     };
     window.addEventListener('storage', handleStorageChange);
 
+    let lastUserInteractionAt = Date.now();
+    const markUserActive = () => {
+      const wasIdle = Date.now() - lastUserInteractionAt > 360_000;
+      lastUserInteractionAt = Date.now();
+      if (wasIdle && document.visibilityState === 'visible' && navigator.onLine !== false) {
+        const loggedUser = ClassroomDB.getCurrentUser();
+        if (loggedUser) {
+          ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
+            if (updated || !ClassroomDB.getCurrentUser()) {
+              refreshData();
+            }
+          });
+        }
+      }
+    };
+    window.addEventListener('pointerdown', markUserActive, { passive: true });
+    window.addEventListener('keydown', markUserActive, { passive: true });
+    window.addEventListener('touchstart', markUserActive, { passive: true });
+
     // When refreshing, focusing, or reopening the installed PWA from the background,
     // immediately pull authoritative remote state (courses, posts, deletions, and 1-device session lock)
     const handleWakeUp = () => {
       if (document.visibilityState === 'visible') {
+        lastUserInteractionAt = Date.now();
         ClassroomDB.purgeExpiredAuditLogs(false);
         refreshData();
         const loggedUser = ClassroomDB.getCurrentUser();
@@ -187,10 +207,12 @@ export default function App() {
     window.addEventListener('pageshow', handleWakeUp);
     window.addEventListener('focus', handleWakeUp);
 
-    // Fast background sync (25s–35s jittered) so Admin/Co-Admin changes & single-device session enforcement reflect rapidly across devices
-    const jitteredIntervalMs = 25000 + Math.floor(Math.random() * 10000);
+    // Egress-optimized background sync (105s–135s jittered when user is active; auto-pauses when idle >6m)
+    const jitteredIntervalMs = 105000 + Math.floor(Math.random() * 30000);
     const syncInterval = setInterval(() => {
+      const isUserActive = Date.now() - lastUserInteractionAt <= 360_000;
       if (
+        isUserActive &&
         document.visibilityState === 'visible' &&
         navigator.onLine !== false &&
         !isLowBandwidthRef.current
@@ -206,13 +228,21 @@ export default function App() {
       }
     }, jitteredIntervalMs);
 
-    // 5-second live timer to immediately auto-publish any due scheduled posts and sync live Attendance state across devices
+    // 10-second timer to immediately auto-publish any due scheduled posts and perform 0.8KB delta Attendance checks when active
+    let attendanceTickCounter = 0;
     const scheduledPostsInterval = setInterval(() => {
       const publishedAny = ClassroomDB.checkAndPublishDueScheduledPosts();
       if (publishedAny) {
         refreshData();
       }
+      attendanceTickCounter++;
+      const isUserActive = Date.now() - lastUserInteractionAt <= 360_000;
+      // Check every 10s if any session is open locally, or every 30s (every 3rd tick) when all sessions are closed
+      const hasOpenLocalSession = ClassroomDB.getAttendanceSessions().some((s) => s.isOpen);
+      const shouldPollAttendance = hasOpenLocalSession || attendanceTickCounter % 3 === 0;
       if (
+        shouldPollAttendance &&
+        isUserActive &&
         document.visibilityState === 'visible' &&
         navigator.onLine !== false &&
         !isLowBandwidthRef.current &&
@@ -224,9 +254,9 @@ export default function App() {
           }
         });
       }
-    }, 5000);
+    }, 10000);
 
-    // 20-second background timer to auto-delete notifications (>30 mins) and Audit Logs (>2 days / 48 hours) locally & in Supabase
+    // 30-second local timer to auto-delete notifications (>30 mins) and Audit Logs (>2 days / 48 hours)
     const notifCleanupInterval = setInterval(() => {
       const publishedDue = ClassroomDB.checkAndPublishDueScheduledPosts();
       const purgedNotifs = ClassroomDB.purgeExpiredNotifications();
@@ -234,10 +264,11 @@ export default function App() {
       if (publishedDue || purgedNotifs || purgedAudit) {
         refreshData();
       }
-    }, 20000);
+    }, 30000);
 
     // Automatically sync immediately whenever internet connection is restored
     const handleOnline = () => {
+      lastUserInteractionAt = Date.now();
       const loggedUser = ClassroomDB.getCurrentUser();
       if (loggedUser) {
         ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
@@ -252,6 +283,9 @@ export default function App() {
     return () => {
       clearTimeout(initTimer);
       window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('pointerdown', markUserActive);
+      window.removeEventListener('keydown', markUserActive);
+      window.removeEventListener('touchstart', markUserActive);
       document.removeEventListener('visibilitychange', handleWakeUp);
       window.removeEventListener('pageshow', handleWakeUp);
       window.removeEventListener('focus', handleWakeUp);
@@ -359,10 +393,11 @@ export default function App() {
       }`}
     >
       <Suspense fallback={null}>
-        {/* Low Bandwidth Optimization Bar */}
+        {/* Low Bandwidth & One-Click Update Bar */}
         <LowBandwidthBar
           isLowBandwidth={isLowBandwidth}
           onToggle={() => setIsLowBandwidth(!isLowBandwidth)}
+          onRefreshData={refreshData}
         />
 
         {/* Top Bar Contract Navbar */}

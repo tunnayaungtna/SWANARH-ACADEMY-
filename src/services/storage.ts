@@ -549,7 +549,6 @@ export class ClassroomDB {
       actorName: actor.name,
       actorUsername: actor.username,
       actorRole: actor.role,
-      actorAvatar: actor.avatar || undefined,
       category: params.category,
       actionCode: params.actionCode,
       actionLabel: params.actionLabel,
@@ -2851,8 +2850,8 @@ export class ClassroomDB {
     const onlyProfiles = Boolean(options?.onlyProfiles);
     const isBackground = Boolean(options?.background);
     const now = Date.now();
-    const COOLDOWN_MS = 8_000; // 8s background cooldown for fast cross-device propagation
-    const CATALOG_TTL_MS = 35_000; // 35s catalog refresh so classroom/user edits & deletions propagate quickly
+    const COOLDOWN_MS = 20_000; // 20s background cooldown to protect 5GB Supabase Egress limit
+    const CATALOG_TTL_MS = 240_000; // 4-minute catalog cache in background (instant on wake/focus/force)
 
     if (!force) {
       if (onlyProfiles && now - this.lastProfilePullAt < COOLDOWN_MS) {
@@ -2946,6 +2945,7 @@ export class ClassroomDB {
         }
 
         const loggedUser = this.getCurrentUser();
+        const isStudentLightweight = Boolean(loggedUser && loggedUser.role === 'student');
         const currentCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter(
           (c) => !deletedSet.has(c.id)
         );
@@ -2961,6 +2961,31 @@ export class ClassroomDB {
             ? enrolledIdsForStudent
             : undefined;
 
+        const knownBanners = new Map<string, string>();
+        currentCourses.forEach((c) => {
+          if (c.id && c.bannerImage) {
+            knownBanners.set(c.id, c.bannerImage);
+          }
+        });
+
+        const currentAttendance = this.getItem<AttendanceSession[]>(
+          STORAGE_KEYS.ATTENDANCE,
+          INITIAL_ATTENDANCE_SESSIONS
+        ).filter((att) => !deletedSet.has(att.id));
+        const knownAttendanceMap = new Map<
+          string,
+          { isOpen: boolean; statusUpdatedAtMs?: number; records: Record<string, AttendanceRecord> }
+        >();
+        currentAttendance.forEach((att) => {
+          if (att.id) {
+            knownAttendanceMap.set(att.id, {
+              isOpen: Boolean(att.isOpen),
+              statusUpdatedAtMs: att.statusUpdatedAtMs,
+              records: att.records || {},
+            });
+          }
+        });
+
         const [
           remoteProfiles,
           remoteCourses,
@@ -2971,12 +2996,19 @@ export class ClassroomDB {
           remoteNotifications,
           singleLoggedProfile,
         ] = await Promise.all([
-          shouldFetchCatalog ? SupabaseService.getRemoteProfiles() : Promise.resolve(null),
-          shouldFetchCatalog ? SupabaseService.getRemoteCourses() : Promise.resolve(null),
+          shouldFetchCatalog
+            ? SupabaseService.getRemoteProfiles(
+                false,
+                isStudentLightweight && loggedUser
+                  ? { studentLightweight: true, currentUserId: loggedUser.id }
+                  : undefined
+              )
+            : Promise.resolve(null),
+          shouldFetchCatalog ? SupabaseService.getRemoteCourses(knownBanners) : Promise.resolve(null),
           SupabaseService.getRemotePosts(studentScopedCourseIds),
           shouldFetchCatalog ? SupabaseService.getRemoteAssignments() : Promise.resolve(null),
           shouldFetchCatalog ? SupabaseService.getRemoteQuizzes() : Promise.resolve(null),
-          SupabaseService.getRemoteAttendanceSessions(studentScopedCourseIds),
+          SupabaseService.getRemoteAttendanceSessions(studentScopedCourseIds, knownAttendanceMap),
           loggedUser ? SupabaseService.getRemoteNotifications(loggedUser.id) : Promise.resolve(null),
           !shouldFetchCatalog && loggedUser
             ? SupabaseService.getRemoteProfileByIdentifier(loggedUser.username || loggedUser.email, true)
@@ -3050,7 +3082,11 @@ export class ClassroomDB {
           const userMap = new Map<string, User>();
 
           localUsers.forEach((u) => {
-            if (remoteProfileIds.has(u.id) || this.isRecentLocalWrite(u.id)) {
+            if (
+              remoteProfileIds.has(u.id) ||
+              this.isRecentLocalWrite(u.id) ||
+              (isStudentLightweight && u.role === 'student' && u.id !== loggedUser?.id)
+            ) {
               userMap.set(u.id, u);
             } else {
               newlyDiscoveredRemoteDeletions.push(u.id);
@@ -3679,25 +3715,72 @@ export class ClassroomDB {
   }
 
   /**
-   * Fast, lightweight live Attendance sync from Supabase (called every few seconds while viewing Attendance or Dashboard)
-   * so Open/Close actions and Student Check-in counts reflect across all Admin, Co-Admin, and Student devices within seconds.
+   * Fast, lightweight live Attendance sync from Supabase (called while viewing Attendance or Dashboard)
+   * with a 7s deduplication cooldown and course scoping for students so Egress remains minimal.
    */
   private static activeAttendanceSyncPromise: Promise<boolean> | null = null;
-  static async syncAttendanceFromCloud(): Promise<boolean> {
+  private static lastAttendanceSyncAt = 0;
+  static async syncAttendanceFromCloud(force: boolean = false): Promise<boolean> {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return false;
+    }
+    const now = Date.now();
+    if (!force && now - this.lastAttendanceSyncAt < 9_000) {
       return false;
     }
     if (this.activeAttendanceSyncPromise) {
       return this.activeAttendanceSyncPromise;
     }
+    this.lastAttendanceSyncAt = now;
     this.activeAttendanceSyncPromise = (async () => {
       try {
-        const remoteAttendance = await SupabaseService.getRemoteAttendanceSessions();
+        const loggedUser = this.getCurrentUser();
+        const deletedSet = new Set(this.getDeletedIds());
+        const currentCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter(
+          (c) => !deletedSet.has(c.id)
+        );
+        const enrolledIdsForStudent =
+          loggedUser && loggedUser.role === 'student'
+            ? currentCourses
+                .filter((c) => c.enrolledStudentIds.includes(loggedUser.id))
+                .map((c) => c.id)
+            : undefined;
+        const studentScopedCourseIds =
+          enrolledIdsForStudent && enrolledIdsForStudent.length > 0
+            ? enrolledIdsForStudent
+            : undefined;
+
+        const currentAttendance = this.getItem<AttendanceSession[]>(
+          STORAGE_KEYS.ATTENDANCE,
+          INITIAL_ATTENDANCE_SESSIONS
+        ).filter((att) => !deletedSet.has(att.id));
+        const knownAttendanceMap = new Map<
+          string,
+          { isOpen: boolean; statusUpdatedAtMs?: number; records: Record<string, AttendanceRecord> }
+        >();
+        currentAttendance.forEach((att) => {
+          if (att.id) {
+            knownAttendanceMap.set(att.id, {
+              isOpen: Boolean(att.isOpen),
+              statusUpdatedAtMs: att.statusUpdatedAtMs,
+              records: att.records || {},
+            });
+          }
+        });
+
+        const remoteAttendance = await SupabaseService.getRemoteAttendanceSessions(
+          studentScopedCourseIds,
+          knownAttendanceMap
+        );
         if (!remoteAttendance) return false;
         const cloudActive =
           remoteAttendance.length > 0 ||
           localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) === 'true';
-        return this.reconcileRemoteAttendanceSessions(remoteAttendance, undefined, cloudActive);
+        return this.reconcileRemoteAttendanceSessions(
+          remoteAttendance,
+          studentScopedCourseIds,
+          cloudActive
+        );
       } catch {
         return false;
       } finally {
@@ -4880,14 +4963,13 @@ export class ClassroomDB {
   }
 
   // Student Attendance & Daily Check-in System
-  static getAttendanceSessions(courseId: string): AttendanceSession[] {
+  static getAttendanceSessions(courseId?: string): AttendanceSession[] {
     const sessions = this.getItem<AttendanceSession[]>(
       STORAGE_KEYS.ATTENDANCE,
       INITIAL_ATTENDANCE_SESSIONS
     );
-    return sessions
-      .filter((s) => s.courseId === courseId)
-      .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+    const filtered = courseId ? sessions.filter((s) => s.courseId === courseId) : sessions;
+    return filtered.sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
   }
 
   static createAttendanceSession(
