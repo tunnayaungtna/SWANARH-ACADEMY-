@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Course } from '../types/classroom';
+import { Course, User } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
 import { SupabaseService } from '../services/supabase';
 import { PRESET_AVATARS } from '../data/presetAvatars';
@@ -15,6 +15,11 @@ import {
   Copy,
   CheckCheck,
   Sparkles,
+  BookOpen,
+  Mail,
+  Phone,
+  Briefcase,
+  MapPin,
 } from 'lucide-react';
 
 interface AddStudentModalProps {
@@ -35,10 +40,17 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
 
   const [activeTab, setActiveTab] = useState<'existing' | 'new'>('existing');
   const [searchQuery, setSearchQuery] = useState('');
+  const [, setRefreshTick] = useState(0);
+  const [revealedExistingPasswords, setRevealedExistingPasswords] = useState<Record<string, boolean>>({});
+  const [copiedExistingUserId, setCopiedExistingUserId] = useState<string | null>(null);
 
   const allUsers = ClassroomDB.getAllUsers();
+  const currentUser = ClassroomDB.getCurrentUser();
+  const availableCourses = currentUser ? ClassroomDB.getCourses(currentUser) : [course];
+  const latestCurrentCourse = availableCourses.find((c) => c.id === course.id) || course;
+
   const unenrolledStudents = allUsers.filter(
-    (u) => u.role === 'student' && !course.enrolledStudentIds.includes(u.id)
+    (u) => u.role === 'student' && !latestCurrentCourse.enrolledStudentIds.includes(u.id)
   );
 
   const filteredUnenrolled = unenrolledStudents.filter(
@@ -47,10 +59,6 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({
       s.username.toLowerCase().includes(searchQuery.toLowerCase()) ||
       s.email.toLowerCase().includes(searchQuery.toLowerCase())
   );
-
-  // New student form with App login account
-  const currentUser = ClassroomDB.getCurrentUser();
-  const availableCourses = currentUser ? ClassroomDB.getCourses(currentUser) : [course];
 
   const [newName, setNewName] = useState('');
   const [newUsername, setNewUsername] = useState('');
@@ -222,10 +230,11 @@ Email:
 
     if (name) {
       setNewName(name);
-      const suggested = ClassroomDB.suggestUsername(name);
-      setNewUsername(suggested);
+      // Use base username first so if an existing student has this username, it is immediately detected and shown
+      const baseSuggested = ClassroomDB.suggestUsername(name, false);
+      setNewUsername(baseSuggested);
       if (!email) {
-        setNewEmail(`${suggested}@swanarh.edu`);
+        setNewEmail(`${baseSuggested}@swanarh.edu`);
       }
     }
     if (email) setNewEmail(email.toLowerCase().replace(/\s+/g, ''));
@@ -244,10 +253,380 @@ Email:
   const handleEnrollExisting = (studentId: string, studentName: string) => {
     ClassroomDB.enrollStudent(course.id, studentId);
     setSuccessMessage(`ကျောင်းသား ${studentName} ကို ${course.code} အတန်းထဲသို့ အောင်မြင်စွာ ထည့်သွင်းပြီးပါပြီ။`);
+    setRefreshTick((t) => t + 1);
     onStudentEnrolled();
     setTimeout(() => {
       setSuccessMessage(null);
     }, 3000);
+  };
+
+  // Live check if typed Username or Email already belongs to an existing account
+  const normalizedUsernameCheck = newUsername.trim().toLowerCase().replace(/\s+/g, '');
+  const normalizedEmailCheck = newEmail.trim().toLowerCase().replace(/\s+/g, '');
+
+  const existingByUsername: User | undefined = normalizedUsernameCheck
+    ? allUsers.find((u) => u.username.toLowerCase() === normalizedUsernameCheck)
+    : undefined;
+
+  const existingByEmail: User | undefined = normalizedEmailCheck
+    ? allUsers.find((u) => u.email.toLowerCase() === normalizedEmailCheck)
+    : undefined;
+
+  const existingMatchedUsers: Array<{ user: User; reason: string }> = [];
+  if (existingByUsername) {
+    const alsoEmailMatch = existingByEmail && existingByEmail.id === existingByUsername.id;
+    existingMatchedUsers.push({
+      user: existingByUsername,
+      reason: alsoEmailMatch
+        ? `Username (@${existingByUsername.username}) နှင့် Email (${existingByUsername.email}) နှစ်ခုလုံး ရှိပြီးသားဖြစ်နေပါသည်`
+        : `Username (@${existingByUsername.username}) သည် ရှိပြီးသားအကောင့်ဖြစ်နေပါသည်`,
+    });
+  }
+  if (existingByEmail && (!existingByUsername || existingByEmail.id !== existingByUsername.id)) {
+    existingMatchedUsers.push({
+      user: existingByEmail,
+      reason: `Email (${existingByEmail.email}) သည် ရှိပြီးသားအကောင့်ဖြစ်နေပါသည်`,
+    });
+  }
+
+  const handleToggleExistingUserCourse = (targetUser: User, targetCourse: Course, isCurrentlyEnrolled: boolean) => {
+    if (isCurrentlyEnrolled) {
+      ClassroomDB.unenrollStudent(targetCourse.id, targetUser.id);
+      setSuccessMessage(
+        `🔄 "${targetUser.name}" (@${targetUser.username}) ကို ${targetCourse.code} အတန်းမှ ဖယ်ရှားပြီးပါပြီ။`
+      );
+    } else {
+      ClassroomDB.enrollStudent(targetCourse.id, targetUser.id);
+      setSuccessMessage(
+        `✅ "${targetUser.name}" (@${targetUser.username}) ကို ${targetCourse.code} (${targetCourse.title}) အတန်းထဲသို့ ထည့်သွင်းပြီးပါပြီ!`
+      );
+    }
+    setFormError(null);
+    setRefreshTick((t) => t + 1);
+    onStudentEnrolled();
+  };
+
+  const handleEnrollExistingUserInSelectedCourses = (targetUser: User) => {
+    const targets = selectedCourseIds.length > 0 ? selectedCourseIds : [course.id];
+    const addedCodes: string[] = [];
+    targets.forEach((cId) => {
+      const cObj = availableCourses.find((c) => c.id === cId);
+      if (cObj && !cObj.enrolledStudentIds.includes(targetUser.id)) {
+        ClassroomDB.enrollStudent(cId, targetUser.id);
+        addedCodes.push(cObj.code);
+      }
+    });
+    setFormError(null);
+    setRefreshTick((t) => t + 1);
+    onStudentEnrolled();
+    if (addedCodes.length > 0) {
+      setSuccessMessage(
+        `✅ ရှိပြီးသားအကောင့် "${targetUser.name}" (@${targetUser.username}) ကို (${addedCodes.join(', ')}) အတန်းထဲသို့ တိုက်ရိုက် ထည့်သွင်းပေးပြီးပါပြီ!`
+      );
+    } else {
+      setSuccessMessage(
+        `ℹ️ "${targetUser.name}" (@${targetUser.username}) သည် ရွေးထားသောအတန်းထဲတွင် ရှိပြီးသားဖြစ်ပါသည်။`
+      );
+    }
+  };
+
+  const renderExistingAccountCard = (targetUser: User, reasonLabel: string) => {
+    const enrolledCoursesForUser = availableCourses.filter((c) =>
+      c.enrolledStudentIds.includes(targetUser.id)
+    );
+    const isProtectedAdmin = currentUser?.role === 'co_admin' && targetUser.role === 'admin';
+    const plainPwd = isProtectedAdmin ? 'Protected' : ClassroomDB.getDecryptedPassword(targetUser);
+    const isPwdShown = !isProtectedAdmin && Boolean(revealedExistingPasswords[targetUser.id]);
+    const isCopiedThis = copiedExistingUserId === targetUser.id;
+    const targetsToCheck = selectedCourseIds.length > 0 ? selectedCourseIds : [course.id];
+    const missingSelectedCourses = availableCourses.filter(
+      (c) => targetsToCheck.includes(c.id) && !c.enrolledStudentIds.includes(targetUser.id)
+    );
+    const uniqueAlternativeUsername = ClassroomDB.suggestUsername(
+      newName.trim() || targetUser.username,
+      true
+    );
+
+    return (
+      <div
+        key={targetUser.id}
+        className="p-3.5 rounded-xl bg-amber-50/95 dark:bg-amber-950/40 border-2 border-amber-300 dark:border-amber-700/80 space-y-3 text-xs shadow-xs"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <div className="font-bold text-amber-950 dark:text-amber-200">
+                ⚠️ {reasonLabel}
+              </div>
+              <div className="text-[11px] text-amber-800 dark:text-amber-300/90 mt-0.5">
+                အကောင့်ထပ်ဖွင့်စရာမလိုဘဲ ဤနေရာမှပင် အချက်အလက်ကြည့်ရှုပြီး အတန်းများ တိုက်ရိုက် ထည့်/ဖြုတ် နိုင်ပါသည်။
+              </div>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              const enrolledLabel =
+                enrolledCoursesForUser.map((c) => `${c.code} (${c.title})`).join(', ') ||
+                course.code;
+              navigator.clipboard.writeText(
+                buildStudentCredentialMessage({
+                  name: targetUser.name,
+                  username: targetUser.username,
+                  password: plainPwd,
+                  occupation: targetUser.title,
+                  coursesLabel: enrolledLabel,
+                })
+              );
+              setCopiedExistingUserId(targetUser.id);
+              setTimeout(() => setCopiedExistingUserId(null), 2500);
+            }}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold shadow-2xs transition-colors cursor-pointer shrink-0"
+          >
+            {isCopiedThis ? <CheckCheck className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+            <span>{isCopiedThis ? 'Copied!' : 'Login Info Copy ကူးမည်'}</span>
+          </button>
+        </div>
+
+        {/* Account Details Box */}
+        <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-amber-200/80 dark:border-slate-800 space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="font-bold text-slate-900 dark:text-slate-100 text-sm">
+                {targetUser.name}
+              </span>
+              <span className="font-mono text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-md border border-indigo-200 dark:border-indigo-800">
+                @{targetUser.username}
+              </span>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                {targetUser.role === 'admin'
+                  ? 'Admin'
+                  : targetUser.role === 'co_admin'
+                  ? 'Co-Admin'
+                  : 'ကျောင်းသား (Student)'}
+              </span>
+              {targetUser.gender && (
+                <span
+                  className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                    targetUser.gender === 'female'
+                      ? 'bg-pink-50 dark:bg-pink-950/60 text-pink-700 dark:text-pink-300'
+                      : 'bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300'
+                  }`}
+                >
+                  {targetUser.gender === 'female' ? '♀ မ (Female)' : '♂ ကျား (Male)'}
+                </span>
+              )}
+              {targetUser.role === 'student' && (
+                <span
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    targetUser.rulesAccepted
+                      ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300'
+                      : 'bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-300'
+                  }`}
+                >
+                  {targetUser.rulesAccepted ? '✅ စည်းကမ်းသိရှိပြီး' : '⏳ စည်းကမ်းမဖတ်ရသေး'}
+                </span>
+              )}
+            </div>
+
+            {/* Password viewer */}
+            <div className="flex items-center gap-1 bg-slate-50 dark:bg-slate-800 px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700">
+              <span className="text-[10px] text-slate-400">Password:</span>
+              <span className="font-mono font-bold text-[11px] text-emerald-700 dark:text-emerald-400">
+                {isPwdShown ? plainPwd : '••••••••'}
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  setRevealedExistingPasswords((prev) => ({
+                    ...prev,
+                    [targetUser.id]: !prev[targetUser.id],
+                  }))
+                }
+                className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 ml-0.5 cursor-pointer"
+                title={isPwdShown ? 'Hide Password' : 'Show Password'}
+              >
+                {isPwdShown ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-[11px] text-slate-600 dark:text-slate-300 pt-1 border-t border-slate-100 dark:border-slate-800/80">
+            <div className="flex items-center gap-1.5 truncate">
+              <Mail className="w-3 h-3 text-slate-400 shrink-0" />
+              <span className="font-mono truncate">{targetUser.email}</span>
+            </div>
+            <div className="flex items-center gap-1.5 truncate">
+              <Phone className="w-3 h-3 text-slate-400 shrink-0" />
+              <span className="font-mono truncate">{targetUser.phone || 'ဖုန်းမထည့်ရသေးပါ'}</span>
+            </div>
+            {targetUser.title && (
+              <div className="flex items-center gap-1.5 truncate">
+                <Briefcase className="w-3 h-3 text-slate-400 shrink-0" />
+                <span className="truncate">{targetUser.title}</span>
+              </div>
+            )}
+            {targetUser.address && (
+              <div className="flex items-center gap-1.5 truncate">
+                <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                <span className="truncate">{targetUser.address}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Currently Joined Classes + Interactive Class Editor */}
+        {targetUser.role === 'student' && (
+          <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-900/60 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-1.5">
+              <div className="flex items-center gap-1.5">
+                <BookOpen className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                <span className="font-bold text-slate-900 dark:text-slate-100 text-[11px]">
+                  📚 လက်ရှိ Join ထားသော အတန်းများ ({enrolledCoursesForUser.length} တန်း)
+                </span>
+              </div>
+
+              {missingSelectedCourses.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => handleEnrollExistingUserInSelectedCourses(targetUser)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold shadow-2xs transition-colors cursor-pointer"
+                >
+                  <UserCheck className="w-3.5 h-3.5" />
+                  <span>
+                    ➕ ရွေးထားသော ({missingSelectedCourses.map((c) => c.code).join(', ')}) အတန်းထဲ တန်းထည့်မည်
+                  </span>
+                </button>
+              )}
+            </div>
+
+            {enrolledCoursesForUser.length === 0 ? (
+              <div className="text-[11px] text-rose-600 dark:text-rose-400 font-medium bg-rose-50/70 dark:bg-rose-950/30 px-2.5 py-1.5 rounded-lg border border-rose-200/60 dark:border-rose-900/50">
+                မည်သည့်အတန်းမှ Join မထားရသေးပါ။ အောက်ပါအတန်းခလုတ်များကို နှိပ်၍ အတန်းထည့်ပေးနိုင်ပါသည်။
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {enrolledCoursesForUser.map((c) => (
+                  <span
+                    key={c.id}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800"
+                  >
+                    <Check className="w-2.5 h-2.5 stroke-[3]" />
+                    <span>
+                      {c.code} · {c.title} ({c.batch})
+                    </span>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-1">
+                <span className="text-[11px] font-bold text-indigo-950 dark:text-indigo-200">
+                  ✏️ အတန်းများ တိုက်ရိုက် ထည့် / ဖြုတ် လုပ်ရန် (နှိပ်၍ ပြင်နိုင်သည်) -
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      availableCourses.forEach((c) => {
+                        if (!c.enrolledStudentIds.includes(targetUser.id)) {
+                          ClassroomDB.enrollStudent(c.id, targetUser.id);
+                        }
+                      });
+                      setRefreshTick((t) => t + 1);
+                      onStudentEnrolled();
+                      setSuccessMessage(
+                        `✅ "${targetUser.name}" ကို အတန်းအားလုံး (${availableCourses.length} တန်း) ထဲသို့ ထည့်သွင်းပြီးပါပြီ!`
+                      );
+                    }}
+                    className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 cursor-pointer"
+                  >
+                    + အတန်းအားလုံးထည့်မည်
+                  </button>
+                  {enrolledCoursesForUser.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        availableCourses.forEach((c) => {
+                          if (c.enrolledStudentIds.includes(targetUser.id)) {
+                            ClassroomDB.unenrollStudent(c.id, targetUser.id);
+                          }
+                        });
+                        setRefreshTick((t) => t + 1);
+                        onStudentEnrolled();
+                        setSuccessMessage(
+                          `🔄 "${targetUser.name}" ကို အတန်းအားလုံးမှ ဖယ်ရှားပြီးပါပြီ။`
+                        );
+                      }}
+                      className="text-[10px] font-bold px-2 py-0.5 rounded bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 hover:bg-rose-100 cursor-pointer"
+                    >
+                      အတန်းအားလုံးဖြုတ်မည်
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                {availableCourses.map((c) => {
+                  const isEnrolled = c.enrolledStudentIds.includes(targetUser.id);
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => handleToggleExistingUserCourse(targetUser, c, isEnrolled)}
+                      className={`p-2 rounded-lg border text-left flex items-center justify-between gap-2 transition-all cursor-pointer ${
+                        isEnrolled
+                          ? 'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-500 text-emerald-950 dark:text-emerald-100 shadow-2xs'
+                          : 'bg-slate-50 dark:bg-slate-800/70 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-indigo-400'
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="font-bold text-[11px] truncate">
+                          {c.code} · {c.title}
+                        </div>
+                        <div className="text-[10px] opacity-75 truncate">{c.batch}</div>
+                      </div>
+                      <span
+                        className={`shrink-0 px-2 py-0.5 rounded text-[10px] font-bold ${
+                          isEnrolled
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+                        }`}
+                      >
+                        {isEnrolled ? '✓ Joined (ဖြုတ်ရန်)' : '+ Join (ထည့်ရန်)'}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Option if this is actually a different new student who happens to share the same name */}
+        {existingByUsername && existingByUsername.id === targetUser.id && (
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] text-amber-900 dark:text-amber-200">
+            <span>နာမည်တူ ကျောင်းသားအသစ် ဖြစ်ပါသလား?</span>
+            <button
+              type="button"
+              onClick={() => {
+                setNewUsername(uniqueAlternativeUsername);
+                if (!newEmail || newEmail.endsWith('@swanarh.edu')) {
+                  setNewEmail(`${uniqueAlternativeUsername}@swanarh.edu`);
+                }
+                setFormError(null);
+              }}
+              className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-amber-400 dark:border-amber-600 font-bold text-amber-900 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+            >
+              ✨ လူသစ်ဖြစ်ပါက @{uniqueAlternativeUsername} သို့ ပြောင်း၍ အကောင့်သစ်ဖွင့်မည်
+            </button>
+          </div>
+        )}
+      </div>
+    );
   };
 
   const executeCreateAndEnroll = (autoCopyAfterCreate: boolean) => {
@@ -455,13 +834,16 @@ Email:
                       : 'ရှာဖွေမှုနှင့် ကိုက်ညီသော ကျောင်းသား မတွေ့ရှိပါ။'}
                   </div>
                 ) : (
-                  filteredUnenrolled.map((student) => (
-                    <div
-                      key={student.id}
-                      className="p-3 flex items-center justify-between text-xs hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div>
+                  filteredUnenrolled.map((student) => {
+                    const joinedCourses = availableCourses.filter((c) =>
+                      c.enrolledStudentIds.includes(student.id)
+                    );
+                    return (
+                      <div
+                        key={student.id}
+                        className="p-3 flex items-center justify-between gap-2 text-xs hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors"
+                      >
+                        <div className="min-w-0 flex-1 space-y-1">
                           <div className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5 flex-wrap">
                             <span>{student.name}</span>
                             {student.rulesAccepted && (
@@ -471,22 +853,37 @@ Email:
                               </span>
                             )}
                           </div>
-                          <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+                          <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono truncate">
                             @{student.username} · {student.email}
                           </div>
+                          <div className="flex flex-wrap items-center gap-1">
+                            <span className="text-[10px] text-slate-400">Join ထားသောအတန်း:</span>
+                            {joinedCourses.length === 0 ? (
+                              <span className="text-[10px] text-rose-500">မရှိသေးပါ</span>
+                            ) : (
+                              joinedCourses.map((jc) => (
+                                <span
+                                  key={jc.id}
+                                  className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800"
+                                >
+                                  {jc.code}
+                                </span>
+                              ))
+                            )}
+                          </div>
                         </div>
-                      </div>
 
-                      <button
-                        type="button"
-                        onClick={() => handleEnrollExisting(student.id, student.name)}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium shadow-2xs transition-colors cursor-pointer"
-                      >
-                        <UserCheck className="w-3.5 h-3.5" />
-                        <span>Enroll</span>
-                      </button>
-                    </div>
-                  ))
+                        <button
+                          type="button"
+                          onClick={() => handleEnrollExisting(student.id, student.name)}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium shadow-2xs transition-colors cursor-pointer shrink-0"
+                        >
+                          <UserCheck className="w-3.5 h-3.5" />
+                          <span>Enroll</span>
+                        </button>
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -604,10 +1001,10 @@ Email:
                       onChange={(e) => {
                         const val = e.target.value;
                         setNewName(val);
-                        const suggested = ClassroomDB.suggestUsername(val);
-                        setNewUsername(suggested);
+                        const baseSuggested = ClassroomDB.suggestUsername(val, false);
+                        setNewUsername(baseSuggested);
                         if (!newEmail || newEmail.endsWith('@swanarh.edu')) {
-                          setNewEmail(`${suggested}@swanarh.edu`);
+                          setNewEmail(`${baseSuggested}@swanarh.edu`);
                         }
                       }}
                       placeholder="e.g. မောင်အောင်မင်း / Aung Min"
@@ -625,11 +1022,24 @@ Email:
                       value={newUsername}
                       onChange={(e) => setNewUsername(e.target.value.toLowerCase().replace(/\s+/g, ''))}
                       placeholder="e.g. aungmin"
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 placeholder-slate-400 font-mono focus:outline-hidden focus:border-indigo-500"
+                      className={`w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border rounded-xl text-slate-900 dark:text-slate-100 placeholder-slate-400 font-mono focus:outline-hidden ${
+                        existingByUsername
+                          ? 'border-amber-500 dark:border-amber-500 focus:border-amber-600'
+                          : 'border-slate-300 dark:border-slate-700 focus:border-indigo-500'
+                      }`}
                       required
                     />
                   </div>
                 </div>
+
+                {/* Live Existing Account Card (shows details, joined classes, and allows adding/removing classes right here) */}
+                {existingMatchedUsers.length > 0 && (
+                  <div className="space-y-2.5">
+                    {existingMatchedUsers.map(({ user, reason }) =>
+                      renderExistingAccountCard(user, reason)
+                    )}
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
@@ -664,7 +1074,11 @@ Email:
                       value={newEmail}
                       onChange={(e) => setNewEmail(e.target.value)}
                       placeholder="student@swanarh.edu"
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-hidden focus:border-indigo-500"
+                      className={`w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border rounded-xl text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-hidden ${
+                        existingByEmail
+                          ? 'border-amber-500 dark:border-amber-500 focus:border-amber-600'
+                          : 'border-slate-300 dark:border-slate-700 focus:border-indigo-500'
+                      }`}
                     />
                   </div>
                 </div>

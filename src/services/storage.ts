@@ -1610,7 +1610,7 @@ export class ClassroomDB {
     return { user: newUser };
   }
 
-  static suggestUsername(rawName: string): string {
+  static suggestUsername(rawName: string, ensureUnique: boolean = true): string {
     const trimmed = rawName.trim();
     if (!trimmed) return 'student';
 
@@ -1675,6 +1675,8 @@ export class ClassroomDB {
     } else if (base.length > 16) {
       base = base.slice(0, 16);
     }
+
+    if (!ensureUnique) return base;
 
     const existingSet = new Set(this.getAllUsers().map((u) => u.username.toLowerCase()));
     if (!existingSet.has(base)) return base;
@@ -2110,6 +2112,7 @@ export class ClassroomDB {
             enrolledStudentIds: [...course.enrolledStudentIds, studentId],
           };
           enrolledCourse = updatedCourse;
+          this.markLocalWrite(course.id);
           try {
             SupabaseService.upsertCourse(updatedCourse).catch(() => {});
           } catch {
@@ -2157,6 +2160,7 @@ export class ClassroomDB {
           enrolledStudentIds: course.enrolledStudentIds.filter((id) => id !== studentId),
         };
         unenrolledCourse = updatedCourse;
+        this.markLocalWrite(course.id);
         try {
           SupabaseService.upsertCourse(updatedCourse).catch(() => {});
         } catch {
