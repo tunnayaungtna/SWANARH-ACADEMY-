@@ -74,7 +74,7 @@
           if ('caches' in window) {
             caches.keys().then(function (keys) {
               keys.forEach(function (key) {
-                if (key !== 'swanarh-classroom-v19') {
+                if (key !== 'swanarh-classroom-v20') {
                   caches.delete(key).catch(function () {});
                 }
               });
@@ -97,6 +97,19 @@
               .register('/sw.js', { scope: '/', updateViaCache: 'none' })
               .then(function (reg) {
                 reg.update().catch(function () {});
+                if (reg.waiting) {
+                  window.dispatchEvent(new Event('sw-update-available'));
+                }
+                reg.addEventListener('updatefound', function () {
+                  var newWorker = reg.installing;
+                  if (newWorker) {
+                    newWorker.addEventListener('statechange', function () {
+                      if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                        window.dispatchEvent(new Event('sw-update-available'));
+                      }
+                    });
+                  }
+                });
               })
               .catch(function () {});
           }
@@ -137,7 +150,7 @@
         if (window.__swanarhMounted || window.__staticBundleLoaded) return;
         window.__staticBundleLoaded = true;
         try {
-          var bust = 'v19_' + Math.floor(Date.now() / 60000);
+          var bust = 'v20_' + Math.floor(Date.now() / 60000);
           var link = document.createElement('link');
           link.rel = 'stylesheet';
           link.href = '/gh-pages/app.css?v=' + bust;
