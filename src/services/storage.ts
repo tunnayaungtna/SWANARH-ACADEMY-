@@ -2739,7 +2739,8 @@ export class ClassroomDB {
    * referencing a classroom course, post, assignment, quiz, or user that no longer exists).
    */
   static async cleanOrphanedLocalAndCloudData(
-    forceCloudSweep: boolean = false
+    forceCloudSweep: boolean = false,
+    skipCloudSweep: boolean = false
   ): Promise<{ localCleaned: number; cloudCleaned: number; details: string }> {
     let localCleaned = 0;
     const deletedSet = new Set(this.getDeletedIds());
@@ -2928,7 +2929,15 @@ export class ClassroomDB {
       this.setItem(STORAGE_KEYS.NOTIFICATIONS, validNotifs);
     }
 
-    // 8. Run Supabase cloud orphan cleanup & Egress database slimmer when forced
+    // 8. Run Supabase cloud orphan cleanup & Egress database slimmer when forced (unless skipped by caller)
+    if (skipCloudSweep) {
+      return {
+        localCleaned,
+        cloudCleaned: 0,
+        details: `Local cleaned: ${localCleaned}.`,
+      };
+    }
+
     const [cloudRes, slimRes] = await Promise.all([
       SupabaseService.cleanOrphanedCloudData(
         Array.from(validCourseIds),
@@ -2985,7 +2994,8 @@ export class ClassroomDB {
       await this.pullFromSupabase({ force: true });
     }
     // Clean local orphaned references first so we never push stale/orphaned data to Supabase
-    await this.cleanOrphanedLocalAndCloudData(false);
+    // (Cloud orphan sweep runs once at the end of SupabaseService.syncAllData)
+    await this.cleanOrphanedLocalAndCloudData(false, true);
 
     const users = this.getAllUsers();
     const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);

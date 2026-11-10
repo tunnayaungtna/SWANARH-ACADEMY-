@@ -16,7 +16,7 @@ const parsedTargetOrigin = new URL(SUPABASE_TARGET_ORIGIN).origin;
 // Per-IP sliding-window rate limiter for /api/sb-proxy to prevent abuse / DoS
 const ipRequestBuckets = new Map<string, number[]>();
 const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX_REQUESTS = 360;
+const RATE_LIMIT_MAX_REQUESTS = 6000;
 
 function checkProxyRateLimit(ip: string): boolean {
   const now = Date.now();

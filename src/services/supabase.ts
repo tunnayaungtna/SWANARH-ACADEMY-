@@ -98,7 +98,7 @@ function getCandidateRoutesForHost(): AutoRouteType[] {
     host.includes('.googleusercontent.com');
 
   return isNodeProxyHost
-    ? ['same_origin_proxy', 'direct']
+    ? ['direct', 'same_origin_proxy']
     : ['direct', 'sg_cloud_relay'];
 }
 
@@ -176,7 +176,12 @@ async function fetchSingleRouteWithTimeout(
       ...init,
       signal: controller.signal,
     });
-    if (res.status === 502 || res.status === 503 || res.status === 504) {
+    if (
+      res.status === 429 ||
+      res.status === 502 ||
+      res.status === 503 ||
+      res.status === 504
+    ) {
       throw new Error(`Upstream status ${res.status}`);
     }
     return res;
@@ -3737,24 +3742,144 @@ export class SupabaseService {
     // 0. Always purge expired (>30 mins) notifications in Supabase first
     await this.purgeExpiredNotifications(deletedIds, true);
 
-    // 1. Batch upsert profiles in chunks of 250 (supports 2,000+ users smoothly)
+    // 1. Batch upsert profiles in chunks of 200 with pre-deduplication & batch schema fallback
+    // (Prevents 238+ individual fallback requests and eliminates "Too many requests" 429 errors)
     let syncedUsers = 0;
     if (users.length > 0) {
-      const userChunks = this.chunkArray(users, 250);
-      for (const chunk of userChunks) {
-        const profilePayloads = chunk.map((u) => this.buildProfilePayload(u, this.profileSchemaMode));
-        const { error: profErr } = await supabase
-          .from('profiles')
-          .upsert(profilePayloads, { onConflict: 'id' });
+      // 1a. Normalize & deduplicate usernames and emails in memory so no two rows in the batch conflict
+      const seenUsernames = new Set<string>();
+      const seenEmails = new Set<string>();
+      const sanitizedUsers: User[] = users.map((u, idx) => {
+        const cleanId = String(u.id || `user-${idx}`).trim();
+        let cleanUsername = (u.username || '').trim().toLowerCase();
+        if (!cleanUsername) {
+          cleanUsername = `user_${cleanId.replace(/[^a-z0-9]/gi, '').slice(-8) || idx}`;
+        }
+        if (seenUsernames.has(cleanUsername)) {
+          cleanUsername = `${cleanUsername}_${idx}`;
+        }
+        seenUsernames.add(cleanUsername);
 
-        if (!profErr) {
+        let cleanEmail = (u.email || '').trim().toLowerCase();
+        if (!cleanEmail) {
+          cleanEmail = `${cleanUsername}@swanarh.edu.mm`;
+        }
+        if (seenEmails.has(cleanEmail)) {
+          const atIdx = cleanEmail.indexOf('@');
+          cleanEmail =
+            atIdx > 0
+              ? `${cleanEmail.slice(0, atIdx)}+${idx}${cleanEmail.slice(atIdx)}`
+              : `${cleanUsername}_${idx}@swanarh.edu.mm`;
+        }
+        seenEmails.add(cleanEmail);
+
+        return {
+          ...u,
+          id: cleanId,
+          username: cleanUsername,
+          email: cleanEmail,
+        };
+      });
+
+      // 1b. Reconcile any remote profiles that have the same username or email under an old/different ID in 1 batch query
+      try {
+        const { data: remoteProfiles } = await supabase
+          .from('profiles')
+          .select('id,username,email')
+          .limit(5000);
+
+        if (Array.isArray(remoteProfiles) && remoteProfiles.length > 0) {
+          const localByUsername = new Map<string, string>();
+          const localByEmail = new Map<string, string>();
+          const localIdSet = new Set<string>();
+          for (const lu of sanitizedUsers) {
+            localIdSet.add(lu.id);
+            localByUsername.set(lu.username.toLowerCase(), lu.id);
+            localByEmail.set(lu.email.toLowerCase(), lu.id);
+          }
+
+          const staleRemoteIdsToReplace: string[] = [];
+          for (const rp of remoteProfiles) {
+            const rId = String(rp.id || '');
+            const rUser = String(rp.username || '').trim().toLowerCase();
+            const rEmail = String(rp.email || '').trim().toLowerCase();
+            if (!rId || localIdSet.has(rId)) continue;
+
+            const matchedLocalIdByUser = rUser ? localByUsername.get(rUser) : undefined;
+            const matchedLocalIdByEmail = rEmail ? localByEmail.get(rEmail) : undefined;
+            if (
+              (matchedLocalIdByUser && matchedLocalIdByUser !== rId) ||
+              (matchedLocalIdByEmail && matchedLocalIdByEmail !== rId)
+            ) {
+              staleRemoteIdsToReplace.push(rId);
+            }
+          }
+
+          if (staleRemoteIdsToReplace.length > 0) {
+            for (const delChunk of this.chunkArray(staleRemoteIdsToReplace, 150)) {
+              await supabase.from('profiles').delete().in('id', delChunk);
+            }
+          }
+        }
+      } catch {
+        // Ignore pre-reconciliation errors and proceed with batch upsert
+      }
+
+      // 1c. Helper to batch upsert a chunk of users across schema modes ('full' -> 'no_password' -> 'core')
+      const upsertUserBatchWithSchemaFallback = async (
+        batchUsers: User[]
+      ): Promise<{ ok: boolean; err?: string }> => {
+        const modesToTry: Array<'full' | 'no_password' | 'core'> =
+          this.profileSchemaMode === 'full'
+            ? ['full', 'no_password', 'core']
+            : this.profileSchemaMode === 'no_password'
+            ? ['no_password', 'core']
+            : ['core'];
+
+        let lastBatchErr = '';
+        for (const mode of modesToTry) {
+          const payloads = batchUsers.map((u) => this.buildProfilePayload(u, mode));
+          const { error: batchErr } = await supabase
+            .from('profiles')
+            .upsert(payloads, { onConflict: 'id' });
+
+          if (!batchErr) {
+            this.profileSchemaMode = mode;
+            for (let i = 0; i < batchUsers.length; i++) {
+              const { updated_at: _ignoreTs, ...comparable } = payloads[i];
+              this.recordSignature(`profile:${batchUsers[i].id}`, comparable);
+            }
+            return { ok: true };
+          }
+
+          lastBatchErr = batchErr.message || String(batchErr);
+          const isColErr =
+            batchErr.code === '42703' ||
+            batchErr.code === 'PGRST204' ||
+            lastBatchErr.toLowerCase().includes('column');
+
+          if (!isColErr) {
+            break;
+          }
+        }
+        return { ok: false, err: lastBatchErr };
+      };
+
+      const userChunks = this.chunkArray(sanitizedUsers, 200);
+      for (const chunk of userChunks) {
+        const batchRes = await upsertUserBatchWithSchemaFallback(chunk);
+        if (batchRes.ok) {
           syncedUsers += chunk.length;
         } else {
-          // Fallback to individual upserts to detect schema mode
-          for (const u of chunk) {
-            const res = await this.upsertProfile(u);
-            if (res.success) syncedUsers++;
-            else lastError = res.error;
+          // Sub-batch into smaller chunks of 40 instead of 238 individual requests
+          const subChunks = this.chunkArray(chunk, 40);
+          for (const subChunk of subChunks) {
+            const subRes = await upsertUserBatchWithSchemaFallback(subChunk);
+            if (subRes.ok) {
+              syncedUsers += subChunk.length;
+            } else {
+              lastError = subRes.err || batchRes.err;
+            }
           }
         }
       }
@@ -3791,13 +3916,23 @@ export class SupabaseService {
       }
     }
 
-    // 3. Parallel chunked batch upserts for child tables
+    // 3. Chunked batch upserts for child tables
     const batchTasks: PromiseLike<unknown>[] = [];
 
     if (posts.length > 0) {
-      const formattedPosts = posts.map((p) => this.formatPostRow(p));
-      for (const batch of this.chunkArray(formattedPosts, 150)) {
-        batchTasks.push(supabase.from('posts').upsert(batch, { onConflict: 'id' }));
+      for (const rawBatch of this.chunkArray(posts, 150)) {
+        batchTasks.push(
+          (async () => {
+            const fullRows = rawBatch.map((p) => this.formatPostRow(p, false));
+            const { error: postErr } = await supabase
+              .from('posts')
+              .upsert(fullRows, { onConflict: 'id' });
+            if (postErr) {
+              const coreRows = rawBatch.map((p) => this.formatPostRow(p, true));
+              await supabase.from('posts').upsert(coreRows, { onConflict: 'id' });
+            }
+          })()
+        );
       }
     }
 
@@ -3865,7 +4000,7 @@ export class SupabaseService {
     );
 
     return {
-      success: syncedUsers > 0 && !lastError,
+      success: (users.length === 0 || syncedUsers > 0) && !lastError,
       syncedUsers,
       syncedCourses,
       cleanedOrphans: orphanSweep.totalCleaned,

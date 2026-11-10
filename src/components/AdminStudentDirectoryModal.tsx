@@ -623,7 +623,6 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
 
   const handleSyncAllToSupabase = async () => {
     setIsSyncingAll(true);
-    await ClassroomDB.pullFromSupabase({ force: true });
     const res = await ClassroomDB.syncWithSupabase();
     onRefresh();
     setIsSyncingAll(false);
@@ -2141,15 +2140,25 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
           >
             {/* Status Toast */}
             {toastMsg && (
-              <div className="flex items-center justify-between gap-2 p-3 bg-emerald-50 dark:bg-emerald-950/70 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs rounded-xl shadow-2xs">
+              <div
+                className={`flex items-center justify-between gap-2 p-3 text-xs rounded-xl shadow-2xs border ${
+                  toastMsg.startsWith('⚠️')
+                    ? 'bg-amber-50 dark:bg-amber-950/70 border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200'
+                    : 'bg-emerald-50 dark:bg-emerald-950/70 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200'
+                }`}
+              >
                 <div className="flex items-center gap-2 min-w-0">
-                  <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  {toastMsg.startsWith('⚠️') ? (
+                    <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                  ) : (
+                    <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  )}
                   <span className="break-words">{toastMsg}</span>
                 </div>
                 <button
                   type="button"
                   onClick={() => setToastMsg(null)}
-                  className="text-emerald-700 dark:text-emerald-300 hover:opacity-75 text-xs font-bold px-1 cursor-pointer shrink-0"
+                  className="hover:opacity-75 text-xs font-bold px-1 cursor-pointer shrink-0"
                 >
                   ✕
                 </button>
@@ -3501,8 +3510,8 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                 </div>
 
                 {/* Course Enrollment Filter Dropdown */}
-                <div className="flex items-center gap-2 shrink-0">
-                  <div className="relative flex-1 sm:flex-initial">
+                <div className="flex items-center gap-2 w-full md:w-auto md:max-w-[320px] lg:max-w-[380px] min-w-0">
+                  <div className="relative w-full min-w-0">
                     <BookOpen className="w-3.5 h-3.5 text-indigo-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                     <select
                       value={courseFilterId}
@@ -3513,14 +3522,18 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                         }
                         setVisibleLimit(60);
                       }}
-                      className="w-full sm:w-auto pl-8 pr-3 py-2 text-xs font-bold bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 cursor-pointer focus:outline-none focus:border-indigo-500"
+                      className="w-full max-w-full truncate pl-8 pr-7 py-2 text-xs font-bold bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 cursor-pointer focus:outline-none focus:border-indigo-500"
                     >
                       <option value="all">အတန်းအားလုံး (All Classes)</option>
-                      {courses.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.code} — {c.title} ({c.enrolledStudentIds.length} ဦး)
-                        </option>
-                      ))}
+                      {courses.map((c) => {
+                        const shortTitle =
+                          c.title && c.title.length > 40 ? `${c.title.slice(0, 40)}...` : c.title;
+                        return (
+                          <option key={c.id} value={c.id}>
+                            {c.code} — {shortTitle} ({c.enrolledStudentIds.length} ဦး)
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
                 </div>
