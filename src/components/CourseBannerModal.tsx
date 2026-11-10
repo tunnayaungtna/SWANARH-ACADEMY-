@@ -83,10 +83,10 @@ export const PRESET_CLASSROOM_BANNERS: PresetBannerItem[] = [
 export function resizeToGoogleClassroomBanner(
   file: File,
   verticalAlign: 'top' | 'center' | 'bottom' | 'contain' = 'center',
-  quality: number = 0.84
+  quality: number = 0.72
 ): Promise<string> {
-  const TARGET_WIDTH = 960;
-  const TARGET_HEIGHT = 240;
+  const TARGET_WIDTH = 640;
+  const TARGET_HEIGHT = 160;
   const TARGET_RATIO = TARGET_WIDTH / TARGET_HEIGHT; // 4:1
 
   return new Promise((resolve, reject) => {

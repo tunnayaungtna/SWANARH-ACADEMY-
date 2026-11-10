@@ -72,7 +72,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
     setTimeout(() => setToastMsg(null), 3200);
   };
 
-  // Real-time multi-device Attendance synchronization (polls lightweight attendance table every 5s)
+  // Real-time multi-device Attendance synchronization (polls 0.3KB delta metadata every 15s)
   useEffect(() => {
     let mounted = true;
     const syncNow = () => {
@@ -85,7 +85,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       }
     };
     syncNow();
-    const timer = setInterval(syncNow, 10000);
+    const timer = setInterval(syncNow, 15000);
     return () => {
       mounted = false;
       clearInterval(timer);

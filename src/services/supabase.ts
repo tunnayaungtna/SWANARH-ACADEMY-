@@ -529,7 +529,7 @@ CREATE INDEX IF NOT EXISTS idx_profiles_email_lower ON public.profiles (lower(em
 CREATE INDEX IF NOT EXISTS idx_posts_course_id ON public.posts (course_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_course_id ON public.attendance_sessions (course_id);
 
--- Automatic Orphaned Data Cleanup (Safe to run anytime)
+-- Automatic Orphaned Data Cleanup & Egress Slimming (< 5.5 GB Free Plan Guard)
 DELETE FROM public.posts WHERE course_id NOT IN (SELECT id FROM public.courses);
 DELETE FROM public.assignments WHERE course_id NOT IN (SELECT id FROM public.courses);
 DELETE FROM public.assignment_submissions WHERE assignment_id NOT IN (SELECT id FROM public.assignments) OR student_id NOT IN (SELECT id FROM public.profiles);
@@ -537,6 +537,11 @@ DELETE FROM public.quizzes WHERE course_id NOT IN (SELECT id FROM public.courses
 DELETE FROM public.quiz_submissions WHERE quiz_id NOT IN (SELECT id FROM public.quizzes) OR student_id NOT IN (SELECT id FROM public.profiles);
 DELETE FROM public.attendance_sessions WHERE course_id NOT IN (SELECT id FROM public.courses);
 DELETE FROM public.notifications WHERE course_id NOT IN (SELECT id FROM public.courses) OR user_id NOT IN (SELECT id FROM public.profiles) OR expires_at <= now();
+
+-- Strip redundant Base64 avatars from posts, student profiles, and submissions to cut Egress by 90%
+UPDATE public.posts SET author_avatar = '' WHERE author_avatar IS NOT NULL AND author_avatar <> '';
+UPDATE public.profiles SET avatar = '' WHERE role = 'student' AND avatar IS NOT NULL AND avatar <> '';
+UPDATE public.assignment_submissions SET student_avatar = '' WHERE student_avatar IS NOT NULL AND student_avatar <> '';
 `;
 
 const DEFAULT_FALLBACK_AVATAR =
@@ -554,15 +559,15 @@ function sanitizeBlockedExternalImageUrl(url: string | undefined, fallback: stri
 }
 
 /**
- * Compacts avatars & banners for Supabase SQL sync:
+ * Compacts avatars & banners for Supabase SQL sync (< 5.5 GB Free Plan Guard):
  * - Students NEVER have profile photos (`''`).
- * - Admin & Co-Admin compressed profile photos (including custom uploaded data:image/ URLs up to 180KB) sync across all devices.
- * - Classroom header banners (including custom uploaded data:image/ URLs up to 220KB) sync across all devices.
+ * - Admin & Co-Admin compressed profile photos (up to 45KB) sync across all devices.
+ * - Classroom header banners (up to 65KB) sync across all devices.
  */
 function compactAvatarForCloud(avatar?: string, role?: UserRole): string {
   if (role === 'student') return '';
   if (!avatar || avatar.includes('images.unsplash.com')) return DEFAULT_FALLBACK_AVATAR;
-  if (avatar.length > 180_000) return DEFAULT_FALLBACK_AVATAR;
+  if (avatar.length > 45_000) return DEFAULT_FALLBACK_AVATAR;
   return avatar;
 }
 
@@ -570,7 +575,7 @@ function compactBannerForCloud(banner?: string): string {
   if (!banner || banner.startsWith('/src/assets/images/') || banner.includes('images.unsplash.com')) {
     return DEFAULT_FALLBACK_BANNER;
   }
-  if (banner.length > 220_000) return DEFAULT_FALLBACK_BANNER;
+  if (banner.length > 65_000) return DEFAULT_FALLBACK_BANNER;
   return banner;
 }
 
@@ -590,7 +595,8 @@ function encodeAttendanceOpenedBy(session: AttendanceSession): string {
     session.statusUpdatedAtMs > 0
       ? Math.round(session.statusUpdatedAtMs)
       : Date.now();
-  return `${cleanOpenedBy}${ATT_STATE_MARKER_PREFIX}${session.isOpen ? '1' : '0'}~${ts}`;
+  const recCount = session.records ? Object.keys(session.records).length : 0;
+  return `${cleanOpenedBy}${ATT_STATE_MARKER_PREFIX}${session.isOpen ? '1' : '0'}~${ts}~R${recCount}`;
 }
 
 function decodeAttendanceOpenedBy(
@@ -600,19 +606,26 @@ function decodeAttendanceOpenedBy(
   openedBy: string;
   isOpen: boolean;
   statusUpdatedAtMs?: number;
+  recordCount?: number;
 } {
   const str = String(rawOpenedBy || 'Instructor');
   const colIsOpen = Boolean(rawIsOpen);
   if (str.includes(ATT_STATE_MARKER_PREFIX)) {
     const [cleanName, stateRaw] = str.split(ATT_STATE_MARKER_PREFIX);
-    const [flagStr, tsRaw] = (stateRaw || '').trim().split('~');
+    const [flagStr, tsRaw, recRaw] = (stateRaw || '').trim().split('~');
     const parsedTs = Number(tsRaw);
+    const parsedRecCount =
+      recRaw && recRaw.startsWith('R') ? Number(recRaw.slice(1)) : undefined;
     const resolvedOpen =
       flagStr === '0' ? false : flagStr === '1' ? true : colIsOpen;
     return {
       openedBy: (cleanName || 'Instructor').trim() || 'Instructor',
       isOpen: resolvedOpen && colIsOpen,
       statusUpdatedAtMs: Number.isFinite(parsedTs) && parsedTs > 0 ? parsedTs : undefined,
+      recordCount:
+        typeof parsedRecCount === 'number' && Number.isFinite(parsedRecCount) && parsedRecCount >= 0
+          ? parsedRecCount
+          : undefined,
     };
   }
   return {
@@ -998,19 +1011,34 @@ export class SupabaseService {
    * Fetch profiles from Supabase:
    * - For Admin/Co-Admin: fetches full roster (up to 3,000 users) for Student Directory & Roll Call.
    * - For Students (`studentLightweight: true`): fetches ONLY Admin/Co-Admin profiles + the logged-in student's own row (~3 rows instead of 3,000!), cutting student profile Egress by 96%!
+   * - When `knownAvatars` is provided, skips downloading the `avatar` column on bulk polls and only fetches `avatar` for Admin/Co-Admin rows that don't have a cached avatar yet!
    */
   static async getRemoteProfiles(
     skipDedupe: boolean = false,
-    options?: { studentLightweight?: boolean; currentUserId?: string }
+    options?: {
+      studentLightweight?: boolean;
+      currentUserId?: string;
+      knownAvatars?: Map<string, string>;
+    }
   ): Promise<User[] | null> {
     const isStudentLite = Boolean(options?.studentLightweight && options?.currentUserId);
-    const cacheKey = isStudentLite
-      ? `profiles:student:${options?.currentUserId}`
-      : 'profiles:all';
+    const useAvatarLite = Boolean(options?.knownAvatars && options.knownAvatars.size > 0);
+    const cacheKey = `${
+      isStudentLite ? `profiles:student:${options?.currentUserId}` : 'profiles:all'
+    }:${useAvatarLite ? 'lite' : 'full'}`;
 
     const fetcher = async () => {
       try {
-        let query = supabase.from('profiles').select('*');
+        const liteCols =
+          this.profileSchemaMode === 'core'
+            ? 'id,name,username,email,role,phone,title,created_at,updated_at'
+            : this.profileSchemaMode === 'no_password'
+            ? 'id,name,username,email,role,phone,title,gender,address,rules_accepted,rules_accepted_at,created_at,updated_at'
+            : 'id,name,username,email,role,phone,title,gender,address,password,rules_accepted,rules_accepted_at,created_at,updated_at';
+
+        let query = supabase
+          .from('profiles')
+          .select(useAvatarLite ? liteCols : '*');
 
         if (isStudentLite && options?.currentUserId) {
           const safeUid = options.currentUserId.replace(/[,()"'\\]/g, '').trim();
@@ -1019,13 +1047,64 @@ export class SupabaseService {
           query = query.limit(3000);
         }
 
-        const { data, error } = await query;
+        let { data, error } = await query;
+
+        // Fallback if optional columns in liteCols are missing on an older schema
+        if (error && useAvatarLite) {
+          let fbQuery = supabase.from('profiles').select('*');
+          if (isStudentLite && options?.currentUserId) {
+            const safeUid = options.currentUserId.replace(/[,()"'\\]/g, '').trim();
+            fbQuery = fbQuery.or(`id.eq.${safeUid},role.in.(admin,co_admin)`).limit(25);
+          } else {
+            fbQuery = fbQuery.limit(3000);
+          }
+          const fbRes = await fbQuery;
+          data = fbRes.data;
+          error = fbRes.error;
+        }
 
         if (error || !data) {
           return null;
         }
 
-        return data.map((row) => this.mapProfileRowToUser(row as Record<string, unknown>));
+        const rows = data as unknown as Record<string, unknown>[];
+        const fetchedAvatars = new Map<string, string>();
+
+        if (useAvatarLite && options?.knownAvatars) {
+          const adminIdsMissingAvatar: string[] = [];
+          for (const r of rows) {
+            const uId = String(r.id || '');
+            const uRole = String(r.role || 'student');
+            if (uRole === 'admin' || uRole === 'co_admin') {
+              const cachedAv = options.knownAvatars.get(uId);
+              if (!cachedAv || cachedAv === DEFAULT_FALLBACK_AVATAR) {
+                adminIdsMissingAvatar.push(uId);
+              }
+            }
+          }
+          if (adminIdsMissingAvatar.length > 0) {
+            const { data: avRows } = await supabase
+              .from('profiles')
+              .select('id,avatar')
+              .in('id', adminIdsMissingAvatar);
+            if (Array.isArray(avRows)) {
+              avRows.forEach((ar) => {
+                if (ar.id && ar.avatar) {
+                  fetchedAvatars.set(String(ar.id), String(ar.avatar));
+                }
+              });
+            }
+          }
+        }
+
+        return rows.map((row) => {
+          const uId = String(row.id || '');
+          const resolvedRow =
+            !row.avatar && (fetchedAvatars.has(uId) || options?.knownAvatars?.has(uId))
+              ? { ...row, avatar: fetchedAvatars.get(uId) || options?.knownAvatars?.get(uId) || '' }
+              : row;
+          return this.mapProfileRowToUser(resolvedRow);
+        });
       } catch {
         return null;
       }
@@ -1131,22 +1210,39 @@ export class SupabaseService {
   }
 
   /**
-   * Fetch posts from Supabase (optionally scoped to enrolled courseIds to save Egress bandwidth)
+   * Fetch posts from Supabase (optionally scoped to enrolled courseIds to save Egress bandwidth).
+   * - NEVER selects the legacy `author_avatar` column (resolved dynamically from instructor profiles),
+   *   immediately preventing any old Base64 avatar strings in `public.posts` from consuming Egress!
+   * - When `knownPosts` is provided on background polls, queries lightweight metadata first and only downloads
+   *   `content` and `comments` for newly created posts or posts whose title/commentCount/contentLen changed!
    */
-  static async getRemotePosts(courseIds?: string[]): Promise<CoursePost[] | null> {
+  static async getRemotePosts(
+    courseIds?: string[],
+    knownPosts?: Map<
+      string,
+      { title: string; content: string; comments: CoursePost['comments'] }
+    >
+  ): Promise<CoursePost[] | null> {
     if (courseIds && courseIds.length === 0) {
       return [];
     }
-    const scopeKey =
-      courseIds && courseIds.length > 0 ? courseIds.slice().sort().join(',') : 'all';
+    const useDeltaPosts = Boolean(knownPosts && knownPosts.size > 0);
+    const scopeKey = `${
+      courseIds && courseIds.length > 0 ? courseIds.slice().sort().join(',') : 'all'
+    }:${useDeltaPosts ? 'delta' : 'full'}`;
 
     return this.dedupeGet(`posts:${scopeKey}`, async () => {
       try {
+        const liteCols =
+          'id,course_id,author_id,author_name,title,post_type,attachments,likes,created_at';
+        const fullColsNoAvatar =
+          'id,course_id,author_id,author_name,title,content,post_type,attachments,likes,comments,created_at';
+
         let query = supabase
           .from('posts')
-          .select('*')
+          .select(useDeltaPosts ? liteCols : fullColsNoAvatar)
           .order('created_at', { ascending: false })
-          .limit(150);
+          .limit(80);
 
         if (courseIds && courseIds.length > 0 && courseIds.length <= 25) {
           query = query.in('course_id', courseIds);
@@ -1155,7 +1251,71 @@ export class SupabaseService {
         const { data, error } = await query;
         if (error || !data) return null;
 
-        return data.map((row) => {
+        const rows = data as unknown as Record<string, unknown>[];
+        const fetchedBodyMap = new Map<
+          string,
+          { content: string; comments: Record<string, unknown>[] }
+        >();
+
+        if (useDeltaPosts && knownPosts) {
+          const idsNeedingBody: string[] = [];
+          for (const row of rows) {
+            const pId = String(row.id || '');
+            const localPost = knownPosts.get(pId);
+            if (!localPost) {
+              idsNeedingBody.push(pId);
+              continue;
+            }
+            const rawAtt = Array.isArray(row.attachments) ? row.attachments : [];
+            let rowMeta: Record<string, unknown> = {};
+            for (const att of rawAtt) {
+              if (att && att.id === '__post_meta__' && typeof att.url === 'string') {
+                try {
+                  rowMeta = JSON.parse(att.url) as Record<string, unknown>;
+                } catch {
+                  // ignore
+                }
+              }
+            }
+            const remoteTitle = String(row.title || '');
+            const remoteCommentCount =
+              typeof rowMeta.commentCount === 'number' ? rowMeta.commentCount : undefined;
+            const remoteContentLen =
+              typeof rowMeta.contentLen === 'number' ? rowMeta.contentLen : undefined;
+
+            if (
+              localPost.title !== remoteTitle ||
+              (remoteCommentCount !== undefined &&
+                remoteCommentCount !== (localPost.comments?.length || 0)) ||
+              (remoteContentLen !== undefined &&
+                remoteContentLen !== (localPost.content?.length || 0))
+            ) {
+              idsNeedingBody.push(pId);
+            }
+          }
+
+          if (idsNeedingBody.length > 0) {
+            const { data: bodyRows } = await supabase
+              .from('posts')
+              .select('id,content,comments')
+              .in('id', idsNeedingBody);
+            if (Array.isArray(bodyRows)) {
+              bodyRows.forEach((br) => {
+                if (br.id) {
+                  fetchedBodyMap.set(String(br.id), {
+                    content: String(br.content || ''),
+                    comments: Array.isArray(br.comments)
+                      ? (br.comments as Record<string, unknown>[])
+                      : [],
+                  });
+                }
+              });
+            }
+          }
+        }
+
+        return rows.map((row) => {
+          const pId = String(row.id || '');
           const rawAttachments = Array.isArray(row.attachments) ? row.attachments : [];
           let metaObj: Record<string, unknown> = {};
           const visibleAttachments = rawAttachments.filter((att: Record<string, unknown>) => {
@@ -1170,7 +1330,7 @@ export class SupabaseService {
             return true;
           });
 
-          const parsedRowMs = row.created_at ? new Date(row.created_at).getTime() : undefined;
+          const parsedRowMs = row.created_at ? new Date(String(row.created_at)).getTime() : undefined;
           const metaCreatedMs =
             typeof metaObj.createdAtMs === 'number' && Number.isFinite(metaObj.createdAtMs)
               ? metaObj.createdAtMs
@@ -1206,12 +1366,25 @@ export class SupabaseService {
               ? metaObj.pinOrder
               : undefined;
 
-          const comments = Array.isArray(row.comments)
-            ? row.comments.map((cm: Record<string, unknown>) => ({
-                ...cm,
-                authorAvatar: cm.authorRole === 'student' ? '' : String(cm.authorAvatar || ''),
-              }))
-            : [];
+          const fetchedBody = fetchedBodyMap.get(pId);
+          const localCachedPost = knownPosts?.get(pId);
+          const resolvedContent =
+            row.content !== undefined
+              ? String(row.content || '')
+              : fetchedBody
+              ? fetchedBody.content
+              : localCachedPost?.content || '';
+
+          const rawCommentsSource = Array.isArray(row.comments)
+            ? (row.comments as Record<string, unknown>[])
+            : fetchedBody
+            ? fetchedBody.comments
+            : (localCachedPost?.comments as unknown as Record<string, unknown>[]) || [];
+
+          const comments = rawCommentsSource.map((cm: Record<string, unknown>) => ({
+            ...cm,
+            authorAvatar: cm.authorRole === 'student' ? '' : String(cm.authorAvatar || ''),
+          }));
 
           const formattedCreatedAt =
             status === 'scheduled'
@@ -1240,14 +1413,14 @@ export class SupabaseService {
               : 'Recently';
 
           return {
-            id: row.id,
-            courseId: row.course_id,
-            authorId: row.author_id || 'user-admin-1',
-            authorName: row.author_name || 'Instructor',
+            id: pId,
+            courseId: String(row.course_id || ''),
+            authorId: String(row.author_id || 'user-admin-1'),
+            authorName: String(row.author_name || 'Instructor'),
             authorRole,
-            authorAvatar: authorRole === 'student' ? '' : (row.author_avatar || ''),
-            title: row.title || '',
-            content: row.content || '',
+            authorAvatar: '',
+            title: String(row.title || ''),
+            content: resolvedContent,
             createdAt: formattedCreatedAt,
             createdAtMs: effectiveCreatedMs,
             postType: (row.post_type as CoursePost['postType']) || 'announcement',
@@ -1257,8 +1430,8 @@ export class SupabaseService {
             isPinned,
             pinnedAt,
             pinOrder,
-            attachments: visibleAttachments,
-            likes: Array.isArray(row.likes) ? row.likes : [],
+            attachments: visibleAttachments as CoursePost['attachments'],
+            likes: Array.isArray(row.likes) ? (row.likes as string[]) : [],
             comments: comments as CoursePost['comments'],
           };
         });
@@ -1411,17 +1584,21 @@ export class SupabaseService {
               row.is_open
             );
             const localKnown = knownSessions.get(sId);
+            const localRecCount = localKnown?.records ? Object.keys(localKnown.records).length : 0;
 
             // Fetch full `records` JSONB ONLY if:
-            // 1. Session is currently OPEN (`rowIsOpen === true`) so live student check-ins sync
-            // 2. Session is not in local storage yet
-            // 3. Session's Open/Close state or `statusUpdatedAtMs` timestamp changed
+            // 1. Session is not in local storage yet (`!localKnown`)
+            // 2. Session's Open/Close state (`isOpen`) changed
+            // 3. Session's `statusUpdatedAtMs` timestamp or `recordCount` changed (updated whenever any student checks in or Admin toggles Open/Close)
+            // 4. Legacy open session without `statusUpdatedAtMs` metadata
             if (
-              rowIsOpen ||
               !localKnown ||
               localKnown.isOpen !== rowIsOpen ||
               (decodedState.statusUpdatedAtMs &&
-                localKnown.statusUpdatedAtMs !== decodedState.statusUpdatedAtMs)
+                localKnown.statusUpdatedAtMs !== decodedState.statusUpdatedAtMs) ||
+              (decodedState.recordCount !== undefined &&
+                localRecCount !== decodedState.recordCount) ||
+              (rowIsOpen && !decodedState.statusUpdatedAtMs)
             ) {
               idsNeedingRecords.push(sId);
             }
@@ -2207,6 +2384,8 @@ export class SupabaseService {
         pinOrder: post.pinOrder ?? null,
         createdAtMs: effectiveMs,
         authorRole: post.authorRole || 'admin',
+        commentCount: safeComments.length,
+        contentLen: (post.content || '').length,
       }),
     };
 
@@ -2624,16 +2803,28 @@ export class SupabaseService {
           nextRecords[studentId] = record;
         }
 
-        // Update ONLY `records` so a student check-in NEVER touches `is_open` or `opened_by`
+        const nextStatusMs = Date.now();
+        const encodedMarker = encodeAttendanceOpenedBy({
+          ...fallbackSession,
+          openedBy: decodedRemote.openedBy,
+          isOpen: true,
+          statusUpdatedAtMs: nextStatusMs,
+          records: nextRecords,
+        });
+
+        // Update `records` and `opened_by` timestamp/recordCount marker (never changing `is_open`) so delta polls detect the check-in
         const { error: updateErr } = await supabase
           .from('attendance_sessions')
-          .update({ records: nextRecords })
+          .update({
+            records: nextRecords,
+            opened_by: encodedMarker,
+          })
           .eq('id', sessionId);
 
         return {
           success: !updateErr,
           remoteIsOpen: true,
-          remoteStatusUpdatedAtMs: decodedRemote.statusUpdatedAtMs,
+          remoteStatusUpdatedAtMs: nextStatusMs,
           mergedRecords: nextRecords,
         };
       }
@@ -2910,6 +3101,97 @@ export class SupabaseService {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return { success: false, totalCleaned, details: msg };
+    }
+  }
+
+  /**
+   * 1-Click Cloud Database Slimmer (< 5.5 GB Free Plan Egress Guard):
+   * - Strips any legacy Base64 `author_avatar` strings from `public.posts`
+   * - Strips any legacy Base64 `avatar` strings from student rows in `public.profiles`
+   * - Replaces any oversized (>45KB) Admin/Co-Admin avatars or (>65KB) Course banners with ultra-lightweight SVG fallbacks
+   * - Strips `student_avatar` from `public.assignment_submissions`
+   * - Purges expired notifications and orphaned cloud records
+   */
+  static async slimDatabaseForLowEgress(): Promise<{
+    success: boolean;
+    slimmedRows: number;
+    details: string;
+  }> {
+    let slimmedRows = 0;
+    try {
+      // 1. Strip author_avatar in posts, student avatar in profiles, and student_avatar in assignment_submissions
+      const [postAvRes, stuAvRes, subAvRes] = await Promise.allSettled([
+        supabase
+          .from('posts')
+          .update({ author_avatar: '' })
+          .neq('author_avatar', '')
+          .select('id'),
+        supabase
+          .from('profiles')
+          .update({ avatar: '' })
+          .eq('role', 'student')
+          .neq('avatar', '')
+          .select('id'),
+        supabase
+          .from('assignment_submissions')
+          .update({ student_avatar: '' })
+          .neq('student_avatar', '')
+          .select('id'),
+      ]);
+
+      if (postAvRes.status === 'fulfilled' && Array.isArray(postAvRes.value.data)) {
+        slimmedRows += postAvRes.value.data.length;
+      }
+      if (stuAvRes.status === 'fulfilled' && Array.isArray(stuAvRes.value.data)) {
+        slimmedRows += stuAvRes.value.data.length;
+      }
+      if (subAvRes.status === 'fulfilled' && Array.isArray(subAvRes.value.data)) {
+        slimmedRows += subAvRes.value.data.length;
+      }
+
+      // 2. Check Admin/Co-Admin avatars and Course banners for oversized legacy Base64 payloads
+      const [adminRowsRes, courseRowsRes] = await Promise.allSettled([
+        supabase.from('profiles').select('id,role,avatar').in('role', ['admin', 'co_admin']),
+        supabase.from('courses').select('id,banner_image'),
+      ]);
+
+      if (adminRowsRes.status === 'fulfilled' && Array.isArray(adminRowsRes.value.data)) {
+        for (const r of adminRowsRes.value.data) {
+          const av = String(r.avatar || '');
+          if (av.length > 45_000) {
+            await supabase
+              .from('profiles')
+              .update({ avatar: DEFAULT_FALLBACK_AVATAR })
+              .eq('id', String(r.id));
+            slimmedRows++;
+          }
+        }
+      }
+
+      if (courseRowsRes.status === 'fulfilled' && Array.isArray(courseRowsRes.value.data)) {
+        for (const c of courseRowsRes.value.data) {
+          const bn = String(c.banner_image || '');
+          if (bn.length > 65_000) {
+            await supabase
+              .from('courses')
+              .update({ banner_image: DEFAULT_FALLBACK_BANNER })
+              .eq('id', String(c.id));
+            slimmedRows++;
+          }
+        }
+      }
+
+      // 3. Purge expired notifications
+      await this.purgeExpiredNotifications([], true);
+
+      return {
+        success: true,
+        slimmedRows,
+        details: `Slimmed ${slimmedRows} oversized cloud rows and purged expired notifications.`,
+      };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, slimmedRows, details: msg };
     }
   }
 

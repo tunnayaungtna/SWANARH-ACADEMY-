@@ -2711,18 +2711,46 @@ export class ClassroomDB {
       this.setItem(STORAGE_KEYS.NOTIFICATIONS, validNotifs);
     }
 
-    // 8. Run Supabase cloud orphan cleanup
-    const cloudRes = await SupabaseService.cleanOrphanedCloudData(
-      Array.from(validCourseIds),
-      Array.from(validUserIds),
-      Array.from(deletedSet),
+    // 8. Run Supabase cloud orphan cleanup & Egress database slimmer when forced
+    const [cloudRes, slimRes] = await Promise.all([
+      SupabaseService.cleanOrphanedCloudData(
+        Array.from(validCourseIds),
+        Array.from(validUserIds),
+        Array.from(deletedSet),
+        forceCloudSweep
+      ),
       forceCloudSweep
-    );
+        ? SupabaseService.slimDatabaseForLowEgress()
+        : Promise.resolve({ success: true, slimmedRows: 0, details: '' }),
+    ]);
 
     return {
       localCleaned,
-      cloudCleaned: cloudRes.totalCleaned,
-      details: `Local cleaned: ${localCleaned}, Cloud cleaned: ${cloudRes.totalCleaned}. ${cloudRes.details}`,
+      cloudCleaned: cloudRes.totalCleaned + slimRes.slimmedRows,
+      details: `Local cleaned: ${localCleaned}, Cloud cleaned: ${cloudRes.totalCleaned}, Slimmed rows: ${slimRes.slimmedRows}. ${cloudRes.details}`,
+    };
+  }
+
+  static async slimCloudDatabaseForLowEgress(): Promise<{
+    success: boolean;
+    slimmedRows: number;
+    cleanedOrphans: number;
+    details: string;
+  }> {
+    const [slimRes, orphanRes] = await Promise.all([
+      SupabaseService.slimDatabaseForLowEgress(),
+      this.cleanOrphanedLocalAndCloudData(true),
+    ]);
+    try {
+      localStorage.setItem('classroom_egress_slimmed_v2', 'true');
+    } catch {
+      // ignore
+    }
+    return {
+      success: slimRes.success,
+      slimmedRows: slimRes.slimmedRows,
+      cleanedOrphans: orphanRes.cloudCleaned + orphanRes.localCleaned,
+      details: slimRes.details,
     };
   }
 
@@ -2854,8 +2882,8 @@ export class ClassroomDB {
     const onlyProfiles = Boolean(options?.onlyProfiles);
     const isBackground = Boolean(options?.background);
     const now = Date.now();
-    const COOLDOWN_MS = 20_000; // 20s background cooldown to protect 5GB Supabase Egress limit
-    const CATALOG_TTL_MS = 240_000; // 4-minute catalog cache in background (instant on wake/focus/force)
+    const COOLDOWN_MS = 35_000; // 35s background cooldown to keep Supabase Egress strictly < 5.5 GB
+    const CATALOG_TTL_MS = 600_000; // 10-minute catalog cache in background (instant on explicit force/action)
 
     if (!force) {
       if (onlyProfiles && now - this.lastProfilePullAt < COOLDOWN_MS) {
@@ -2972,6 +3000,44 @@ export class ClassroomDB {
           }
         });
 
+        const knownAvatars = new Map<string, string>();
+        this.getAllUsers().forEach((u) => {
+          if (u.id && u.role !== 'student' && u.avatar) {
+            knownAvatars.set(u.id, u.avatar);
+          }
+        });
+
+        const currentPosts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS).filter(
+          (p) => !deletedSet.has(p.id)
+        );
+        const knownPostsMap = new Map<
+          string,
+          { title: string; content: string; comments: CoursePost['comments'] }
+        >();
+        currentPosts.forEach((p) => {
+          if (p.id) {
+            knownPostsMap.set(p.id, {
+              title: p.title || '',
+              content: p.content || '',
+              comments: p.comments || [],
+            });
+          }
+        });
+
+        // One-time automatic Cloud Database Slimming when Admin/Co-Admin connects so existing oversized Base64 rows are stripped
+        if (
+          loggedUser &&
+          (loggedUser.role === 'admin' || loggedUser.role === 'co_admin') &&
+          localStorage.getItem('classroom_egress_slimmed_v2') !== 'true'
+        ) {
+          try {
+            localStorage.setItem('classroom_egress_slimmed_v2', 'true');
+            SupabaseService.slimDatabaseForLowEgress().catch(() => {});
+          } catch {
+            // ignore
+          }
+        }
+
         const currentAttendance = this.getItem<AttendanceSession[]>(
           STORAGE_KEYS.ATTENDANCE,
           INITIAL_ATTENDANCE_SESSIONS
@@ -3001,15 +3067,17 @@ export class ClassroomDB {
           singleLoggedProfile,
         ] = await Promise.all([
           shouldFetchCatalog
-            ? SupabaseService.getRemoteProfiles(
-                false,
-                isStudentLightweight && loggedUser
-                  ? { studentLightweight: true, currentUserId: loggedUser.id }
-                  : undefined
-              )
+            ? SupabaseService.getRemoteProfiles(false, {
+                studentLightweight: Boolean(isStudentLightweight && loggedUser),
+                currentUserId: loggedUser?.id,
+                knownAvatars: isBackground ? knownAvatars : undefined,
+              })
             : Promise.resolve(null),
           shouldFetchCatalog ? SupabaseService.getRemoteCourses(knownBanners) : Promise.resolve(null),
-          SupabaseService.getRemotePosts(studentScopedCourseIds),
+          SupabaseService.getRemotePosts(
+            studentScopedCourseIds,
+            isBackground ? knownPostsMap : undefined
+          ),
           shouldFetchCatalog ? SupabaseService.getRemoteAssignments() : Promise.resolve(null),
           shouldFetchCatalog ? SupabaseService.getRemoteQuizzes() : Promise.resolve(null),
           SupabaseService.getRemoteAttendanceSessions(studentScopedCourseIds, knownAttendanceMap),
@@ -3729,7 +3797,7 @@ export class ClassroomDB {
       return false;
     }
     const now = Date.now();
-    if (!force && now - this.lastAttendanceSyncAt < 9_000) {
+    if (!force && now - this.lastAttendanceSyncAt < 12_000) {
       return false;
     }
     if (this.activeAttendanceSyncPromise) {

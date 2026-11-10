@@ -187,19 +187,41 @@ export default function App() {
     window.addEventListener('touchstart', markUserActive, { passive: true });
 
     // When refreshing, focusing, or reopening the installed PWA from the background,
-    // immediately pull authoritative remote state (courses, posts, deletions, and 1-device session lock)
+    // throttle cloud pulls to at most once per 60s and use lightweight delta sync unless hidden >5 minutes
+    let lastWakeUpPullAt = Date.now();
+    let lastHiddenAt = 0;
     const handleWakeUp = () => {
+      if (document.visibilityState === 'hidden') {
+        lastHiddenAt = Date.now();
+        return;
+      }
       if (document.visibilityState === 'visible') {
-        lastUserInteractionAt = Date.now();
+        const now = Date.now();
+        lastUserInteractionAt = now;
         ClassroomDB.purgeExpiredAuditLogs(false);
+        ClassroomDB.checkAndPublishDueScheduledPosts();
         refreshData();
+
         const loggedUser = ClassroomDB.getCurrentUser();
-        if (loggedUser) {
-          ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
-            if (updated || !ClassroomDB.getCurrentUser()) {
-              refreshData();
-            }
+        if (loggedUser && navigator.onLine !== false && !isLowBandwidthRef.current) {
+          // Lightweight 0.3KB delta attendance check (throttled internally to 12s)
+          ClassroomDB.syncAttendanceFromCloud().then((attChanged) => {
+            if (attChanged) refreshData();
           });
+
+          // Only trigger a cloud pull if at least 60s elapsed since last wake-up pull
+          if (now - lastWakeUpPullAt >= 60_000) {
+            const wasHiddenLong = lastHiddenAt > 0 && now - lastHiddenAt > 300_000;
+            lastWakeUpPullAt = now;
+            lastHiddenAt = 0;
+            ClassroomDB.pullFromSupabase(
+              wasHiddenLong ? { force: true } : { background: true }
+            ).then((updated) => {
+              if (updated || !ClassroomDB.getCurrentUser()) {
+                refreshData();
+              }
+            });
+          }
         }
       }
     };
@@ -207,8 +229,8 @@ export default function App() {
     window.addEventListener('pageshow', handleWakeUp);
     window.addEventListener('focus', handleWakeUp);
 
-    // Egress-optimized background sync (105s–135s jittered when user is active; auto-pauses when idle >6m)
-    const jitteredIntervalMs = 105000 + Math.floor(Math.random() * 30000);
+    // Egress-optimized background sync (180s–240s jittered when user is active; auto-pauses when idle >6m)
+    const jitteredIntervalMs = 180000 + Math.floor(Math.random() * 60000);
     const syncInterval = setInterval(() => {
       const isUserActive = Date.now() - lastUserInteractionAt <= 360_000;
       if (
@@ -228,7 +250,7 @@ export default function App() {
       }
     }, jitteredIntervalMs);
 
-    // 10-second timer to immediately auto-publish any due scheduled posts and perform 0.8KB delta Attendance checks when active
+    // 10-second timer to immediately auto-publish any due scheduled posts and perform 0.3KB delta Attendance checks when active
     let attendanceTickCounter = 0;
     const scheduledPostsInterval = setInterval(() => {
       const publishedAny = ClassroomDB.checkAndPublishDueScheduledPosts();
@@ -237,9 +259,11 @@ export default function App() {
       }
       attendanceTickCounter++;
       const isUserActive = Date.now() - lastUserInteractionAt <= 360_000;
-      // Check every 10s if any session is open locally, or every 30s (every 3rd tick) when all sessions are closed
+      // Check every 20s (every 2nd tick) if any session is open locally, or every 60s (every 6th tick) when all sessions are closed
       const hasOpenLocalSession = ClassroomDB.getAttendanceSessions().some((s) => s.isOpen);
-      const shouldPollAttendance = hasOpenLocalSession || attendanceTickCounter % 3 === 0;
+      const shouldPollAttendance =
+        (hasOpenLocalSession && attendanceTickCounter % 2 === 0) ||
+        attendanceTickCounter % 6 === 0;
       if (
         shouldPollAttendance &&
         isUserActive &&

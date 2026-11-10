@@ -94,7 +94,7 @@ export const PRESET_AVATARS: PresetAvatar[] = [
  * Compresses an image file client-side to a square avatar JPEG data URI.
  * Guaranteed to be small (< 100KB) to ensure localStorage stability.
  */
-export async function compressImageFile(file: File, maxDimension = 256, quality = 0.85): Promise<string> {
+export async function compressImageFile(file: File, maxDimension = 128, quality = 0.72): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error('Failed to read image file'));

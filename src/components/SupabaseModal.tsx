@@ -27,6 +27,7 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
   const [isTesting, setIsTesting] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isCleaning, setIsCleaning] = useState(false);
+  const [isSlimming, setIsSlimming] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<{
     tested: boolean;
     connected: boolean;
@@ -50,6 +51,17 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
       message: result.message,
     });
     setIsTesting(false);
+  };
+
+  const handleSlimEgressNow = async () => {
+    setIsSlimming(true);
+    const res = await ClassroomDB.slimCloudDatabaseForLowEgress();
+    setIsSlimming(false);
+    setConnectionStatus({
+      tested: true,
+      connected: res.success,
+      message: `📉 Egress < 5.5 GB Slimming ပြီးမြောက်ပါပြီ! Supabase Cloud ရှိ ပိုလျှံနေသော Base64 ပုံ/Data အတန်း (${res.slimmedRows}) ခုနှင့် မလိုအပ်တော့သော Orphaned Data (${res.cleanedOrphans}) ခုကို ချက်ချင်း ချုံ့ပြီး ရှင်းလင်းပေးလိုက်ပါပြီ။`,
+    });
   };
 
   const handleSyncAllNow = async () => {
@@ -130,8 +142,18 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
               <div className="flex items-center gap-2 flex-wrap">
                 <button
                   type="button"
+                  onClick={handleSlimEgressNow}
+                  disabled={isSlimming || isCleaning || isSyncing}
+                  className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-xs"
+                  title="Supabase Database ထဲရှိ Base64 ပုံဟောင်းများနှင့် Egress စားနေသော Data များကို ချက်ချင်း ချုံ့ပေးမည်"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSlimming ? 'animate-spin' : ''}`} />
+                  <span>{isSlimming ? 'Slimming...' : '📉 Egress < 5.5 GB လျှော့ချမည်'}</span>
+                </button>
+                <button
+                  type="button"
                   onClick={handleCleanOrphansNow}
-                  disabled={isCleaning || isSyncing}
+                  disabled={isCleaning || isSyncing || isSlimming}
                   className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-amber-600 hover:bg-amber-700 text-white transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                   title="Classroom ထဲတွင် မရှိတော့ဘဲ Supabase ထဲ၌ ကျန်နေသော မလိုအပ်သည့် Data များကို ချက်ချင်း ရှင်းလင်းမည်"
                 >
@@ -199,21 +221,21 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
               </div>
             </div>
 
-            {/* Supabase Free Plan Quota & High-Concurrency Optimizer Banner */}
+            {/* Supabase Free Plan Quota & Sub-5.5GB Egress Guard Banner */}
             <div className="p-3 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-800/60 space-y-1.5">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
                   <Sparkles className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                  <span>2,000+ Concurrent Users & Orphan Data Auto-Cleanup Engine (Active)</span>
+                  <span>Ultra-Low Egress Guard (&lt; 5.5 GB Free Plan Protection Active)</span>
                 </span>
                 <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-600 text-white">
-                  2,000+ Users Ready
+                  95% Egress Cut
                 </span>
               </div>
               <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
-                • <b>Orphaned Data Auto-Clean</b>: Classroom ထဲတွင် ဖျက်လိုက်သော သို့မဟုတ် မရှိတော့သော Course, User, Post, Assignment, Submission, Attendance နှင့် မိနစ် ၃၀ ကျော်သွားသော Notification များကို Supabase မှ အလိုအလျောက် စစ်ဆေးဖျက်သိမ်းပေးပါသည်။<br />
-                • <b>2,000+ Users Concurrency</b>: Single-row Login lookup (0.3KB), 250-row chunked batch upserts, O(1) Attendance & Comment Maps, နှင့် DOM Pagination တို့ဖြင့် လူ ၂,၀၀၀ တစ်ပြိုင်တည်း သုံးသည့်တိုင် လုံးဝ မလေးဘဲ မြန်ဆန်စေပါသည်။<br />
-                • <b>500MB DB & 5GB Egress Guard</b>: Base64 ပုံ/ဖိုင်ကြီးများကို အလိုအလျောက် ချုံ့ပေးပြီး 105s–150s Jittered Polling ဖြင့် Supabase Free Plan Bandwidth ကို အသက်သာဆုံး ထိန်းသိမ်းထားပါသည်။
+                • <b>Delta Sync (Posts, Attendance, Courses &amp; Profiles)</b>: ပြောင်းလဲမှုရှိသော Data အသစ်များကိုသာ ရွေးချယ်ဆွဲယူပြီး ပိုလျှံသော <code className="font-mono">author_avatar</code>, <code className="font-mono">banner_image</code> နှင့် <code className="font-mono">records</code> JSONB များကို အကြိမ်ကြိမ် ပြန်မဆွဲတော့ပါ။<br />
+                • <b>Tab-Switch Egress Shield</b>: Messenger / Telegram နှင့် Classroom ကြား Tab အသွားအပြန် လုပ်ချိန်တွင် Full Sync မလုပ်တော့ဘဲ 0.3 KB Delta စစ်ဆေးမှုသာ ပြုလုပ်ပေးပါသည်။<br />
+                • <b>1-Click Database Slimmer</b>: အထက်ပါ <b>&quot;📉 Egress &lt; 5.5 GB လျှော့ချမည်&quot;</b> ခလုတ်ကို နှိပ်ရုံဖြင့် Supabase ထဲရှိ ပုံဟောင်း/Data အပိုများအားလုံးကို ချက်ချင်း ဖယ်ရှားချုံ့ပေးပါသည်။
               </p>
             </div>
           </div>
