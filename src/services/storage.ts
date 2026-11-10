@@ -340,27 +340,27 @@ export class ClassroomDB {
         STORAGE_KEYS.USERS,
         INITIAL_USERS.filter((u) => !deletedSet.has(u.id)).map((u) => ({
           ...u,
-          avatar: u.role === 'student' ? '' : u.avatar,
+          avatar: u.role !== 'admin' ? '' : u.avatar,
           password: encryptPassword(u.password, u.role, u.id),
         }))
       );
     } else {
-      // Ensure existing local student accounts never retain any profile photo
+      // Ensure existing local student and co_admin accounts never retain any profile photo
       // and automatically encrypt any legacy plaintext passwords into ENC_V1 ciphertext
       const existingUsers = this.getItem<User[]>(STORAGE_KEYS.USERS, []);
       let usersChanged = false;
       const upgradedUsersForCloud: User[] = [];
       const sanitizedUsers = existingUsers.map((u) => {
-        const shouldStripAvatar = u.role === 'student' && Boolean(u.avatar);
+        const shouldStripAvatar = u.role !== 'admin' && Boolean(u.avatar);
         const needsEncryption = !isEncryptedPassword(u.password);
         if (shouldStripAvatar || needsEncryption) {
           usersChanged = true;
           const upgraded: User = {
             ...u,
-            avatar: u.role === 'student' ? '' : u.avatar,
+            avatar: u.role !== 'admin' ? '' : u.avatar,
             password: encryptPassword(u.password, u.role, u.id),
           };
-          if (needsEncryption) {
+          if (needsEncryption || shouldStripAvatar) {
             upgradedUsersForCloud.push(upgraded);
           }
           return upgraded;
@@ -1204,7 +1204,7 @@ export class ClassroomDB {
     const sessionToken = this.generateAndSaveSessionToken();
     const stampedUser: User = {
       ...matched,
-      avatar: matched.role === 'student' ? '' : matched.avatar,
+      avatar: matched.role !== 'admin' ? '' : matched.avatar,
       ...(matched.role === 'student'
         ? {
             activeDeviceId: localDeviceId,
@@ -1313,7 +1313,7 @@ export class ClassroomDB {
         sessionUpdatedAtMs: ru.sessionUpdatedAtMs,
         rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
         rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
-        avatar: ru.role === 'student' ? '' : ru.avatar || existing?.avatar || '',
+        avatar: ru.role !== 'admin' ? '' : ru.avatar || existing?.avatar || '',
         password: encryptPassword(
           ru.password || existing?.password,
           ru.role,
@@ -1440,7 +1440,7 @@ export class ClassroomDB {
 
   static getAllUsers(): User[] {
     const users = this.getItem<User[]>(STORAGE_KEYS.USERS, INITIAL_USERS);
-    return users.map((u) => (u.role === 'student' && u.avatar ? { ...u, avatar: '' } : u));
+    return users.map((u) => (u.role !== 'admin' && u.avatar ? { ...u, avatar: '' } : u));
   }
 
   static registerNewUser(data: {
@@ -1523,7 +1523,7 @@ export class ClassroomDB {
       "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'><rect width='120' height='120' rx='60' fill='%23d97706'/><circle cx='60' cy='45' r='22' fill='%23ffffff' fill-opacity='0.92'/><path d='M24 104c6-20 22-32 36-32s30 12 36 32' fill='%23ffffff' fill-opacity='0.92'/></svg>",
     ];
     const finalAvatar =
-      data.role === 'student'
+      data.role !== 'admin'
         ? ''
         : data.avatar?.trim() || avatarPool[users.length % avatarPool.length];
 
@@ -1718,10 +1718,10 @@ export class ClassroomDB {
       return { success: false, error: 'User not found (အသုံးပြုသူ ရှာမတွေ့ပါ)' };
     }
 
-    if (users[userIndex].role !== 'admin' && users[userIndex].role !== 'co_admin') {
+    if (users[userIndex].role !== 'admin') {
       return {
         success: false,
-        error: 'Profile photo ပြောင်းလဲခွင့်သည် Admin နှင့် Co-Admin အကောင့်များအတွက်သာ ခွင့်ပြုထားပါသည်။',
+        error: 'Primary Admin (ဆရာ) အကောင့်သာလျှင် Profile ဓာတ်ပုံ တင်ခွင့်ရှိပါသည်။ Co-Admin နှင့် ကျောင်းသားများအတွက် Profile ဓာတ်ပုံ စနစ် ပိတ်ထားပါသည်။',
       };
     }
 
@@ -1735,7 +1735,7 @@ export class ClassroomDB {
       this.setCurrentUser(currentLogged);
     }
 
-    // Immediately propagate the new Admin/Co-Admin profile picture to all their authored posts & comments
+    // Immediately propagate the new Admin profile picture to all their authored posts & comments
     const posts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS);
     const updatedPostsToSync: CoursePost[] = [];
     let postsChanged = false;
@@ -1775,7 +1775,7 @@ export class ClassroomDB {
     }
 
     try {
-      SupabaseService.upsertProfile(users[userIndex]).catch(() => {});
+      SupabaseService.upsertProfile(users[userIndex], true).catch(() => {});
     } catch {
       // ignore
     }
@@ -1794,6 +1794,233 @@ export class ClassroomDB {
     });
 
     return { success: true, user: users[userIndex] };
+  }
+
+  /**
+   * Update Account Information (Admin & Co-Admin can edit their own account info + student account info;
+   * Primary Admin can also edit Co-Admin account info).
+   */
+  static updateUserAccountInfo(
+    targetUserId: string,
+    updates: {
+      name: string;
+      username: string;
+      email: string;
+      phone?: string;
+      title?: string;
+      gender?: 'male' | 'female' | 'other';
+      address?: string;
+      newPassword?: string;
+      enrolledCourseIds?: string[];
+    }
+  ): { success: boolean; user?: User; error?: string } {
+    const actor = this.getCurrentUser();
+    if (!actor || (actor.role !== 'admin' && actor.role !== 'co_admin')) {
+      return {
+        success: false,
+        error: 'ခွင့်ပြုချက် မရှိပါ: Admin သို့မဟုတ် Co-Admin များသာ အကောင့်အချက်အလက် ပြင်ဆင်ခွင့်ရှိပါသည်။',
+      };
+    }
+
+    const users = this.getAllUsers();
+    const targetIdx = users.findIndex((u) => u.id === targetUserId);
+    if (targetIdx === -1) {
+      return { success: false, error: 'ပြင်ဆင်မည့် အသုံးပြုသူ အကောင့်ကို မတွေ့ရှိပါ။' };
+    }
+
+    const targetUser = users[targetIdx];
+
+    // Permission check: Co-Admin can edit their own account OR any student account, but cannot edit Primary Admin
+    if (actor.role === 'co_admin') {
+      if (targetUser.role === 'admin') {
+        return {
+          success: false,
+          error: 'ခွင့်ပြုချက် မရှိပါ: Main Admin အကောင့်၏ အချက်အလက်များကို Co-Admin မှ ပြင်ဆင်ခွင့်မရှိပါ။',
+        };
+      }
+      if (targetUser.role === 'co_admin' && targetUser.id !== actor.id) {
+        return {
+          success: false,
+          error: 'ခွင့်ပြုချက် မရှိပါ: Co-Admin သည် မိမိ၏ အကောင့်နှင့် ကျောင်းသားအကောင့်များကိုသာ ပြင်ဆင်နိုင်ပါသည်။',
+        };
+      }
+    }
+
+    const cleanName = (updates.name || '').trim();
+    const cleanUsername = (updates.username || '')
+      .trim()
+      .replace(/^@+/, '')
+      .toLowerCase();
+    const cleanEmail = (updates.email || '').trim().toLowerCase();
+
+    if (!cleanName || !cleanUsername || !cleanEmail) {
+      return {
+        success: false,
+        error: 'အမည် (Name)၊ Username နှင့် Email တို့ကို ပြည့်စုံစွာ ဖြည့်စွက်ပေးပါ။',
+      };
+    }
+
+    // Check duplicate Username or Email against other accounts
+    const dupUsernameUser = users.find(
+      (u) => u.id !== targetUserId && u.username.toLowerCase() === cleanUsername
+    );
+    if (dupUsernameUser) {
+      return {
+        success: false,
+        error: `Username "@${cleanUsername}" သည် "${dupUsernameUser.name}" အကောင့်တွင် ရှိပြီးသားဖြစ်နေပါသည်။ အခြား Username ရွေးချယ်ပေးပါ။`,
+      };
+    }
+
+    const dupEmailUser = users.find(
+      (u) => u.id !== targetUserId && u.email.toLowerCase() === cleanEmail
+    );
+    if (dupEmailUser) {
+      return {
+        success: false,
+        error: `Email "${cleanEmail}" သည် "${dupEmailUser.name}" (@${dupEmailUser.username}) အကောင့်တွင် ရှိပြီးသားဖြစ်နေပါသည်။`,
+      };
+    }
+
+    let resolvedEncryptedPassword = targetUser.password;
+    if (updates.newPassword !== undefined && updates.newPassword.trim() !== '') {
+      const cleanNewPwd = updates.newPassword.trim();
+      if (cleanNewPwd.length < 4) {
+        return {
+          success: false,
+          error: 'Password အသစ်သည် အနည်းဆုံး စာလုံး (၄) လုံး ရှိရပါမည်။',
+        };
+      }
+      resolvedEncryptedPassword = encryptPassword(cleanNewPwd, targetUser.role, targetUser.id);
+    }
+
+    const updatedUser: User = {
+      ...targetUser,
+      name: cleanName,
+      username: cleanUsername,
+      email: cleanEmail,
+      phone: updates.phone !== undefined ? updates.phone.trim() : targetUser.phone,
+      title: updates.title !== undefined ? updates.title.trim() || undefined : targetUser.title,
+      gender: updates.gender || targetUser.gender || 'male',
+      address:
+        updates.address !== undefined ? updates.address.trim() || undefined : targetUser.address,
+      password: resolvedEncryptedPassword,
+      avatar: targetUser.role !== 'admin' ? '' : targetUser.avatar,
+    };
+
+    users[targetIdx] = updatedUser;
+    this.setItem(STORAGE_KEYS.USERS, users);
+
+    // Update current logged-in session if editing own profile
+    if (actor.id === targetUserId) {
+      this.setCurrentUser(updatedUser);
+    }
+
+    // Propagate updated Name to authored Posts, Comments, and Submissions if name changed
+    if (targetUser.name !== cleanName) {
+      const posts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS);
+      let postsChanged = false;
+      const updatedPosts = posts.map((post) => {
+        let postModified = false;
+        const nextPostAuthorName = post.authorId === targetUserId ? cleanName : post.authorName;
+        if (nextPostAuthorName !== post.authorName) postModified = true;
+        const nextComments = post.comments.map((cm) => {
+          if (cm.authorId === targetUserId && cm.authorName !== cleanName) {
+            postModified = true;
+            return { ...cm, authorName: cleanName };
+          }
+          return cm;
+        });
+        if (postModified) {
+          postsChanged = true;
+          return {
+            ...post,
+            authorName: nextPostAuthorName,
+            comments: nextComments,
+          };
+        }
+        return post;
+      });
+      if (postsChanged) {
+        this.setItem(STORAGE_KEYS.POSTS, updatedPosts);
+      }
+
+      const submissions = this.getItem<AssignmentSubmission[]>(
+        STORAGE_KEYS.SUBMISSIONS,
+        INITIAL_SUBMISSIONS
+      );
+      let subsChanged = false;
+      const updatedSubs = submissions.map((sub) => {
+        if (sub.studentId === targetUserId && sub.studentName !== cleanName) {
+          subsChanged = true;
+          return { ...sub, studentName: cleanName };
+        }
+        return sub;
+      });
+      if (subsChanged) {
+        this.setItem(STORAGE_KEYS.SUBMISSIONS, updatedSubs);
+      }
+    }
+
+    // Update student course enrollments if provided
+    if (targetUser.role === 'student' && Array.isArray(updates.enrolledCourseIds)) {
+      const desiredSet = new Set(updates.enrolledCourseIds);
+      const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+      const changedCourses: Course[] = [];
+      const updatedCourses = courses.map((course) => {
+        const currentlyEnrolled = course.enrolledStudentIds.includes(targetUserId);
+        const shouldBeEnrolled = desiredSet.has(course.id);
+        if (currentlyEnrolled === shouldBeEnrolled) return course;
+
+        const nextEnrolledIds = shouldBeEnrolled
+          ? Array.from(new Set([...course.enrolledStudentIds, targetUserId]))
+          : course.enrolledStudentIds.filter((id) => id !== targetUserId);
+        const nextCourse: Course = {
+          ...course,
+          enrolledStudentIds: nextEnrolledIds,
+        };
+        changedCourses.push(nextCourse);
+        this.markLocalWrite(nextCourse.id);
+        return nextCourse;
+      });
+
+      if (changedCourses.length > 0) {
+        this.setItem(STORAGE_KEYS.COURSES, updatedCourses);
+        changedCourses.forEach((c) => {
+          try {
+            SupabaseService.upsertCourse(c).catch(() => {});
+          } catch {
+            // ignore
+          }
+        });
+      }
+    }
+
+    this.markLocalWrite(updatedUser.id);
+    try {
+      SupabaseService.upsertProfile(updatedUser, true).catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    this.recordAuditLog({
+      actor,
+      category: 'user',
+      actionCode: 'USER_PROFILE_UPDATED',
+      actionLabel:
+        actor.id === targetUserId
+          ? 'မိမိအကောင့် အချက်အလက် ပြင်ဆင်ခြင်း (Self Profile Updated)'
+          : 'အကောင့် အချက်အလက် ပြင်ဆင်ခြင်း (User Account Info Edited)',
+      severity: 'info',
+      targetType: 'user',
+      targetId: updatedUser.id,
+      targetName: `${updatedUser.name} (@${updatedUser.username})`,
+      summary: `${actor.name} သည် "${updatedUser.name}" (@${updatedUser.username} · ${updatedUser.role}) ၏ အကောင့်အချက်အလက်များကို ပြင်ဆင်သိမ်းဆည်းခဲ့ပါသည်။`,
+      details: `Email: ${updatedUser.email} | Phone: ${updatedUser.phone || '—'} | Title: ${
+        updatedUser.title || '—'
+      } | Gender: ${updatedUser.gender || '—'} | Address: ${updatedUser.address || '—'}`,
+    });
+
+    return { success: true, user: updatedUser };
   }
 
   static acceptAcademyRules(userId: string): User | null {
@@ -2793,7 +3020,46 @@ export class ClassroomDB {
   private static lastFullPullAt = 0;
   private static lastCatalogPullAt = 0;
   private static lastProfilePullAt = 0;
+  private static pullMetaLoaded = false;
   private static purgedRemoteIds = new Set<string>();
+
+  private static loadPullTimestampsFromCache(): void {
+    if (this.pullMetaLoaded || typeof window === 'undefined') return;
+    this.pullMetaLoaded = true;
+    try {
+      const raw = localStorage.getItem('classroom_os_pull_meta_v2');
+      if (raw) {
+        const parsed = JSON.parse(raw) as {
+          lastFullPullAt?: number;
+          lastCatalogPullAt?: number;
+          lastProfilePullAt?: number;
+        };
+        if (typeof parsed.lastFullPullAt === 'number') this.lastFullPullAt = parsed.lastFullPullAt;
+        if (typeof parsed.lastCatalogPullAt === 'number')
+          this.lastCatalogPullAt = parsed.lastCatalogPullAt;
+        if (typeof parsed.lastProfilePullAt === 'number')
+          this.lastProfilePullAt = parsed.lastProfilePullAt;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  private static savePullTimestampsToCache(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(
+        'classroom_os_pull_meta_v2',
+        JSON.stringify({
+          lastFullPullAt: this.lastFullPullAt,
+          lastCatalogPullAt: this.lastCatalogPullAt,
+          lastProfilePullAt: this.lastProfilePullAt,
+        })
+      );
+    } catch {
+      // ignore
+    }
+  }
 
   private static extractTimestampFromId(id?: string): number | undefined {
     if (!id) return undefined;
@@ -2878,12 +3144,13 @@ export class ClassroomDB {
       this.purgeExpiredNotifications() ||
       this.purgeExpiredAuditLogs();
 
+    this.loadPullTimestampsFromCache();
     const force = Boolean(options?.force);
     const onlyProfiles = Boolean(options?.onlyProfiles);
     const isBackground = Boolean(options?.background);
     const now = Date.now();
-    const COOLDOWN_MS = 35_000; // 35s background cooldown to keep Supabase Egress strictly < 5.5 GB
-    const CATALOG_TTL_MS = 600_000; // 10-minute catalog cache in background (instant on explicit force/action)
+    const COOLDOWN_MS = 35_000; // 35s Client-Side Cache TTL for stream/attendance to keep Supabase Egress strictly < 5.5 GB
+    const CATALOG_TTL_MS = 600_000; // 10-minute Client-Side Cache TTL for catalog (courses, assignments, quizzes, profiles)
 
     if (!force) {
       if (onlyProfiles && now - this.lastProfilePullAt < COOLDOWN_MS) {
@@ -2913,6 +3180,7 @@ export class ClassroomDB {
 
         if (onlyProfiles) {
           this.lastProfilePullAt = Date.now();
+          this.savePullTimestampsToCache();
           const remoteProfiles = await SupabaseService.getRemoteProfiles();
           if (!remoteProfiles || remoteProfiles.length === 0) {
             return purgedLocalNotifs;
@@ -2938,7 +3206,7 @@ export class ClassroomDB {
             if (deletedSet.has(ru.id)) return;
             const existing = userMap.get(ru.id);
             const resolvedAvatar =
-              ru.role === 'student'
+              ru.role !== 'admin'
                 ? ''
                 : this.isRecentLocalWrite(ru.id)
                 ? existing?.avatar || ru.avatar || ''
@@ -2970,11 +3238,13 @@ export class ClassroomDB {
         }
 
         this.lastFullPullAt = now;
-        const shouldFetchCatalog = !isBackground || force || now - this.lastCatalogPullAt >= CATALOG_TTL_MS;
+        const shouldFetchCatalog =
+          !isBackground || force || now - this.lastCatalogPullAt >= CATALOG_TTL_MS;
         if (shouldFetchCatalog) {
           this.lastCatalogPullAt = now;
           this.lastProfilePullAt = now;
         }
+        this.savePullTimestampsToCache();
 
         const loggedUser = this.getCurrentUser();
         const isStudentLightweight = Boolean(loggedUser && loggedUser.role === 'student');
@@ -3002,7 +3272,7 @@ export class ClassroomDB {
 
         const knownAvatars = new Map<string, string>();
         this.getAllUsers().forEach((u) => {
-          if (u.id && u.role !== 'student' && u.avatar) {
+          if (u.id && u.role === 'admin' && u.avatar) {
             knownAvatars.set(u.id, u.avatar);
           }
         });
@@ -3056,6 +3326,10 @@ export class ClassroomDB {
           }
         });
 
+        const isAlreadyCloudSynced =
+          typeof window !== 'undefined' &&
+          localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) === 'true';
+
         const [
           remoteProfiles,
           remoteCourses,
@@ -3070,13 +3344,13 @@ export class ClassroomDB {
             ? SupabaseService.getRemoteProfiles(false, {
                 studentLightweight: Boolean(isStudentLightweight && loggedUser),
                 currentUserId: loggedUser?.id,
-                knownAvatars: isBackground ? knownAvatars : undefined,
+                knownAvatars: isAlreadyCloudSynced || isBackground ? knownAvatars : undefined,
               })
             : Promise.resolve(null),
           shouldFetchCatalog ? SupabaseService.getRemoteCourses(knownBanners) : Promise.resolve(null),
           SupabaseService.getRemotePosts(
             studentScopedCourseIds,
-            isBackground ? knownPostsMap : undefined
+            isAlreadyCloudSynced || isBackground ? knownPostsMap : undefined
           ),
           shouldFetchCatalog ? SupabaseService.getRemoteAssignments() : Promise.resolve(null),
           shouldFetchCatalog ? SupabaseService.getRemoteQuizzes() : Promise.resolve(null),
@@ -3176,7 +3450,7 @@ export class ClassroomDB {
             }
             const existing = userMap.get(ru.id);
             const resolvedAvatar =
-              ru.role === 'student'
+              ru.role !== 'admin'
                 ? ''
                 : this.isRecentLocalWrite(ru.id)
                 ? existing?.avatar || ru.avatar || ''
@@ -3211,7 +3485,7 @@ export class ClassroomDB {
           }
         } else {
           this.getAllUsers().forEach((u) => {
-            latestAvatarByUserId.set(u.id, u.role === 'student' ? '' : u.avatar || '');
+            latestAvatarByUserId.set(u.id, u.role !== 'admin' ? '' : u.avatar || '');
           });
         }
 
@@ -3425,7 +3699,7 @@ export class ClassroomDB {
                 : rp.createdAt || existing?.createdAt || 'Recently';
 
             const liveAuthorAvatar =
-              rp.authorRole === 'student'
+              rp.authorRole !== 'admin'
                 ? ''
                 : latestAvatarByUserId.get(rp.authorId) || rp.authorAvatar || existing?.authorAvatar || '';
 
@@ -3433,7 +3707,7 @@ export class ClassroomDB {
               (cm) => ({
                 ...cm,
                 authorAvatar:
-                  cm.authorRole === 'student'
+                  cm.authorRole !== 'admin'
                     ? ''
                     : latestAvatarByUserId.get(cm.authorId) || cm.authorAvatar || '',
               })
@@ -4016,7 +4290,7 @@ export class ClassroomDB {
     const newPost: CoursePost = {
       ...postData,
       attachments: safeAttachments,
-      authorAvatar: currentUser.role === 'student' ? '' : currentUser.avatar || postData.authorAvatar,
+      authorAvatar: currentUser.role !== 'admin' ? '' : currentUser.avatar || postData.authorAvatar,
       isPinned,
       status: isScheduled ? 'scheduled' : 'published',
       id: `post-${nowMs}`,
@@ -4497,7 +4771,7 @@ export class ClassroomDB {
       authorId: currentUser.id,
       authorName: currentUser.name,
       authorRole: currentUser.role,
-      authorAvatar: currentUser.role === 'student' ? '' : currentUser.avatar,
+      authorAvatar: currentUser.role !== 'admin' ? '' : currentUser.avatar,
       content: cleanContent,
       createdAt: this.formatPostTimestamp(nowMs),
     };

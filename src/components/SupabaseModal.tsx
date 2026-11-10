@@ -33,8 +33,11 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
     connected: boolean;
     message: string;
   } | null>(null);
+  const [cacheTick, setCacheTick] = useState(0);
 
   if (!isOpen) return null;
+
+  const cacheStats = SupabaseService.getClientCacheStats();
 
   const handleCopySQL = () => {
     navigator.clipboard.writeText(SUPABASE_SQL_SCHEMA);
@@ -221,20 +224,70 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
               </div>
             </div>
 
-            {/* Supabase Free Plan Quota & Sub-5.5GB Egress Guard Banner */}
-            <div className="p-3 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-800/60 space-y-1.5">
-              <div className="flex items-center justify-between gap-2">
+            {/* Supabase Free Plan Quota & Client-Side Caching Banner */}
+            <div className="p-3.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-800/60 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
                   <Sparkles className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                  <span>Ultra-Low Egress Guard (&lt; 5.5 GB Free Plan Protection Active)</span>
+                  <span>Client-Side Caching &amp; Sub-5.5GB Egress Guard (Active)</span>
                 </span>
-                <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-600 text-white">
-                  95% Egress Cut
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-600 text-white">
+                    ⚡ Client Cache Hits: {cacheStats.cacheHits} ({cacheStats.savedMBFormatted} Saved)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      SupabaseService.clearClientCache();
+                      setCacheTick((t) => t + 1);
+                      setConnectionStatus({
+                        tested: true,
+                        connected: true,
+                        message:
+                          '🔄 Client-Side Cache ကို ရှင်းလင်းပြီး အသစ်ပြန်လည် စတင်လိုက်ပါပြီ (Cache Refreshed)!',
+                      });
+                    }}
+                    className="text-[10px] font-bold px-2 py-0.5 rounded bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border border-emerald-300 dark:border-emerald-800 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 cursor-pointer transition-colors"
+                    title="Client-Side Cache အသစ်ပြန်လည်ရယူရန်"
+                  >
+                    Reset Cache
+                  </button>
+                </div>
               </div>
+
+              <div
+                key={cacheTick}
+                className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-[11px]"
+              >
+                <div className="p-2 rounded-lg bg-white/90 dark:bg-slate-900/80 border border-emerald-200/70 dark:border-emerald-800/60">
+                  <span className="text-[10px] text-slate-400 block">Cache Hits</span>
+                  <span className="font-extrabold text-emerald-700 dark:text-emerald-400 font-mono">
+                    {cacheStats.cacheHits} hits
+                  </span>
+                </div>
+                <div className="p-2 rounded-lg bg-white/90 dark:bg-slate-900/80 border border-emerald-200/70 dark:border-emerald-800/60">
+                  <span className="text-[10px] text-slate-400 block">Egress Saved</span>
+                  <span className="font-extrabold text-emerald-700 dark:text-emerald-400 font-mono">
+                    {cacheStats.savedMBFormatted}
+                  </span>
+                </div>
+                <div className="p-2 rounded-lg bg-white/90 dark:bg-slate-900/80 border border-emerald-200/70 dark:border-emerald-800/60">
+                  <span className="text-[10px] text-slate-400 block">Cached Banners</span>
+                  <span className="font-extrabold text-indigo-700 dark:text-indigo-400 font-mono">
+                    {cacheStats.cachedBannersCount} courses
+                  </span>
+                </div>
+                <div className="p-2 rounded-lg bg-white/90 dark:bg-slate-900/80 border border-emerald-200/70 dark:border-emerald-800/60">
+                  <span className="text-[10px] text-slate-400 block">Cached Queries</span>
+                  <span className="font-extrabold text-purple-700 dark:text-purple-400 font-mono">
+                    {cacheStats.activeQueryCacheCount} tables
+                  </span>
+                </div>
+              </div>
+
               <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
-                • <b>Delta Sync (Posts, Attendance, Courses &amp; Profiles)</b>: ပြောင်းလဲမှုရှိသော Data အသစ်များကိုသာ ရွေးချယ်ဆွဲယူပြီး ပိုလျှံသော <code className="font-mono">author_avatar</code>, <code className="font-mono">banner_image</code> နှင့် <code className="font-mono">records</code> JSONB များကို အကြိမ်ကြိမ် ပြန်မဆွဲတော့ပါ။<br />
-                • <b>Tab-Switch Egress Shield</b>: Messenger / Telegram နှင့် Classroom ကြား Tab အသွားအပြန် လုပ်ချိန်တွင် Full Sync မလုပ်တော့ဘဲ 0.3 KB Delta စစ်ဆေးမှုသာ ပြုလုပ်ပေးပါသည်။<br />
+                • <b>Persistent Client-Side Asset &amp; Query Cache</b>: Course Banner ပုံများ၊ Lead Mentor (Admin) Profile ပုံ၊ Posts၊ Quizzes နှင့် Assignments များကို Browser ၏ LocalStorage Cache တွင် သိမ်းဆည်းထားသဖြင့် Page Refresh လုပ်ချိန်တိုင်း Supabase မှ အစအဆုံး ပြန်ဆွဲရန် မလိုတော့ပါ (0 Bytes Egress on Cache Hit)။<br />
+                • <b>Write-Through Cache Invalidation &amp; Delta Sync</b>: ဆရာ သို့မဟုတ် ကျောင်းသားတစ်ဦးမှ Post အသစ်တင်ခြင်း၊ Comment ပေးခြင်း၊ Attendance ဖွင့်/ပိတ်ခြင်း ပြုလုပ်မှသာ ပြောင်းလဲသွားသော Row အသစ်ကို ကွက်၍ ဆွဲယူပေးပါသည်။<br />
                 • <b>1-Click Database Slimmer</b>: အထက်ပါ <b>&quot;📉 Egress &lt; 5.5 GB လျှော့ချမည်&quot;</b> ခလုတ်ကို နှိပ်ရုံဖြင့် Supabase ထဲရှိ ပုံဟောင်း/Data အပိုများအားလုံးကို ချက်ချင်း ဖယ်ရှားချုံ့ပေးပါသည်။
               </p>
             </div>
@@ -244,12 +297,12 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
           <div className="space-y-2.5">
             <h4 className="font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
               <Users className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-              <span>Configured User Roles (Admin, Co-Admin & Students)</span>
+              <span>Configured User Roles (Lead Mentor (Admin), Co-Admin &amp; Students)</span>
             </h4>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
               <div className="p-3 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60">
                 <span className="text-xs font-bold text-indigo-700 dark:text-indigo-300 block">
-                  🛡️ Administrator
+                  🛡️ Lead Mentor (Admin)
                 </span>
                 <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">
                   Full governance: Create/delete courses, publish stream posts, pin up to 3 posts, schedule posts, manage student directory, attendance, and grade assignments.

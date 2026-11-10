@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { User, NotificationItem } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
 import { ProfilePictureModal } from './ProfilePictureModal';
+import { EditUserAccountModal } from './EditUserAccountModal';
 import { AcademyLogo } from './AcademyLogo';
 import { PWAInstallButton } from './PWAInstallButton';
 import { useBackHandler } from '../utils/backNavigation';
@@ -28,6 +29,7 @@ import {
   Camera,
   ScrollText,
   CheckCircle2,
+  UserCog,
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -73,8 +75,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [showNotifications, setShowNotifications] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  // Profile Picture state
+  // Profile Picture state (Primary Admin only)
   const [showProfilePictureModal, setShowProfilePictureModal] = useState(false);
+
+  // Edit Own Account Info state (Admin & Co-Admin)
+  const [showEditMyAccountModal, setShowEditMyAccountModal] = useState(false);
 
   // Change Password state
   const [showPasswordModal, setShowPasswordModal] = useState(false);
@@ -84,6 +89,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   useBackHandler(showNotifications, () => setShowNotifications(false));
   useBackHandler(showUserDropdown, () => setShowUserDropdown(false));
   useBackHandler(showProfilePictureModal, () => setShowProfilePictureModal(false));
+  useBackHandler(showEditMyAccountModal, () => setShowEditMyAccountModal(false));
   useBackHandler(showPasswordModal, () => setShowPasswordModal(false));
   const [currentPwd, setCurrentPwd] = useState('');
   const [newPwd, setNewPwd] = useState('');
@@ -149,7 +155,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
 
           <span className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 hidden xs:inline-block">
-            · {currentUser.role === 'admin' ? 'Admin (ဆရာ)' : currentUser.role === 'co_admin' ? 'Co-Admin (တွဲဖက်)' : 'Student (ကျောင်းသား)'}
+            · {currentUser.role === 'admin' ? 'Lead Mentor (Admin)' : currentUser.role === 'co_admin' ? 'Co-Admin (တွဲဖက်)' : 'Student (ကျောင်းသား)'}
           </span>
         </div>
 
@@ -351,7 +357,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               }}
               className="neu-btn flex items-center gap-2 px-2.5 py-1.5 rounded-xl cursor-pointer"
             >
-              {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && currentUser.avatar && (
+              {currentUser.role === 'admin' && currentUser.avatar && (
                 <img
                   src={currentUser.avatar}
                   alt={currentUser.name}
@@ -381,7 +387,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             {showUserDropdown && (
               <div className="neu-card absolute right-0 mt-3 w-72 sm:w-80 rounded-2xl p-3 z-50 space-y-2">
                 <div className="neu-inset-sm p-3 rounded-xl flex items-center gap-3">
-                  {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && currentUser.avatar && (
+                  {currentUser.role === 'admin' && currentUser.avatar && (
                     <img
                       src={currentUser.avatar}
                       alt={currentUser.name}
@@ -423,6 +429,19 @@ export const Navbar: React.FC<NavbarProps> = ({
                     </button>
                   )}
                   {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
+                    <button
+                      onClick={() => {
+                        setShowUserDropdown(false);
+                        setShowEditMyAccountModal(true);
+                      }}
+                      className="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-indigo-700 dark:text-indigo-300 bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors cursor-pointer font-bold"
+                    >
+                      <UserCog className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                      <span>မိမိအကောင့် အချက်အလက်ပြင်ရန် (Edit My Info)</span>
+                    </button>
+                  )}
+
+                  {currentUser.role === 'admin' && (
                     <button
                       onClick={() => {
                         setShowUserDropdown(false);
@@ -503,7 +522,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         <div className="lg:hidden max-w-7xl mx-auto mt-2 neu-card rounded-2xl px-4 py-3.5 space-y-2.5 animate-in slide-in-from-top-2 duration-150">
           <div className="p-3 rounded-xl neu-inset-sm mb-2 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && currentUser.avatar && (
+              {currentUser.role === 'admin' && currentUser.avatar && (
                 <img
                   src={currentUser.avatar}
                   alt={currentUser.name}
@@ -523,7 +542,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </div>
                 <div className="text-[10px] text-slate-500 dark:text-slate-400 capitalize">
                   {currentUser.role === 'admin'
-                    ? 'Faculty / Admin (ဆရာ)'
+                    ? 'Lead Mentor (Admin)'
                     : currentUser.role === 'co_admin'
                     ? 'Co-Admin (တွဲဖက် အက်ဒမင်)'
                     : 'Student (ကျောင်းသား)'}
@@ -600,8 +619,22 @@ export const Navbar: React.FC<NavbarProps> = ({
               </button>
             )}
 
-            {/* Profile Picture Option in Mobile Drawer (Admin & Co-Admin only) */}
+            {/* Edit Own Account Info in Mobile Drawer (Admin & Co-Admin) */}
             {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
+              <button
+                onClick={() => {
+                  setIsMobileMenuOpen(false);
+                  setShowEditMyAccountModal(true);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-indigo-700 dark:text-indigo-300 bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-left font-bold cursor-pointer"
+              >
+                <UserCog className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <span>မိမိအကောင့် အချက်အလက်ပြင်ရန် (Edit My Account)</span>
+              </button>
+            )}
+
+            {/* Profile Picture Option in Mobile Drawer (Primary Admin only) */}
+            {currentUser.role === 'admin' && (
               <button
                 onClick={() => {
                   setIsMobileMenuOpen(false);
@@ -667,14 +700,27 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
       )}
 
-      {/* Profile Picture Modal (Admin & Co-Admin only) */}
-      {showProfilePictureModal && (currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
+      {/* Profile Picture Modal (Primary Admin only) */}
+      {showProfilePictureModal && currentUser.role === 'admin' && (
         <ProfilePictureModal
           user={currentUser}
           isOpen={showProfilePictureModal}
           onClose={() => setShowProfilePictureModal(false)}
           onSuccess={(updated) => {
             onUpdateCurrentUser(updated);
+          }}
+        />
+      )}
+
+      {/* Edit Own Account Info Modal (Admin & Co-Admin) */}
+      {showEditMyAccountModal && (currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
+        <EditUserAccountModal
+          user={currentUser}
+          isOpen={showEditMyAccountModal}
+          onClose={() => setShowEditMyAccountModal(false)}
+          onSuccess={(updated) => {
+            onUpdateCurrentUser(updated);
+            onRefreshNotifications();
           }}
         />
       )}

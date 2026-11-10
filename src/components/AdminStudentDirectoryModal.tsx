@@ -3,6 +3,7 @@ import { Course, User, UserRole } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
 import { SupabaseService } from '../services/supabase';
 import { ProfilePictureModal } from './ProfilePictureModal';
+import { EditUserAccountModal } from './EditUserAccountModal';
 import { useBackHandler } from '../utils/backNavigation';
 import {
   Users,
@@ -28,6 +29,8 @@ import {
   KeyRound,
   X,
   FileSpreadsheet,
+  Edit3,
+  UserCog,
 } from 'lucide-react';
 
 import { PRESET_AVATARS as SHARED_PRESET_AVATARS } from '../data/presetAvatars';
@@ -80,8 +83,11 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // Profile Picture Editing Modal state
+  // Profile Picture Editing Modal state (Primary Admin only)
   const [editingAvatarUser, setEditingAvatarUser] = useState<User | null>(null);
+
+  // Full Account Info Editing Modal state (Own Account + Student Accounts)
+  const [editingAccountUser, setEditingAccountUser] = useState<User | null>(null);
 
   // Revealed passwords in directory table
   const [revealedPasswords, setRevealedPasswords] = useState<Record<string, boolean>>({});
@@ -96,6 +102,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
 
   // Step-by-step mobile Back button handlers for nested sub-dialogs
   useBackHandler(!!editingAvatarUser, () => setEditingAvatarUser(null));
+  useBackHandler(!!editingAccountUser, () => setEditingAccountUser(null));
   useBackHandler(!!resettingUser, () => setResettingUser(null));
   useBackHandler(!!userToDelete, () => setUserToDelete(null));
   useBackHandler(showNewForm, () => setShowNewForm(false));
@@ -502,7 +509,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
       phone: phone.trim(),
       role: selectedRole,
       password: cleanPwd,
-      avatar: selectedRole === 'student' ? '' : avatar,
+      avatar: selectedRole === 'admin' ? avatar : '',
       title: title.trim() || undefined,
       gender,
       address: address.trim() || undefined,
@@ -1811,6 +1818,15 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                   <Copy className="w-3 h-3" />
                   <span>Copy Login Info</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingAccountUser(existingUser)}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold cursor-pointer"
+                  title="ဤအကောင့်၏ အမည်၊ ဖုန်း၊ Email၊ Password နှင့် အတန်းများကို ပြင်ဆင်ရန်"
+                >
+                  <Edit3 className="w-3 h-3" />
+                  <span>Edit Info</span>
+                </button>
               </div>
             )}
 
@@ -2058,6 +2074,22 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                 <UserPlus className="w-3.5 h-3.5" />
                 <span>{showNewForm ? 'စာရင်းပြန်ကြည့်မည်' : '+ အကောင့်သစ် ဖွင့်မည် (Add User)'}</span>
               </button>
+
+              {currentLoggedUser && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const freshSelf =
+                      allUsers.find((u) => u.id === currentLoggedUser.id) || currentLoggedUser;
+                    setEditingAccountUser(freshSelf);
+                  }}
+                  className="px-3 py-2 rounded-xl text-xs font-bold bg-indigo-50 dark:bg-indigo-950/70 hover:bg-indigo-100 dark:hover:bg-indigo-900/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                  title="မိမိ၏ အကောင့်အချက်အလက် (အမည်၊ Username၊ Email၊ ဖုန်း၊ Password) ပြင်ဆင်ရန်"
+                >
+                  <UserCog className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                  <span>မိမိအကောင့်ပြင်ရန်</span>
+                </button>
+              )}
 
               <button
                 type="button"
@@ -2650,13 +2682,13 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                   </div>
                 </div>
 
-                {/* Profile Picture Selection (Only for Admin & Co-Admin) */}
-                {(selectedRole === 'admin' || selectedRole === 'co_admin') && (
+                {/* Profile Picture Selection (Strictly Primary Admin Only — Co-Admin & Students have no profile photos) */}
+                {selectedRole === 'admin' && (
                   <div className="p-3 bg-slate-50 dark:bg-slate-900/60 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2.5">
                     <div className="flex items-center justify-between flex-wrap gap-2">
                       <label className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
                         <Camera className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                        <span>Profile Picture (Admin / Co-Admin ကိုယ်ရေးဓာတ်ပုံ)</span>
+                        <span>Profile Picture (Primary Admin ကိုယ်ရေးဓာတ်ပုံ)</span>
                       </label>
                       <button
                         type="button"
@@ -3605,7 +3637,7 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                         {/* Left: Identity & Contact */}
                         <div className="flex items-start gap-3 min-w-0">
-                          {user.role === 'admin' || user.role === 'co_admin' ? (
+                          {user.role === 'admin' ? (
                             <div className="relative group/avatar shrink-0">
                               <img
                                 src={user.avatar || PRESET_AVATARS[0].url}
@@ -3621,11 +3653,16 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                                   type="button"
                                   onClick={() => setEditingAvatarUser(user)}
                                   className="absolute inset-0 bg-slate-900/60 rounded-full opacity-0 group-hover/avatar:opacity-100 flex items-center justify-center text-white transition-opacity cursor-pointer"
-                                  title="Change Profile Photo"
+                                  title="Change Admin Profile Photo"
                                 >
                                   <Camera className="w-4 h-4" />
                                 </button>
                               )}
+                            </div>
+                          ) : user.role === 'co_admin' ? (
+                            /* Clean Non-Photo Co-Admin Badge (Profile Photo Function Removed for Co-Admin) */
+                            <div className="w-10 h-10 rounded-xl bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300 font-extrabold text-xs flex items-center justify-center shrink-0 border border-purple-200 dark:border-purple-800">
+                              👥
                             </div>
                           ) : (
                             /* Clean Numbered Index Badge for Students (Zero Student Profile Photo) */
@@ -3776,6 +3813,20 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                                 <Copy className="w-3 h-3" />
                                 <span>Copy</span>
                               </button>
+
+                              {(!isCoAdminSession ||
+                                user.role === 'student' ||
+                                user.id === currentLoggedUser?.id) && (
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingAccountUser(user)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/70 hover:bg-emerald-100 dark:hover:bg-emerald-900/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-800/60 text-[11px] font-bold cursor-pointer"
+                                  title="အကောင့်အချက်အလက် (အမည်၊ Username၊ Email၊ ဖုန်း၊ အလုပ်အကိုင်၊ လိပ်စာ၊ Password၊ အတန်းများ) ပြင်ဆင်ရန်"
+                                >
+                                  <Edit3 className="w-3 h-3" />
+                                  <span>Edit</span>
+                                </button>
+                              )}
 
                               <button
                                 type="button"
@@ -3999,8 +4050,8 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
         </div>
       </div>
 
-      {/* Profile Picture Modal for Admin & Co-Admin accounts only */}
-      {editingAvatarUser && (editingAvatarUser.role === 'admin' || editingAvatarUser.role === 'co_admin') && (
+      {/* Profile Picture Modal for Primary Admin accounts only */}
+      {editingAvatarUser && editingAvatarUser.role === 'admin' && (
         <ProfilePictureModal
           user={editingAvatarUser}
           isOpen={true}
@@ -4008,6 +4059,24 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
           onSuccess={() => {
             setEditingAvatarUser(null);
             onRefresh();
+          }}
+        />
+      )}
+
+      {/* Full Account Info Edit Modal (Own Account + Student Accounts) */}
+      {editingAccountUser && (
+        <EditUserAccountModal
+          user={editingAccountUser}
+          isOpen={true}
+          courses={courses}
+          onClose={() => setEditingAccountUser(null)}
+          onSuccess={(updatedUser) => {
+            setEditingAccountUser(null);
+            onRefresh();
+            setToastMsg(
+              `✅ "${updatedUser.name}" (@${updatedUser.username}) ၏ အကောင့်အချက်အလက်များကို အောင်မြင်စွာ ပြင်ဆင်သိမ်းဆည်းပြီးပါပြီ!`
+            );
+            setTimeout(() => setToastMsg(null), 5000);
           }}
         />
       )}

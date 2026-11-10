@@ -304,7 +304,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
           authorId: currentUser.id,
           authorName: currentUser.name,
           authorRole: currentUser.role,
-          authorAvatar: currentUser.role === 'student' ? '' : currentUser.avatar,
+          authorAvatar: currentUser.role !== 'admin' ? '' : currentUser.avatar,
           title: postTitle.trim(),
           content: postContent.trim(),
           postType,
@@ -1034,12 +1034,18 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
               className="flex items-center gap-3 flex-1 cursor-pointer group"
             >
               <div className="relative shrink-0">
-                <img
-                  src={currentUser.avatar}
-                  alt={currentUser.name}
-                  referrerPolicy="no-referrer"
-                  className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover ring-2 ring-indigo-500/20 group-hover:ring-indigo-500 transition-all"
-                />
+                {currentUser.role === 'admin' && currentUser.avatar ? (
+                  <img
+                    src={currentUser.avatar}
+                    alt={currentUser.name}
+                    referrerPolicy="no-referrer"
+                    className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover ring-2 ring-indigo-500/20 group-hover:ring-indigo-500 transition-all"
+                  />
+                ) : (
+                  <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 font-extrabold text-xs flex items-center justify-center border border-indigo-200 dark:border-indigo-800">
+                    {currentUser.role === 'co_admin' ? '👥' : '🎓'}
+                  </div>
+                )}
                 <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 rounded-full ring-2 ring-white dark:ring-slate-900" />
               </div>
               <div className="flex-1 text-xs sm:text-sm text-slate-500 dark:text-slate-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors font-medium truncate">
@@ -1119,12 +1125,18 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
             {/* Header: User profile, Audience selector & Post category */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3.5 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-3">
-                <img
-                  src={currentUser.avatar}
-                  alt={currentUser.name}
-                  referrerPolicy="no-referrer"
-                  className="w-10 h-10 rounded-full object-cover ring-2 ring-indigo-500/30 shrink-0"
-                />
+                {currentUser.role === 'admin' && currentUser.avatar ? (
+                  <img
+                    src={currentUser.avatar}
+                    alt={currentUser.name}
+                    referrerPolicy="no-referrer"
+                    className="w-10 h-10 rounded-full object-cover ring-2 ring-indigo-500/30 shrink-0"
+                  />
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 font-extrabold text-xs flex items-center justify-center border border-indigo-200 dark:border-indigo-800 shrink-0">
+                    {currentUser.role === 'co_admin' ? '👥' : '🎓'}
+                  </div>
+                )}
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100">
@@ -1132,7 +1144,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                     </span>
                     <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800">
                       {currentUser.role === 'admin'
-                        ? 'Lead Instructor (Admin)'
+                        ? 'Lead Mentor (Admin)'
                         : currentUser.role === 'co_admin'
                         ? 'Co-Admin (တွဲဖက်ဆရာ)'
                         : 'Student (ကျောင်းသား)'}
@@ -1714,7 +1726,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                 <div className="p-3.5 sm:p-5 pb-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-2.5 sm:gap-3">
-                      {(post.authorRole === 'admin' || post.authorRole === 'co_admin') && (
+                      {post.authorRole === 'admin' ? (
                         <img
                           src={
                             userByIdMap.get(post.authorId)?.avatar ||
@@ -1729,7 +1741,11 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                           }}
                           className="w-8 h-8 sm:w-10 sm:h-10 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
                         />
-                      )}
+                      ) : post.authorRole === 'co_admin' ? (
+                        <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300 font-extrabold text-xs flex items-center justify-center border border-purple-200 dark:border-purple-800 shrink-0">
+                          👥
+                        </div>
+                      ) : null}
                       <div>
                         <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
                           <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100">
@@ -1737,7 +1753,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                           </span>
                           <span className="text-[10px] font-medium text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded">
                             {post.authorRole === 'admin'
-                              ? 'Instructor (Admin)'
+                              ? 'Lead Mentor (Admin)'
                               : post.authorRole === 'co_admin'
                               ? 'Co-Admin'
                               : 'Student'}
@@ -2057,14 +2073,15 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                           const commentUser = userByIdMap.get(comm.authorId);
                           const isCommentInstructor =
                             comm.authorRole === 'admin' || comm.authorRole === 'co_admin';
-                          const commentAvatar = isCommentInstructor
-                            ? commentUser?.avatar ||
-                              comm.authorAvatar ||
-                              "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect width='150' height='150' rx='75' fill='%234f46e5'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.9'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.9'/%3E%3C/svg%3E"
-                            : '';
+                          const commentAvatar =
+                            comm.authorRole === 'admin'
+                              ? commentUser?.avatar ||
+                                comm.authorAvatar ||
+                                "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect width='150' height='150' rx='75' fill='%234f46e5'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.9'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.9'/%3E%3C/svg%3E"
+                              : '';
                           return (
                             <div key={comm.id} className="flex items-start gap-2.5 text-xs">
-                              {isCommentInstructor && commentAvatar && (
+                              {comm.authorRole === 'admin' && commentAvatar && (
                                 <img
                                   src={commentAvatar}
                                   alt={comm.authorName}
@@ -2085,7 +2102,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                                     </span>
                                     {isCommentInstructor ? (
                                       <span className="text-[9px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-1.5 py-0.5 rounded">
-                                        Instructor
+                                        {comm.authorRole === 'admin' ? 'Lead Mentor (Admin)' : 'Co-Admin'}
                                       </span>
                                     ) : (
                                       commentUser?.rulesAccepted && (
@@ -2124,7 +2141,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
 
                     {/* Add Comment Input Form */}
                     <div className="flex items-center gap-2.5 pt-1">
-                      {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && currentUser.avatar && (
+                      {currentUser.role === 'admin' && currentUser.avatar && (
                         <img
                           src={currentUser.avatar}
                           alt={currentUser.name}

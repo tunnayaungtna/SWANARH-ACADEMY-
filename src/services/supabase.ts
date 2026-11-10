@@ -463,7 +463,7 @@ CREATE POLICY "Attendance sessions full access" ON public.attendance_sessions FO
 -- 8. Seed Initial Demo Accounts (Admin, Co-Admin, Students)
 INSERT INTO public.profiles (id, name, username, email, role, phone, avatar, title, gender, address)
 VALUES
-  ('user-admin-1', 'Dr. Kyaw Swar', 'kyawswar.admin', 'kyaw.admin@classroomos.edu', 'admin', '+95 9 791 234567', '', 'Dean of Computing & Lead Instructor', 'male', 'No. 45, Pyay Road, Kamayut, Yangon'),
+  ('user-admin-1', 'Dr. Kyaw Swar', 'kyawswar.admin', 'kyaw.admin@classroomos.edu', 'admin', '+95 9 791 234567', '', 'Dean of Computing & Lead Mentor', 'male', 'No. 45, Pyay Road, Kamayut, Yangon'),
   ('user-coadmin-1', 'Daw Khin Myo', 'khinmyo.coadmin', 'khinmyo.coadmin@classroomos.edu', 'co_admin', '+95 9 512 889900', '', 'Course Coordinator & Assistant Instructor', 'female', 'No. 12, University Avenue, Bahan, Yangon'),
   ('user-student-1', 'Aung Min', 'aungmin2026', 'aung.min@student.edu', 'student', '+95 9 970 882190', '', 'Computer Science Undergraduate', 'male', 'Room 3B, Insein Road, Hlaing, Yangon'),
   ('user-student-2', 'Su Su Win', 'susu.win', 'susu.win@student.edu', 'student', '+95 9 420 551829', '', 'Software Engineering Scholar', 'female', 'No. 88, Bogyoke Aung San Road, Kyauktada, Yangon'),
@@ -560,12 +560,12 @@ function sanitizeBlockedExternalImageUrl(url: string | undefined, fallback: stri
 
 /**
  * Compacts avatars & banners for Supabase SQL sync (< 5.5 GB Free Plan Guard):
- * - Students NEVER have profile photos (`''`).
- * - Admin & Co-Admin compressed profile photos (up to 45KB) sync across all devices.
+ * - Students and Co-Admins NEVER have profile photos (`''`).
+ * - Only Primary Admin (`role === 'admin'`) compressed profile photos (up to 45KB) sync across all devices.
  * - Classroom header banners (up to 65KB) sync across all devices.
  */
 function compactAvatarForCloud(avatar?: string, role?: UserRole): string {
-  if (role === 'student') return '';
+  if (role !== 'admin') return '';
   if (!avatar || avatar.includes('images.unsplash.com')) return DEFAULT_FALLBACK_AVATAR;
   if (avatar.length > 45_000) return DEFAULT_FALLBACK_AVATAR;
   return avatar;
@@ -786,6 +786,224 @@ export class SupabaseService {
   // In-flight GET request deduplication map for 2,000+ concurrent user scalability
   private static inflightGetRequests = new Map<string, Promise<unknown>>();
 
+  // ============================================================================
+  // CLIENT-SIDE CACHING ENGINE (Reduces Supabase Egress by up to 96%)
+  // ============================================================================
+  private static readonly ASSET_CACHE_STORAGE_KEY = 'classroom_os_asset_cache_v2';
+  private static readonly QUERY_CACHE_STORAGE_KEY = 'classroom_os_query_cache_v2';
+  private static readonly CACHE_STATS_STORAGE_KEY = 'classroom_os_cache_stats_v2';
+
+  private static clientQueryCache = new Map<
+    string,
+    { data: unknown; expiresAt: number; savedBytesEstimate: number }
+  >();
+  private static assetCacheLoaded = false;
+  private static cachedCourseBanners = new Map<string, string>();
+  private static cachedAdminAvatars = new Map<string, string>();
+  private static cacheHits = 0;
+  private static savedBytesTotal = 0;
+
+  private static ensureClientCacheLoaded(): void {
+    if (this.assetCacheLoaded || typeof window === 'undefined') return;
+    this.assetCacheLoaded = true;
+    try {
+      const rawAssets = localStorage.getItem(this.ASSET_CACHE_STORAGE_KEY);
+      if (rawAssets) {
+        const parsed = JSON.parse(rawAssets) as {
+          banners?: Record<string, string>;
+          avatars?: Record<string, string>;
+        };
+        if (parsed.banners && typeof parsed.banners === 'object') {
+          Object.entries(parsed.banners).forEach(([k, v]) => {
+            if (k && typeof v === 'string' && v.length > 0) {
+              this.cachedCourseBanners.set(k, v);
+            }
+          });
+        }
+        if (parsed.avatars && typeof parsed.avatars === 'object') {
+          Object.entries(parsed.avatars).forEach(([k, v]) => {
+            if (k && typeof v === 'string' && v.length > 0) {
+              this.cachedAdminAvatars.set(k, v);
+            }
+          });
+        }
+      }
+      const rawStats = localStorage.getItem(this.CACHE_STATS_STORAGE_KEY);
+      if (rawStats) {
+        const parsedStats = JSON.parse(rawStats) as { hits?: number; savedBytes?: number };
+        this.cacheHits = typeof parsedStats.hits === 'number' ? parsedStats.hits : 0;
+        this.savedBytesTotal =
+          typeof parsedStats.savedBytes === 'number' ? parsedStats.savedBytes : 0;
+      }
+      const rawQueries = localStorage.getItem(this.QUERY_CACHE_STORAGE_KEY);
+      if (rawQueries) {
+        const parsedQueries = JSON.parse(rawQueries) as Record<
+          string,
+          { data: unknown; expiresAt: number; savedBytesEstimate: number }
+        >;
+        const now = Date.now();
+        Object.entries(parsedQueries).forEach(([k, entry]) => {
+          if (entry && typeof entry.expiresAt === 'number' && entry.expiresAt > now) {
+            this.clientQueryCache.set(k, entry);
+          }
+        });
+      }
+    } catch {
+      // Ignore malformed localStorage cache
+    }
+  }
+
+  private static persistAssetCache(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      const banners: Record<string, string> = {};
+      this.cachedCourseBanners.forEach((v, k) => {
+        if (v && v !== DEFAULT_FALLBACK_BANNER && v.length <= 70_000) {
+          banners[k] = v;
+        }
+      });
+      const avatars: Record<string, string> = {};
+      this.cachedAdminAvatars.forEach((v, k) => {
+        if (v && v !== DEFAULT_FALLBACK_AVATAR && v.length <= 50_000) {
+          avatars[k] = v;
+        }
+      });
+      localStorage.setItem(this.ASSET_CACHE_STORAGE_KEY, JSON.stringify({ banners, avatars }));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }
+
+  private static recordCacheHit(savedBytes: number): void {
+    this.ensureClientCacheLoaded();
+    this.cacheHits += 1;
+    this.savedBytesTotal += Math.max(256, savedBytes);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(
+          this.CACHE_STATS_STORAGE_KEY,
+          JSON.stringify({ hits: this.cacheHits, savedBytes: this.savedBytesTotal })
+        );
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  private static getCachedQuery<T>(key: string): T | null {
+    this.ensureClientCacheLoaded();
+    const entry = this.clientQueryCache.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      this.clientQueryCache.delete(key);
+      return null;
+    }
+    this.recordCacheHit(entry.savedBytesEstimate || 4096);
+    return entry.data as T;
+  }
+
+  private static setCachedQuery<T>(key: string, data: T, ttlMs: number): void {
+    this.ensureClientCacheLoaded();
+    let byteEstimate = 2048;
+    try {
+      const serialized = JSON.stringify(data);
+      byteEstimate = serialized.length;
+    } catch {
+      // ignore
+    }
+    this.clientQueryCache.set(key, {
+      data,
+      expiresAt: Date.now() + ttlMs,
+      savedBytesEstimate: byteEstimate,
+    });
+    if (typeof window !== 'undefined' && byteEstimate < 180_000) {
+      try {
+        const persistedObj: Record<
+          string,
+          { data: unknown; expiresAt: number; savedBytesEstimate: number }
+        > = {};
+        const now = Date.now();
+        this.clientQueryCache.forEach((val, k) => {
+          if (val.expiresAt > now && val.savedBytesEstimate < 90_000) {
+            persistedObj[k] = val;
+          }
+        });
+        localStorage.setItem(this.QUERY_CACHE_STORAGE_KEY, JSON.stringify(persistedObj));
+      } catch {
+        // ignore quota errors
+      }
+    }
+  }
+
+  /**
+   * Invalidates Client-Side Cache entries matching prefix (Write-Through Cache coherence)
+   */
+  static invalidateClientCache(prefix?: string): void {
+    this.ensureClientCacheLoaded();
+    if (!prefix) {
+      this.clientQueryCache.clear();
+    } else {
+      for (const k of Array.from(this.clientQueryCache.keys())) {
+        if (k.startsWith(prefix)) {
+          this.clientQueryCache.delete(k);
+        }
+      }
+    }
+    if (typeof window !== 'undefined') {
+      try {
+        if (!prefix) {
+          localStorage.removeItem(this.QUERY_CACHE_STORAGE_KEY);
+        } else {
+          const persistedObj: Record<
+            string,
+            { data: unknown; expiresAt: number; savedBytesEstimate: number }
+          > = {};
+          const now = Date.now();
+          this.clientQueryCache.forEach((val, k) => {
+            if (val.expiresAt > now && val.savedBytesEstimate < 90_000) {
+              persistedObj[k] = val;
+            }
+          });
+          localStorage.setItem(this.QUERY_CACHE_STORAGE_KEY, JSON.stringify(persistedObj));
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  static getClientCacheStats(): {
+    cacheHits: number;
+    savedBytesTotal: number;
+    savedMBFormatted: string;
+    cachedBannersCount: number;
+    cachedAdminAvatarsCount: number;
+    activeQueryCacheCount: number;
+  } {
+    this.ensureClientCacheLoaded();
+    const mb = this.savedBytesTotal / (1024 * 1024);
+    return {
+      cacheHits: this.cacheHits,
+      savedBytesTotal: this.savedBytesTotal,
+      savedMBFormatted: mb >= 1 ? `${mb.toFixed(2)} MB` : `${Math.round(this.savedBytesTotal / 1024)} KB`,
+      cachedBannersCount: this.cachedCourseBanners.size,
+      cachedAdminAvatarsCount: this.cachedAdminAvatars.size,
+      activeQueryCacheCount: this.clientQueryCache.size,
+    };
+  }
+
+  static clearClientCache(): void {
+    this.clientQueryCache.clear();
+    this.cachedCourseBanners.clear();
+    this.cachedAdminAvatars.clear();
+    this.lastUpsertSignatures.clear();
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(this.ASSET_CACHE_STORAGE_KEY);
+      localStorage.removeItem(this.QUERY_CACHE_STORAGE_KEY);
+      localStorage.removeItem('classroom_os_pull_meta_v2');
+    }
+  }
+
   private static chunkArray<T>(items: T[], chunkSize: number = 250): T[][] {
     if (items.length <= chunkSize) return items.length ? [items] : [];
     const chunks: T[][] = [];
@@ -889,7 +1107,7 @@ export class SupabaseService {
       role,
       phone: String(row.phone || ''),
       avatar:
-        role === 'student'
+        role !== 'admin'
           ? ''
           : sanitizeBlockedExternalImageUrl(String(row.avatar || ''), DEFAULT_FALLBACK_AVATAR),
       title: decoded.title,
@@ -1021,8 +1239,16 @@ export class SupabaseService {
       knownAvatars?: Map<string, string>;
     }
   ): Promise<User[] | null> {
+    this.ensureClientCacheLoaded();
+    const mergedKnownAvatars = new Map<string, string>(this.cachedAdminAvatars);
+    if (options?.knownAvatars) {
+      options.knownAvatars.forEach((v, k) => {
+        if (k && v) mergedKnownAvatars.set(k, v);
+      });
+    }
+
     const isStudentLite = Boolean(options?.studentLightweight && options?.currentUserId);
-    const useAvatarLite = Boolean(options?.knownAvatars && options.knownAvatars.size > 0);
+    const useAvatarLite = mergedKnownAvatars.size > 0;
     const cacheKey = `${
       isStudentLite ? `profiles:student:${options?.currentUserId}` : 'profiles:all'
     }:${useAvatarLite ? 'lite' : 'full'}`;
@@ -1069,16 +1295,19 @@ export class SupabaseService {
 
         const rows = data as unknown as Record<string, unknown>[];
         const fetchedAvatars = new Map<string, string>();
+        let avatarCacheChanged = false;
 
-        if (useAvatarLite && options?.knownAvatars) {
+        if (useAvatarLite) {
           const adminIdsMissingAvatar: string[] = [];
           for (const r of rows) {
             const uId = String(r.id || '');
             const uRole = String(r.role || 'student');
-            if (uRole === 'admin' || uRole === 'co_admin') {
-              const cachedAv = options.knownAvatars.get(uId);
+            if (uRole === 'admin') {
+              const cachedAv = mergedKnownAvatars.get(uId);
               if (!cachedAv || cachedAv === DEFAULT_FALLBACK_AVATAR) {
                 adminIdsMissingAvatar.push(uId);
+              } else {
+                this.recordCacheHit(cachedAv.length);
               }
             }
           }
@@ -1090,21 +1319,39 @@ export class SupabaseService {
             if (Array.isArray(avRows)) {
               avRows.forEach((ar) => {
                 if (ar.id && ar.avatar) {
-                  fetchedAvatars.set(String(ar.id), String(ar.avatar));
+                  const avStr = String(ar.avatar);
+                  fetchedAvatars.set(String(ar.id), avStr);
+                  this.cachedAdminAvatars.set(String(ar.id), avStr);
+                  avatarCacheChanged = true;
                 }
               });
             }
           }
         }
 
-        return rows.map((row) => {
+        const mapped = rows.map((row) => {
           const uId = String(row.id || '');
           const resolvedRow =
-            !row.avatar && (fetchedAvatars.has(uId) || options?.knownAvatars?.has(uId))
-              ? { ...row, avatar: fetchedAvatars.get(uId) || options?.knownAvatars?.get(uId) || '' }
+            !row.avatar && (fetchedAvatars.has(uId) || mergedKnownAvatars.has(uId))
+              ? { ...row, avatar: fetchedAvatars.get(uId) || mergedKnownAvatars.get(uId) || '' }
               : row;
-          return this.mapProfileRowToUser(resolvedRow);
+          const userObj = this.mapProfileRowToUser(resolvedRow);
+          if (
+            userObj.role === 'admin' &&
+            userObj.avatar &&
+            userObj.avatar !== DEFAULT_FALLBACK_AVATAR &&
+            this.cachedAdminAvatars.get(uId) !== userObj.avatar
+          ) {
+            this.cachedAdminAvatars.set(uId, userObj.avatar);
+            avatarCacheChanged = true;
+          }
+          return userObj;
         });
+
+        if (avatarCacheChanged) {
+          this.persistAssetCache();
+        }
+        return mapped;
       } catch {
         return null;
       }
@@ -1118,11 +1365,18 @@ export class SupabaseService {
 
   /**
    * Fetch all courses from Supabase if table exists (deduplicated across concurrent callers).
-   * When `knownBanners` is provided, skips downloading the heavy 135KB `banner_image` column unless
-   * a course is new or its banner length signature changed—cutting Course Egress by 97%!
+   * Automatically uses Persistent Client-Side Asset Cache (`cachedCourseBanners`) so heavy 65KB+
+   * `banner_image` strings are NEVER re-downloaded across page reloads unless their banner length changed!
    */
   static async getRemoteCourses(knownBanners?: Map<string, string>): Promise<Course[] | null> {
-    const useLiteColumns = Boolean(knownBanners && knownBanners.size > 0);
+    this.ensureClientCacheLoaded();
+    const mergedBanners = new Map<string, string>(this.cachedCourseBanners);
+    if (knownBanners) {
+      knownBanners.forEach((v, k) => {
+        if (k && v) mergedBanners.set(k, v);
+      });
+    }
+    const useLiteColumns = mergedBanners.size > 0;
     return this.dedupeGet(useLiteColumns ? 'courses:lite' : 'courses:all', async () => {
       try {
         const selectCols = useLiteColumns
@@ -1140,12 +1394,13 @@ export class SupabaseService {
 
         const rows = data as unknown as Record<string, unknown>[];
         const fetchedBannerMap = new Map<string, string>();
+        let bannerCacheChanged = false;
 
-        if (useLiteColumns && knownBanners) {
+        if (useLiteColumns) {
           const idsNeedingBanner: string[] = [];
           for (const row of rows) {
             const cId = String(row.id || '');
-            const localBanner = knownBanners.get(cId);
+            const localBanner = mergedBanners.get(cId);
             const decodedTheme = decodeCourseThemeAndOrder(row.theme_color as string | null);
             const remoteBannerLen = decodedTheme.bannerLen;
             if (
@@ -1154,6 +1409,8 @@ export class SupabaseService {
               (remoteBannerLen && remoteBannerLen !== localBanner.length)
             ) {
               idsNeedingBanner.push(cId);
+            } else {
+              this.recordCacheHit(localBanner.length);
             }
           }
           if (idsNeedingBanner.length > 0) {
@@ -1164,22 +1421,34 @@ export class SupabaseService {
             if (Array.isArray(bannerRows)) {
               bannerRows.forEach((br) => {
                 if (br.id && br.banner_image) {
-                  fetchedBannerMap.set(String(br.id), String(br.banner_image));
+                  const bStr = String(br.banner_image);
+                  fetchedBannerMap.set(String(br.id), bStr);
+                  this.cachedCourseBanners.set(String(br.id), bStr);
+                  bannerCacheChanged = true;
                 }
               });
             }
           }
         }
 
-        return rows.map((row) => {
+        const mappedCourses = rows.map((row) => {
           const cId = String(row.id || '');
           const rawBanner = String(
-            row.banner_image || fetchedBannerMap.get(cId) || knownBanners?.get(cId) || ''
+            row.banner_image || fetchedBannerMap.get(cId) || mergedBanners.get(cId) || ''
           );
           const resolvedBanner =
             !rawBanner || rawBanner.startsWith('/src/assets/images/') || rawBanner.includes('images.unsplash.com')
               ? DEFAULT_FALLBACK_BANNER
               : rawBanner;
+
+          if (
+            resolvedBanner &&
+            resolvedBanner !== DEFAULT_FALLBACK_BANNER &&
+            this.cachedCourseBanners.get(cId) !== resolvedBanner
+          ) {
+            this.cachedCourseBanners.set(cId, resolvedBanner);
+            bannerCacheChanged = true;
+          }
 
           const decodedTheme = decodeCourseThemeAndOrder(row.theme_color as string | null);
 
@@ -1203,6 +1472,11 @@ export class SupabaseService {
             totalQuizzes: typeof row.total_quizzes === 'number' ? row.total_quizzes : 0,
           };
         });
+
+        if (bannerCacheChanged) {
+          this.persistAssetCache();
+        }
+        return mappedCourses;
       } catch {
         return null;
       }
@@ -1383,7 +1657,7 @@ export class SupabaseService {
 
           const comments = rawCommentsSource.map((cm: Record<string, unknown>) => ({
             ...cm,
-            authorAvatar: cm.authorRole === 'student' ? '' : String(cm.authorAvatar || ''),
+            authorAvatar: cm.authorRole !== 'admin' ? '' : String(cm.authorAvatar || ''),
           }));
 
           const formattedCreatedAt =
@@ -1442,94 +1716,122 @@ export class SupabaseService {
   }
 
   /**
-   * Fetch all assignments from Supabase
+   * Fetch all assignments from Supabase (with 5-minute Client-Side Cache TTL)
    */
-  static async getRemoteAssignments(): Promise<Assignment[] | null> {
-    try {
-      const { data, error } = await supabase
-        .from('assignments')
-        .select('*')
-        .limit(200);
-      if (error || !data) return null;
-
-      return data.map((row) => ({
-        id: row.id,
-        courseId: row.course_id,
-        title: row.title || '',
-        description: row.description || '',
-        dueDate: row.due_date || '',
-        maxPoints: row.total_points ?? 100,
-        rubricItems: ['Code Quality & Correctness', 'Documentation & Verification'],
-      }));
-    } catch {
-      return null;
+  static async getRemoteAssignments(forceRefresh: boolean = false): Promise<Assignment[] | null> {
+    if (!forceRefresh) {
+      const cached = this.getCachedQuery<Assignment[]>('assignments:all');
+      if (cached) return cached;
     }
-  }
+    return this.dedupeGet('assignments:all', async () => {
+      try {
+        const { data, error } = await supabase
+          .from('assignments')
+          .select('*')
+          .limit(200);
+        if (error || !data) return null;
 
-  /**
-   * Fetch all assignment submissions from Supabase
-   */
-  static async getRemoteSubmissions(): Promise<AssignmentSubmission[] | null> {
-    try {
-      const { data, error } = await supabase
-        .from('assignment_submissions')
-        .select('*')
-        .limit(300);
-      if (error || !data) return null;
-
-      return data.map((row) => {
-        const filesArr = Array.isArray(row.files) ? row.files : [];
-        return {
+        const mapped = data.map((row) => ({
           id: row.id,
-          assignmentId: row.assignment_id,
-          courseId: '',
-          studentId: row.student_id,
-          studentName: row.student_name || 'Student',
-          studentAvatar: row.student_avatar || '',
-          submittedAt: row.submitted_at
-            ? new Date(row.submitted_at).toLocaleString('en-US', {
-                month: 'short',
-                day: 'numeric',
-                hour: 'numeric',
-                minute: '2-digit',
-              })
-            : 'Submitted',
-          fileAttachment: filesArr[0] || undefined,
-          submissionText: row.notes || '',
-          grade: typeof row.grade === 'number' ? row.grade : undefined,
-          feedback: row.feedback || undefined,
-          status: (typeof row.grade === 'number' ? 'graded' : 'submitted') as 'submitted' | 'graded',
-        };
-      });
-    } catch {
-      return null;
-    }
+          courseId: row.course_id,
+          title: row.title || '',
+          description: row.description || '',
+          dueDate: row.due_date || '',
+          maxPoints: row.total_points ?? 100,
+          rubricItems: ['Code Quality & Correctness', 'Documentation & Verification'],
+        }));
+        this.setCachedQuery('assignments:all', mapped, 300_000);
+        return mapped;
+      } catch {
+        return null;
+      }
+    });
   }
 
   /**
-   * Fetch all quizzes from Supabase
+   * Fetch all assignment submissions from Supabase (with 3-minute Client-Side Cache TTL & no student_avatar column)
    */
-  static async getRemoteQuizzes(): Promise<Quiz[] | null> {
-    try {
-      const { data, error } = await supabase
-        .from('quizzes')
-        .select('*')
-        .limit(150);
-      if (error || !data) return null;
-
-      return data.map((row) => ({
-        id: row.id,
-        courseId: row.course_id,
-        title: row.title || '',
-        description: 'Timed Assessment',
-        timeLimitMinutes: row.time_limit_minutes ?? 30,
-        durationMinutes: row.time_limit_minutes ?? 30,
-        passingScore: row.passing_score ?? 70,
-        questions: Array.isArray(row.questions) ? row.questions : [],
-      }));
-    } catch {
-      return null;
+  static async getRemoteSubmissions(
+    forceRefresh: boolean = false
+  ): Promise<AssignmentSubmission[] | null> {
+    if (!forceRefresh) {
+      const cached = this.getCachedQuery<AssignmentSubmission[]>('submissions:all');
+      if (cached) return cached;
     }
+    return this.dedupeGet('submissions:all', async () => {
+      try {
+        const { data, error } = await supabase
+          .from('assignment_submissions')
+          .select('id,assignment_id,student_id,student_name,files,notes,grade,feedback,submitted_at')
+          .limit(300);
+        if (error || !data) return null;
+
+        const mapped = data.map((row) => {
+          const filesArr = Array.isArray(row.files) ? row.files : [];
+          return {
+            id: row.id,
+            assignmentId: row.assignment_id,
+            courseId: '',
+            studentId: row.student_id,
+            studentName: row.student_name || 'Student',
+            studentAvatar: '',
+            submittedAt: row.submitted_at
+              ? new Date(row.submitted_at).toLocaleString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                  hour: 'numeric',
+                  minute: '2-digit',
+                })
+              : 'Submitted',
+            fileAttachment: filesArr[0] || undefined,
+            submissionText: row.notes || '',
+            grade: typeof row.grade === 'number' ? row.grade : undefined,
+            feedback: row.feedback || undefined,
+            status: (typeof row.grade === 'number' ? 'graded' : 'submitted') as
+              | 'submitted'
+              | 'graded',
+          };
+        });
+        this.setCachedQuery('submissions:all', mapped, 180_000);
+        return mapped;
+      } catch {
+        return null;
+      }
+    });
+  }
+
+  /**
+   * Fetch all quizzes from Supabase (with 5-minute Client-Side Cache TTL)
+   */
+  static async getRemoteQuizzes(forceRefresh: boolean = false): Promise<Quiz[] | null> {
+    if (!forceRefresh) {
+      const cached = this.getCachedQuery<Quiz[]>('quizzes:all');
+      if (cached) return cached;
+    }
+    return this.dedupeGet('quizzes:all', async () => {
+      try {
+        const { data, error } = await supabase
+          .from('quizzes')
+          .select('*')
+          .limit(150);
+        if (error || !data) return null;
+
+        const mapped = data.map((row) => ({
+          id: row.id,
+          courseId: row.course_id,
+          title: row.title || '',
+          description: 'Timed Assessment',
+          timeLimitMinutes: row.time_limit_minutes ?? 30,
+          durationMinutes: row.time_limit_minutes ?? 30,
+          passingScore: row.passing_score ?? 70,
+          questions: Array.isArray(row.questions) ? row.questions : [],
+        }));
+        this.setCachedQuery('quizzes:all', mapped, 300_000);
+        return mapped;
+      } catch {
+        return null;
+      }
+    });
   }
 
   /**
@@ -2494,6 +2796,7 @@ export class SupabaseService {
    */
   static async upsertAssignment(assignment: Assignment): Promise<boolean> {
     try {
+      this.invalidateClientCache('assignments');
       const { error } = await supabase.from('assignments').upsert(
         {
           id: assignment.id,
@@ -2516,6 +2819,8 @@ export class SupabaseService {
    */
   static async deleteAssignment(assignmentId: string): Promise<boolean> {
     try {
+      this.invalidateClientCache('assignments');
+      this.invalidateClientCache('submissions');
       await supabase.from('assignment_submissions').delete().eq('assignment_id', assignmentId);
       const { error } = await supabase.from('assignments').delete().eq('id', assignmentId);
       return !error;
@@ -2553,6 +2858,7 @@ export class SupabaseService {
    */
   static async upsertAssignmentSubmission(sub: AssignmentSubmission): Promise<boolean> {
     try {
+      this.invalidateClientCache('submissions');
       const { error } = await supabase
         .from('assignment_submissions')
         .upsert(this.formatSubmissionRow(sub), { onConflict: 'id' });
@@ -2567,6 +2873,7 @@ export class SupabaseService {
    */
   static async deleteAssignmentSubmission(submissionId: string): Promise<boolean> {
     try {
+      this.invalidateClientCache('submissions');
       const { error } = await supabase.from('assignment_submissions').delete().eq('id', submissionId);
       return !error;
     } catch {
@@ -2579,6 +2886,7 @@ export class SupabaseService {
    */
   static async upsertQuiz(quiz: Quiz): Promise<boolean> {
     try {
+      this.invalidateClientCache('quizzes');
       const { error } = await supabase.from('quizzes').upsert(
         {
           id: quiz.id,
@@ -2601,6 +2909,7 @@ export class SupabaseService {
    */
   static async deleteQuiz(quizId: string): Promise<boolean> {
     try {
+      this.invalidateClientCache('quizzes');
       await supabase.from('quiz_submissions').delete().eq('quiz_id', quizId);
       const { error } = await supabase.from('quizzes').delete().eq('id', quizId);
       return !error;
@@ -3119,7 +3428,7 @@ export class SupabaseService {
   }> {
     let slimmedRows = 0;
     try {
-      // 1. Strip author_avatar in posts, student avatar in profiles, and student_avatar in assignment_submissions
+      // 1. Strip author_avatar in posts, student & co_admin avatar in profiles, and student_avatar in assignment_submissions
       const [postAvRes, stuAvRes, subAvRes] = await Promise.allSettled([
         supabase
           .from('posts')
@@ -3129,7 +3438,7 @@ export class SupabaseService {
         supabase
           .from('profiles')
           .update({ avatar: '' })
-          .eq('role', 'student')
+          .in('role', ['student', 'co_admin'])
           .neq('avatar', '')
           .select('id'),
         supabase
@@ -3149,9 +3458,9 @@ export class SupabaseService {
         slimmedRows += subAvRes.value.data.length;
       }
 
-      // 2. Check Admin/Co-Admin avatars and Course banners for oversized legacy Base64 payloads
+      // 2. Check Primary Admin avatars and Course banners for oversized legacy Base64 payloads
       const [adminRowsRes, courseRowsRes] = await Promise.allSettled([
-        supabase.from('profiles').select('id,role,avatar').in('role', ['admin', 'co_admin']),
+        supabase.from('profiles').select('id,role,avatar').eq('role', 'admin'),
         supabase.from('courses').select('id,banner_image'),
       ]);
 
@@ -3453,7 +3762,7 @@ export class SupabaseService {
       role: userData.role,
       phone: userData.phone || '+95 9 000 000000',
       avatar:
-        userData.role === 'student'
+        userData.role !== 'admin'
           ? ''
           : userData.avatar || DEFAULT_FALLBACK_AVATAR,
       title: userData.title || undefined,

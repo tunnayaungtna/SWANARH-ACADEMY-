@@ -35,7 +35,7 @@ export const ProfilePictureModal: React.FC<ProfilePictureModalProps> = ({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  if (!isOpen || (user.role !== 'admin' && user.role !== 'co_admin')) return null;
+  if (!isOpen || user.role !== 'admin') return null;
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -110,7 +110,7 @@ export const ProfilePictureModal: React.FC<ProfilePictureModalProps> = ({
                 Profile Picture (ပရိုဖိုင်ဓာတ်ပုံ)
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                {user.name} ({user.role === 'admin' ? 'Instructor / Admin' : 'Co-Admin'})
+                {user.name} ({user.role === 'admin' ? 'Lead Mentor (Admin)' : 'Co-Admin'})
               </p>
             </div>
           </div>

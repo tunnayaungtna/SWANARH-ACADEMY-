@@ -153,7 +153,12 @@ export default function App() {
       refreshData();
       const loggedUser = ClassroomDB.getCurrentUser();
       if (loggedUser) {
-        ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
+        const isAlreadyCloudSynced =
+          localStorage.getItem('classroom_os_cloud_synced_v1') === 'true';
+        ClassroomDB.pullFromSupabase({
+          force: !isAlreadyCloudSynced,
+          background: isAlreadyCloudSynced,
+        }).then((updated) => {
           if (updated || !ClassroomDB.getCurrentUser()) {
             refreshData();
           }
@@ -570,7 +575,7 @@ export default function App() {
                   <span className="capitalize font-semibold text-indigo-600 dark:text-indigo-400">
                     Role:{' '}
                     {currentUser.role === 'admin'
-                      ? 'Faculty / Admin (ဆရာ)'
+                      ? 'Lead Mentor (Admin)'
                       : currentUser.role === 'co_admin'
                       ? 'Co-Admin (တွဲဖက် အက်ဒမင်)'
                       : 'Student (ကျောင်းသား)'}

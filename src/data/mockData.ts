@@ -23,7 +23,7 @@ export const INITIAL_USERS: User[] = [
     address: 'No. 45, Pyay Road, Kamayut, Yangon',
     phone: '+95 9 791 234567',
     avatar: MOCK_ADMIN_AVATAR,
-    title: 'Dean of Computing & Lead Instructor',
+    title: 'Dean of Computing & Lead Mentor',
   },
   {
     id: 'user-coadmin-1',
@@ -35,7 +35,7 @@ export const INITIAL_USERS: User[] = [
     gender: 'female',
     address: 'No. 12, University Avenue, Bahan, Yangon',
     phone: '+95 9 512 889900',
-    avatar: MOCK_COADMIN_AVATAR,
+    avatar: '',
     title: 'Course Coordinator & Assistant Instructor',
   },
   {

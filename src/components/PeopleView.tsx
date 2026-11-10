@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Course, User } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
 import { AddStudentModal } from './AddStudentModal';
+import { EditUserAccountModal } from './EditUserAccountModal';
 import { useBackHandler } from '../utils/backNavigation';
 import {
   Users,
@@ -13,6 +14,7 @@ import {
   Search,
   AlertTriangle,
   Sparkles,
+  Edit3,
 } from 'lucide-react';
 
 interface PeopleViewProps {
@@ -25,6 +27,7 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
   const allUsers = ClassroomDB.getAllUsers();
   const [showAddModal, setShowAddModal] = useState(false);
   const [studentToUnenroll, setStudentToUnenroll] = useState<User | null>(null);
+  const [editingAccountUser, setEditingAccountUser] = useState<User | null>(null);
   const [enrollmentStatusMessage, setEnrollmentStatusMessage] = useState<string | null>(null);
   const [searchFilter, setSearchFilter] = useState('');
   const [visibleStudentLimit, setVisibleStudentLimit] = useState<number>(60);
@@ -32,6 +35,7 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
   // Step-by-step mobile Back button handlers for PeopleView modals
   useBackHandler(showAddModal, () => setShowAddModal(false));
   useBackHandler(!!studentToUnenroll, () => setStudentToUnenroll(null));
+  useBackHandler(!!editingAccountUser, () => setEditingAccountUser(null));
 
   // Fast O(1) lookup Map so 2,000 enrolled students resolve in <1ms instead of O(N^2)
   const userByIdMap = new Map<string, User>(allUsers.map((u) => [u.id, u]));
@@ -84,47 +88,73 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
         <div className="mt-4 space-y-3">
           {allUsers
             .filter((u) => u.role === 'admin' || u.role === 'co_admin')
-            .map((instructor) => (
-              <div
-                key={instructor.id}
-                className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-3.5 rounded-2xl neu-inset-sm"
-              >
-                <div className="flex items-center gap-3">
-                  <img
-                    src={
-                      instructor.avatar ||
-                      "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect width='150' height='150' rx='75' fill='%234f46e5'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.9'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.9'/%3E%3C/svg%3E"
-                    }
-                    alt={instructor.name}
-                    referrerPolicy="no-referrer"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).src =
-                        "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect width='150' height='150' rx='75' fill='%234f46e5'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.9'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.9'/%3E%3C/svg%3E";
-                    }}
-                    className="w-11 h-11 rounded-full object-cover border border-slate-200 dark:border-slate-700"
-                  />
-                  <div>
-                    <div className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2 flex-wrap">
-                      <span>{instructor.name}</span>
-                      <span className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-md">
-                        {instructor.role === 'admin' ? 'Lead Instructor (Admin)' : 'Co-Admin'}
+            .map((instructor) => {
+              const canEditInstructor =
+                (currentUser.role === 'admin' || currentUser.role === 'co_admin') &&
+                (currentUser.role === 'admin' || instructor.id === currentUser.id);
+              return (
+                <div
+                  key={instructor.id}
+                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-3.5 rounded-2xl neu-inset-sm"
+                >
+                  <div className="flex items-center gap-3">
+                    {instructor.role === 'admin' ? (
+                      <img
+                        src={
+                          instructor.avatar ||
+                          "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect width='150' height='150' rx='75' fill='%234f46e5'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.9'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.9'/%3E%3C/svg%3E"
+                        }
+                        alt={instructor.name}
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src =
+                            "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect width='150' height='150' rx='75' fill='%234f46e5'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.9'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.9'/%3E%3C/svg%3E";
+                        }}
+                        className="w-11 h-11 rounded-full object-cover border border-slate-200 dark:border-slate-700"
+                      />
+                    ) : (
+                      /* Clean Non-Photo Co-Admin Badge (Profile Photo Function Removed for Co-Admin) */
+                      <div className="w-11 h-11 rounded-2xl bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300 font-extrabold text-sm flex items-center justify-center shrink-0 border border-purple-200 dark:border-purple-800">
+                        👥
+                      </div>
+                    )}
+                    <div>
+                      <div className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2 flex-wrap">
+                        <span>{instructor.name}</span>
+                        <span className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-md">
+                          {instructor.role === 'admin' ? 'Lead Mentor (Admin)' : 'Co-Admin'}
+                        </span>
+                      </div>
+                      <span className="text-xs text-slate-500 dark:text-slate-400 font-mono">
+                        @{instructor.username} · {instructor.email}
                       </span>
                     </div>
-                    <span className="text-xs text-slate-500 dark:text-slate-400 font-mono">
-                      {instructor.email}
-                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 self-start sm:self-auto">
+                    {canEditInstructor && (
+                      <button
+                        type="button"
+                        onClick={() => setEditingAccountUser(instructor)}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/70 hover:bg-indigo-100 dark:hover:bg-indigo-900/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-xs font-bold transition-all cursor-pointer"
+                        title="အကောင့်အချက်အလက် ပြင်ဆင်ရန်"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>{instructor.id === currentUser.id ? 'မိမိအကောင့်ပြင်ရန်' : 'Edit'}</span>
+                      </button>
+                    )}
+
+                    <a
+                      href={`mailto:${instructor.email}`}
+                      className="flex items-center gap-1.5 px-3.5 py-2 neu-btn text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-xl transition-all"
+                    >
+                      <Mail className="w-3.5 h-3.5 text-indigo-500" />
+                      <span>Email</span>
+                    </a>
                   </div>
                 </div>
-
-                <a
-                  href={`mailto:${instructor.email}`}
-                  className="self-start sm:self-auto flex items-center gap-1.5 px-3.5 py-2 neu-btn text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-xl transition-all"
-                >
-                  <Mail className="w-3.5 h-3.5 text-indigo-500" />
-                  <span>Email</span>
-                </a>
-              </div>
-            ))}
+              );
+            })}
         </div>
       </section>
 
@@ -284,17 +314,28 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
                       </span>
                     )}
 
-                    {/* Admin / Co-Admin Expel / Remove Action */}
+                    {/* Admin / Co-Admin Edit Student Info & Remove Actions */}
                     {isStaff && (
-                      <button
-                        type="button"
-                        onClick={() => setStudentToUnenroll(student)}
-                        className="flex items-center gap-1 px-2.5 py-1 text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 rounded-xl text-xs font-bold transition-colors cursor-pointer"
-                        title="အတန်းမှ ထုတ်ပယ်မည်"
-                      >
-                        <UserX className="w-3.5 h-3.5" />
-                        <span>Remove</span>
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setEditingAccountUser(student)}
+                          className="flex items-center gap-1 px-2.5 py-1 text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 border border-indigo-200 dark:border-indigo-800/70 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                          title="ကျောင်းသား အချက်အလက် (အမည်၊ Username၊ Email၊ ဖုန်း၊ အလုပ်အကိုင်၊ လိပ်စာ၊ Password၊ အတန်းများ) ပြင်ဆင်ရန်"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>Edit</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setStudentToUnenroll(student)}
+                          className="flex items-center gap-1 px-2.5 py-1 text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                          title="အတန်းမှ ထုတ်ပယ်မည်"
+                        >
+                          <UserX className="w-3.5 h-3.5" />
+                          <span>Remove</span>
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
@@ -382,6 +423,23 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
         onClose={() => setShowAddModal(false)}
         onStudentEnrolled={onRefresh}
       />
+
+      {/* Edit Account Info Modal (Admin / Co-Admin editing own account or student account) */}
+      {editingAccountUser && (
+        <EditUserAccountModal
+          user={editingAccountUser}
+          isOpen={true}
+          onClose={() => setEditingAccountUser(null)}
+          onSuccess={(updatedUser) => {
+            setEditingAccountUser(null);
+            onRefresh();
+            setEnrollmentStatusMessage(
+              `✅ "${updatedUser.name}" (@${updatedUser.username}) ၏ အကောင့်အချက်အလက်များကို အောင်မြင်စွာ ပြင်ဆင်သိမ်းဆည်းပြီးပါပြီ!`
+            );
+            setTimeout(() => setEnrollmentStatusMessage(null), 5000);
+          }}
+        />
+      )}
     </div>
   );
 };
