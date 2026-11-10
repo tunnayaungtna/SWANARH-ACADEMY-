@@ -1,5 +1,10 @@
-import React, { useState } from 'react';
-import { SupabaseService, SUPABASE_CONFIG, SUPABASE_SQL_SCHEMA } from '../services/supabase';
+import React, { useState, useRef } from 'react';
+import {
+  SupabaseService,
+  SUPABASE_CONFIG,
+  DEFAULT_SUPABASE_CONFIG,
+  SUPABASE_SQL_SCHEMA,
+} from '../services/supabase';
 import { ClassroomDB } from '../services/storage';
 import {
   X,
@@ -7,7 +12,6 @@ import {
   Check,
   Copy,
   ExternalLink,
-  ShieldCheck,
   Users,
   Server,
   Key,
@@ -15,6 +19,9 @@ import {
   AlertCircle,
   FileCode,
   Sparkles,
+  Download,
+  Upload,
+  ArrowRightLeft,
 } from 'lucide-react';
 
 interface SupabaseModalProps {
@@ -24,25 +31,108 @@ interface SupabaseModalProps {
 
 export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose }) => {
   const [copied, setCopied] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isCleaning, setIsCleaning] = useState(false);
   const [isSlimming, setIsSlimming] = useState(false);
+  const [isMigrating, setIsMigrating] = useState(false);
+  const [newProjectUrl, setNewProjectUrl] = useState(SUPABASE_CONFIG.url);
+  const [newPublishableKey, setNewPublishableKey] = useState(SUPABASE_CONFIG.publishableKey);
   const [connectionStatus, setConnectionStatus] = useState<{
     tested: boolean;
     connected: boolean;
     message: string;
   } | null>(null);
   const [cacheTick, setCacheTick] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
   const cacheStats = SupabaseService.getClientCacheStats();
+  const activeProjectRef = SupabaseService.getActiveProjectRef();
+  const hasCustomProject = SupabaseService.hasCustomProjectConfig();
 
   const handleCopySQL = () => {
     navigator.clipboard.writeText(SUPABASE_SQL_SCHEMA);
     setCopied(true);
     setTimeout(() => setCopied(false), 3000);
+  };
+
+  const handleCopyConfigCode = () => {
+    const cleanUrl = (newProjectUrl || SUPABASE_CONFIG.url).trim().replace(/\/+$/, '');
+    const cleanKey = (newPublishableKey || SUPABASE_CONFIG.publishableKey).trim();
+    const codeSnippet = `export const DEFAULT_SUPABASE_CONFIG = {\n  url: import.meta.env.VITE_SUPABASE_URL || '${cleanUrl}',\n  publishableKey:\n    import.meta.env.VITE_SUPABASE_ANON_KEY || '${cleanKey}',\n  jwksUrl:\n    import.meta.env.VITE_SUPABASE_JWKS_URL ||\n    '${cleanUrl}/auth/v1/.well-known/jwks.json',\n};`;
+    navigator.clipboard.writeText(codeSnippet);
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 3000);
+  };
+
+  const handleDownloadBackup = () => {
+    const backup = ClassroomDB.exportFullDatabaseBackup();
+    const blob = new Blob([backup.json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = backup.filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setConnectionStatus({
+      tested: true,
+      connected: true,
+      message: `📥 Backup ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ (${backup.filename})! အကောင့် (${backup.counts.users}) ခု၊ သင်တန်း (${backup.counts.courses}) ခု၊ Post (${backup.counts.posts}) ခုနှင့် Attendance (${backup.counts.attendance}) ခု ပါဝင်ပါသည်။`,
+    });
+  };
+
+  const handleRestoreBackupFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      setIsMigrating(true);
+      const res = await ClassroomDB.importFullDatabaseBackup(text);
+      setIsMigrating(false);
+      setConnectionStatus({
+        tested: true,
+        connected: res.success,
+        message: res.message,
+      });
+    } catch {
+      setIsMigrating(false);
+      setConnectionStatus({
+        tested: true,
+        connected: false,
+        message: 'Backup ဖိုင်ဖတ်ရာတွင် အမှားအယွင်းရှိနေပါသည်။',
+      });
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleSwitchAndMigrateProject = async () => {
+    setIsMigrating(true);
+    const res = await ClassroomDB.migrateToNewSupabaseProject(newProjectUrl, newPublishableKey);
+    setIsMigrating(false);
+    setCacheTick((t) => t + 1);
+    setConnectionStatus({
+      tested: true,
+      connected: res.success,
+      message: res.message,
+    });
+  };
+
+  const handleResetDefaultProject = () => {
+    SupabaseService.resetToDefaultProjectConfig();
+    setNewProjectUrl(DEFAULT_SUPABASE_CONFIG.url);
+    setNewPublishableKey(DEFAULT_SUPABASE_CONFIG.publishableKey);
+    setCacheTick((t) => t + 1);
+    setConnectionStatus({
+      tested: true,
+      connected: true,
+      message: `🔄 မူလ Default Supabase Project (${DEFAULT_SUPABASE_CONFIG.url}) သို့ ပြန်လည်ချိတ်ဆက်ပြီးပါပြီ။`,
+    });
   };
 
   const handleTestConnection = async () => {
@@ -224,6 +314,112 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
               </div>
             </div>
 
+            {/* Zero-Downtime Project Switcher & Data Migration Wizard (Steps 3, 4 & 5) */}
+            <div className="p-4 rounded-xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/70 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-bold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+                  <ArrowRightLeft className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                  <span>
+                    Project အသစ်သို့ Data အားလုံး ရွှေ့ပြောင်းခြင်း (Zero-Downtime Migration &amp; Backup)
+                  </span>
+                </span>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={handleDownloadBackup}
+                    className="px-2.5 py-1 text-[11px] font-bold rounded-lg bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-700 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 flex items-center gap-1 cursor-pointer transition-colors"
+                    title="လက်ရှိ Data အားလုံးကို JSON ဖိုင်ဖြင့် သိမ်းဆည်းရန်"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>1. Download Backup (.json)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isMigrating}
+                    className="px-2.5 py-1 text-[11px] font-bold rounded-lg bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 flex items-center gap-1 cursor-pointer transition-colors disabled:opacity-50"
+                    title="Backup JSON ဖိုင်မှ Data ပြန်သွင်းရန်"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Restore (.json)</span>
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".json,application/json"
+                    onChange={handleRestoreBackupFile}
+                    className="hidden"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    အဆင့် ၃ (က) - New Supabase Project URL
+                  </label>
+                  <input
+                    type="url"
+                    value={newProjectUrl}
+                    onChange={(e) => setNewProjectUrl(e.target.value)}
+                    placeholder="https://xxxxxxxxxxxx.supabase.co"
+                    className="w-full px-2.5 py-1.5 text-xs font-mono rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1">
+                    <Key className="w-3 h-3 text-indigo-500" />
+                    <span>အဆင့် ၃ (ခ) - New Publishable / Anon Key</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={newPublishableKey}
+                    onChange={(e) => setNewPublishableKey(e.target.value)}
+                    placeholder="sb_publishable_... သို့မဟုတ် eyJhbGci..."
+                    className="w-full px-2.5 py-1.5 text-xs font-mono rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={handleSwitchAndMigrateProject}
+                    disabled={isMigrating || isSyncing}
+                    className="px-3 py-1.5 text-xs font-bold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs flex items-center gap-1.5 cursor-pointer transition-all disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isMigrating ? 'animate-spin' : ''}`} />
+                    <span>
+                      {isMigrating
+                        ? 'Migrating All Data...'
+                        : '🚀 2. Project အသစ်သို့ ချိတ်ဆက်ပြီး Data အားလုံး ရွှေ့ပြောင်းမည်'}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleCopyConfigCode}
+                    className="px-2.5 py-1.5 text-[11px] font-semibold rounded-lg bg-slate-800 hover:bg-slate-900 text-slate-100 flex items-center gap-1.5 cursor-pointer transition-colors"
+                    title="src/services/supabase.ts တွင် ထည့်ရမည့် SUPABASE_CONFIG Code ကို Copy ကူးရန်"
+                  >
+                    {copiedCode ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedCode ? 'Copied Code!' : 'Copy Code (supabase.ts)'}</span>
+                  </button>
+                </div>
+
+                {hasCustomProject && (
+                  <button
+                    type="button"
+                    onClick={handleResetDefaultProject}
+                    className="text-[11px] font-semibold text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 underline cursor-pointer"
+                  >
+                    မူလ Project အဟောင်းသို့ ပြန်ပြောင်းရန်
+                  </button>
+                )}
+              </div>
+            </div>
+
             {/* Supabase Free Plan Quota & Client-Side Caching Banner */}
             <div className="p-3.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-800/60 space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -359,7 +555,7 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
                     <span>SQL Schema & Tables Run ခြင်း (အဓိက Database တည်ဆောက်ခြင်း)</span>
                   </div>
                   <a
-                    href="https://supabase.com/dashboard/project/wxfassadxuxfvywvnlxs/sql/new"
+                    href={`https://supabase.com/dashboard/project/${activeProjectRef}/sql/new`}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-flex items-center gap-1 text-[11px] font-semibold text-white bg-indigo-600 hover:bg-indigo-700 px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
@@ -384,7 +580,7 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
                     <span>Authentication Setting (အီးမေးလ် အတည်ပြုချက် မလိုဘဲ တန်းဝင်နိုင်အောင် ချိန်ညှိခြင်း)</span>
                   </div>
                   <a
-                    href="https://supabase.com/dashboard/project/wxfassadxuxfvywvnlxs/auth/providers"
+                    href={`https://supabase.com/dashboard/project/${activeProjectRef}/auth/providers`}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-flex items-center gap-1 text-[11px] font-semibold text-purple-700 dark:text-purple-300 bg-purple-100 dark:bg-purple-950/80 hover:bg-purple-200 px-2.5 py-1 rounded-lg transition-colors cursor-pointer border border-purple-300 dark:border-purple-800"
@@ -412,7 +608,7 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
                     <span>Table Editor တွင် Data စစ်ဆေးခြင်း (Verification)</span>
                   </div>
                   <a
-                    href="https://supabase.com/dashboard/project/wxfassadxuxfvywvnlxs/editor"
+                    href={`https://supabase.com/dashboard/project/${activeProjectRef}/editor`}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/80 hover:bg-emerald-200 px-2.5 py-1 rounded-lg transition-colors cursor-pointer border border-emerald-300 dark:border-emerald-800"
@@ -436,7 +632,7 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
                     <span>Custom Domain (www.swanarhclassroom.online) ချိတ်ဆက်ခြင်း</span>
                   </div>
                   <a
-                    href="https://supabase.com/dashboard/project/wxfassadxuxfvywvnlxs/auth/url-configuration"
+                    href={`https://supabase.com/dashboard/project/${activeProjectRef}/auth/url-configuration`}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-950/80 hover:bg-blue-200 px-2.5 py-1 rounded-lg transition-colors cursor-pointer border border-blue-300 dark:border-blue-800"

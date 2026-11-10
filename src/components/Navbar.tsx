@@ -7,6 +7,7 @@ import { AcademyLogo } from './AcademyLogo';
 import { PWAInstallButton } from './PWAInstallButton';
 import { useBackHandler } from '../utils/backNavigation';
 import { performFullAppVersionUpdate } from '../utils/appUpdater';
+import { resolveAvatarUrl, DEFAULT_AVATAR_SVG } from '../data/presetAvatars';
 import {
   Bell,
   Check,
@@ -237,9 +238,9 @@ export const Navbar: React.FC<NavbarProps> = ({
               )}
             </button>
 
-            {/* Notifications Popover */}
+            {/* Notifications Popover (Responsive on Mobile, Tablet & Desktop) */}
             {showNotifications && (
-              <div className="neu-card absolute right-0 mt-3 w-80 sm:w-96 rounded-2xl p-4 z-50">
+              <div className="neu-card fixed left-3 right-3 top-20 sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-3 sm:w-96 rounded-2xl p-4 z-50">
                 <div className="flex items-center justify-between pb-3 border-b border-slate-200/60 dark:border-slate-800">
                   <div className="flex items-center gap-2">
                     <Bell className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
@@ -347,44 +348,54 @@ export const Navbar: React.FC<NavbarProps> = ({
                 setShowUserDropdown(!showUserDropdown);
                 setShowNotifications(false);
               }}
-              className="neu-btn flex items-center gap-2 px-2.5 py-1.5 rounded-xl cursor-pointer"
+              className="neu-btn flex items-center gap-1.5 sm:gap-2 px-2 sm:px-2.5 py-1.5 rounded-xl cursor-pointer"
             >
-              {currentUser.role === 'admin' && currentUser.avatar && (
+              {currentUser.role === 'admin' && (
                 <img
-                  src={currentUser.avatar}
+                  src={resolveAvatarUrl(currentUser.avatar)}
                   alt={currentUser.name}
                   referrerPolicy="no-referrer"
-                  className="w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover shrink-0 ring-2 ring-white/80 dark:ring-slate-700"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = DEFAULT_AVATAR_SVG;
+                  }}
+                  className="w-7 h-7 sm:w-8 sm:h-8 rounded-full object-contain bg-white p-0.5 shrink-0 ring-2 ring-indigo-500/30 dark:ring-indigo-400/40 shadow-2xs"
                 />
               )}
-              <div className="text-left pr-1 max-w-[130px] sm:max-w-[160px] md:max-w-[190px]">
+              <div className="text-left pr-0.5 sm:pr-1 max-w-[96px] xs:max-w-[125px] sm:max-w-[160px] md:max-w-[190px]">
                 <div className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate flex items-center gap-1">
                   <span className="truncate">{currentUser.name}</span>
                 </div>
                 {currentUser.role === 'student' && currentUser.rulesAccepted ? (
                   <div className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-0.5 truncate">
                     <CheckCircle2 className="w-2.5 h-2.5 shrink-0" />
-                    <span>သိရှိ လိုက်နာပါမည်</span>
+                    <span className="truncate">သိရှိ လိုက်နာပါမည်</span>
                   </div>
                 ) : (
-                  <div className="text-[10px] text-slate-500 dark:text-slate-400 capitalize">
-                    {currentUser.role}
+                  <div className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold truncate">
+                    {currentUser.role === 'admin'
+                      ? 'Lead Mentor (Admin)'
+                      : currentUser.role === 'co_admin'
+                      ? 'Co-Admin'
+                      : 'Student'}
                   </div>
                 )}
               </div>
               <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
             </button>
 
-            {/* Account Profile Dropdown */}
+            {/* Account Profile Dropdown (Responsive on Mobile, Tablet & Desktop) */}
             {showUserDropdown && (
-              <div className="neu-card absolute right-0 mt-3 w-72 sm:w-80 rounded-2xl p-3 z-50 space-y-2">
+              <div className="neu-card fixed left-3 right-3 top-20 sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-3 sm:w-80 rounded-2xl p-3 z-50 space-y-2">
                 <div className="neu-inset-sm p-3 rounded-xl flex items-center gap-3">
-                  {currentUser.role === 'admin' && currentUser.avatar && (
+                  {currentUser.role === 'admin' && (
                     <img
-                      src={currentUser.avatar}
+                      src={resolveAvatarUrl(currentUser.avatar)}
                       alt={currentUser.name}
                       referrerPolicy="no-referrer"
-                      className="w-10 h-10 rounded-full object-cover shrink-0 ring-2 ring-white/80 dark:ring-slate-700"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = DEFAULT_AVATAR_SVG;
+                      }}
+                      className="w-11 h-11 rounded-full object-contain bg-white p-0.5 shrink-0 ring-2 ring-indigo-500/30 dark:ring-indigo-400/40 shadow-xs"
                     />
                   )}
                   <div className="min-w-0 flex-1">
@@ -512,14 +523,17 @@ export const Navbar: React.FC<NavbarProps> = ({
       {/* Mobile Navigation Drawer */}
       {isMobileMenuOpen && (
         <div className="lg:hidden max-w-7xl mx-auto mt-2 neu-card rounded-2xl px-4 py-3.5 space-y-2.5 animate-in slide-in-from-top-2 duration-150">
-          <div className="p-3 rounded-xl neu-inset-sm mb-2 flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              {currentUser.role === 'admin' && currentUser.avatar && (
+          <div className="p-3 rounded-xl neu-inset-sm mb-2 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5 min-w-0">
+              {currentUser.role === 'admin' && (
                 <img
-                  src={currentUser.avatar}
+                  src={resolveAvatarUrl(currentUser.avatar)}
                   alt={currentUser.name}
                   referrerPolicy="no-referrer"
-                  className="w-8 h-8 rounded-full object-cover"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = DEFAULT_AVATAR_SVG;
+                  }}
+                  className="w-9 h-9 rounded-full object-contain bg-white p-0.5 border border-indigo-200 dark:border-indigo-700 shrink-0"
                 />
               )}
               <div>

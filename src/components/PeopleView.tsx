@@ -4,6 +4,7 @@ import { ClassroomDB } from '../services/storage';
 import { AddStudentModal } from './AddStudentModal';
 import { EditUserAccountModal } from './EditUserAccountModal';
 import { useBackHandler } from '../utils/backNavigation';
+import { resolveAvatarUrl, DEFAULT_AVATAR_SVG } from '../data/presetAvatars';
 import {
   Users,
   UserPlus,
@@ -97,20 +98,16 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
                   key={instructor.id}
                   className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-3.5 rounded-2xl neu-inset-sm"
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
                     {instructor.role === 'admin' ? (
                       <img
-                        src={
-                          instructor.avatar ||
-                          "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect width='150' height='150' rx='75' fill='%234f46e5'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.9'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.9'/%3E%3C/svg%3E"
-                        }
+                        src={resolveAvatarUrl(instructor.avatar)}
                         alt={instructor.name}
                         referrerPolicy="no-referrer"
                         onError={(e) => {
-                          (e.target as HTMLImageElement).src =
-                            "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect width='150' height='150' rx='75' fill='%234f46e5'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.9'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.9'/%3E%3C/svg%3E";
+                          (e.target as HTMLImageElement).src = DEFAULT_AVATAR_SVG;
                         }}
-                        className="w-11 h-11 rounded-full object-cover border border-slate-200 dark:border-slate-700"
+                        className="w-11 h-11 rounded-full object-contain bg-white p-0.5 border border-indigo-200 dark:border-indigo-700 shrink-0 shadow-2xs"
                       />
                     ) : (
                       /* Clean Non-Photo Co-Admin Badge (Profile Photo Function Removed for Co-Admin) */

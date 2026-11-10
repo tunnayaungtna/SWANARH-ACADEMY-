@@ -1,191 +1,190 @@
-export interface PresetAvatar {
-  id: string;
+import { OFFICIAL_ACADEMY_LOGO } from '../assets/officialLogoData';
+
+export interface PresetAvatarItem {
   presetKey: string;
   name: string;
-  category: 'Student' | 'Scholar' | 'Tech' | 'Creative';
   url: string;
 }
 
+const makeAvatarSvg = (bg1: string, bg2: string, initials: string) =>
+  `data:image/svg+xml;utf8,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="${bg1}"/><stop offset="100%" stop-color="${bg2}"/></linearGradient></defs><rect width="160" height="160" rx="80" fill="url(#g)"/><circle cx="80" cy="58" r="26" fill="#ffffff" fill-opacity="0.92"/><path d="M32 138c9-26 27-39 48-39s39 13 48 39" fill="#ffffff" fill-opacity="0.92"/><text x="80" y="66" font-family="sans-serif" font-size="20" font-weight="bold" fill="${bg1}" text-anchor="middle">${initials}</text></svg>`
+  )}`;
+
 export const DEFAULT_AVATAR_PRESET_KEY = 'preset:mentor-1';
 
-export const DEFAULT_AVATAR_SVG =
-  "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%234f46e5'/%3E%3Cstop offset='100%25' stop-color='%237c3aed'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='150' height='150' rx='75' fill='url(%23g)'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.92'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.92'/%3E%3C/svg%3E";
+export const DEFAULT_AVATAR_SVG = OFFICIAL_ACADEMY_LOGO;
 
-function makeAvatarSvg(bgStart: string, bgEnd: string, initials: string): string {
-  const s = encodeURIComponent(bgStart);
-  const e = encodeURIComponent(bgEnd);
-  const txt = encodeURIComponent(initials);
-  return `data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='${s}'/%3E%3Cstop offset='100%25' stop-color='${e}'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='160' height='160' rx='80' fill='url(%23g)'/%3E%3Ccircle cx='80' cy='58' r='25' fill='%23ffffff' fill-opacity='0.22'/%3E%3Cpath d='M34 140c9-26 27-38 46-38s37 12 46 38' fill='%23ffffff' fill-opacity='0.22'/%3E%3Ctext x='80' y='92' text-anchor='middle' fill='%23ffffff' font-family='sans-serif' font-weight='800' font-size='44'%3E${txt}%3C/text%3E%3C/svg%3E`;
-}
-
-export const PRESET_AVATARS: PresetAvatar[] = [
+export const PRESET_AVATARS: PresetAvatarItem[] = [
   {
-    id: 'avatar-student-1',
     presetKey: 'preset:mentor-1',
-    name: 'Lead Mentor (Indigo)',
-    category: 'Scholar',
+    name: 'SwanArh Academy Official Logo (Default Admin)',
+    url: OFFICIAL_ACADEMY_LOGO,
+  },
+  {
+    presetKey: 'preset:mentor-2',
+    name: 'Mentor Emerald',
+    url: makeAvatarSvg('#059669', '#0d9488', 'SA'),
+  },
+  {
+    presetKey: 'preset:mentor-3',
+    name: 'Mentor Ocean',
+    url: makeAvatarSvg('#0284c7', '#2563eb', 'DR'),
+  },
+  {
+    presetKey: 'preset:mentor-4',
+    name: 'Mentor Amber',
+    url: makeAvatarSvg('#d97706', '#ea580c', 'MT'),
+  },
+  {
+    presetKey: 'preset:mentor-5',
+    name: 'Mentor Rose',
+    url: makeAvatarSvg('#e11d48', '#db2777', 'pf'),
+  },
+  {
+    presetKey: 'preset:mentor-6',
+    name: 'Mentor Slate',
+    url: makeAvatarSvg('#334155', '#0f172a', 'AD'),
+  },
+  {
+    presetKey: 'preset:mentor-7',
+    name: 'Mentor Indigo',
     url: makeAvatarSvg('#4f46e5', '#7c3aed', 'LM'),
   },
   {
-    id: 'avatar-student-2',
-    presetKey: 'preset:mentor-2',
-    name: 'Lead Mentor (Teal)',
-    category: 'Student',
-    url: makeAvatarSvg('#0d9488', '#0284c7', 'ST'),
-  },
-  {
-    id: 'avatar-student-3',
-    presetKey: 'preset:mentor-3',
-    name: 'Academic Dean (Royal)',
-    category: 'Tech',
-    url: makeAvatarSvg('#2563eb', '#4f46e5', 'AD'),
-  },
-  {
-    id: 'avatar-student-4',
-    presetKey: 'preset:mentor-4',
-    name: 'Faculty Lead (Rose)',
-    category: 'Creative',
-    url: makeAvatarSvg('#db2777', '#9333ea', 'FL'),
-  },
-  {
-    id: 'avatar-student-5',
-    presetKey: 'preset:mentor-5',
-    name: 'Senior Mentor (Emerald)',
-    category: 'Scholar',
-    url: makeAvatarSvg('#059669', '#0d9488', 'SM'),
-  },
-  {
-    id: 'avatar-student-6',
-    presetKey: 'preset:mentor-6',
-    name: 'Academy Director (Crimson)',
-    category: 'Student',
-    url: makeAvatarSvg('#e11d48', '#db2777', 'DR'),
-  },
-  {
-    id: 'avatar-student-7',
-    presetKey: 'preset:mentor-7',
-    name: 'Cloud Architect (Sky)',
-    category: 'Tech',
-    url: makeAvatarSvg('#0284c7', '#2563eb', 'CA'),
-  },
-  {
-    id: 'avatar-student-8',
     presetKey: 'preset:mentor-8',
-    name: 'Principal Mentor (Violet)',
-    category: 'Creative',
-    url: makeAvatarSvg('#9333ea', '#6366f1', 'PM'),
+    name: 'Mentor Teal',
+    url: makeAvatarSvg('#0f766e', '#115e59', 'T2'),
   },
   {
-    id: 'avatar-student-9',
     presetKey: 'preset:mentor-9',
-    name: 'Course Lead (Amber)',
-    category: 'Scholar',
-    url: makeAvatarSvg('#d97706', '#ea580c', 'CL'),
+    name: 'Mentor Violet',
+    url: makeAvatarSvg('#6d28d9', '#4c1d95', 'T3'),
   },
   {
-    id: 'avatar-student-10',
     presetKey: 'preset:mentor-10',
-    name: 'Program Chair (Fuchsia)',
-    category: 'Student',
-    url: makeAvatarSvg('#7c3aed', '#c026d3', 'PC'),
+    name: 'Mentor Sky',
+    url: makeAvatarSvg('#0369a1', '#1e40af', 'T4'),
   },
   {
-    id: 'avatar-student-11',
     presetKey: 'preset:mentor-11',
-    name: 'Systems Lead (Slate)',
-    category: 'Tech',
-    url: makeAvatarSvg('#334155', '#0f172a', 'SL'),
+    name: 'Mentor Gold',
+    url: makeAvatarSvg('#b45309', '#92400e', 'T5'),
   },
   {
-    id: 'avatar-student-12',
     presetKey: 'preset:mentor-12',
-    name: 'Research Mentor (Cyan)',
-    category: 'Creative',
-    url: makeAvatarSvg('#0891b2', '#0d9488', 'RM'),
+    name: 'Mentor Crimson',
+    url: makeAvatarSvg('#be123c', '#881337', 'T6'),
   },
 ];
 
+const PRESET_BY_KEY = new Map<string, PresetAvatarItem>(
+  PRESET_AVATARS.map((item) => [item.presetKey, item])
+);
+
+const PRESET_BY_URL = new Map<string, PresetAvatarItem>(
+  PRESET_AVATARS.map((item) => [item.url, item])
+);
+
 /**
- * Resolves a stored Preset Key (`preset:mentor-1`) or External URL (`https://...`)
- * into a renderable image src for `<img>` elements on the client.
+ * Resolves a stored avatar value (which may be a compact `preset:mentor-X` key or an External https:// URL)
+ * into a renderable `<img src="..." />` URL for the browser UI.
+ * By default, Admin accounts resolve to the official SwanArh Academy application logo (`OFFICIAL_ACADEMY_LOGO`).
  */
-export function resolveAvatarUrl(avatarOrKey?: string | null): string {
-  const raw = (avatarOrKey || '').trim();
-  if (!raw) return DEFAULT_AVATAR_SVG;
+export function resolveAvatarUrl(raw: string | undefined | null): string {
+  if (!raw || !raw.trim()) return OFFICIAL_ACADEMY_LOGO;
+  const trimmed = raw.trim();
 
-  const matchedPreset = PRESET_AVATARS.find(
-    (p) => p.presetKey === raw || p.id === raw || p.url === raw
-  );
-  if (matchedPreset) {
-    return matchedPreset.url;
+  if (trimmed === DEFAULT_AVATAR_PRESET_KEY) {
+    return OFFICIAL_ACADEMY_LOGO;
   }
 
-  if (raw.startsWith('preset:')) {
-    return PRESET_AVATARS[0]?.url || DEFAULT_AVATAR_SVG;
+  // 1. Direct Preset Key lookup (e.g., "preset:mentor-2")
+  const foundByKey = PRESET_BY_KEY.get(trimmed);
+  if (foundByKey) {
+    return foundByKey.url;
   }
 
-  if (raw.startsWith('https://') || raw.startsWith('http://')) {
-    if (raw.includes('images.unsplash.com')) {
-      return DEFAULT_AVATAR_SVG;
-    }
-    return raw;
+  // 2. External HTTP/HTTPS URL
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return trimmed;
   }
 
-  if (raw.startsWith('data:image/svg+xml')) {
-    return raw;
+  // 3. Official Academy Logo or matching Preset SVG
+  if (trimmed === OFFICIAL_ACADEMY_LOGO) {
+    return OFFICIAL_ACADEMY_LOGO;
+  }
+  const foundByUrl = PRESET_BY_URL.get(trimmed);
+  if (foundByUrl) {
+    return foundByUrl.url;
   }
 
-  // Any legacy Base64 raster image (`data:image/jpeg;base64,...`) falls back to clean SVG
-  return DEFAULT_AVATAR_SVG;
+  // 4. Upgrade any legacy generic SVG silhouette / initial avatars to the Official Application Logo
+  if (trimmed.startsWith('data:image/svg+xml')) {
+    return OFFICIAL_ACADEMY_LOGO;
+  }
+
+  if (trimmed.startsWith('data:image/')) {
+    return trimmed;
+  }
+
+  return OFFICIAL_ACADEMY_LOGO;
 }
 
 /**
- * Converts any avatar value into a strict Cloud-safe value for Supabase `public.profiles.avatar`:
- * - NEVER stores Base64 (`data:...`) in Supabase Database!
- * - Only stores a short Preset Key (`preset:mentor-1`, ~15 Bytes) or External URL (`https://...`, <= 500 chars).
- * - Co-Admins and Students always store `''` (0 Bytes).
+ * Zero-Base64 Supabase Storage Guard:
+ * Ensures we NEVER store Base64 (`data:image/...`) strings inside `public.profiles.avatar` in Supabase.
+ * - Non-admin accounts (`student`, `co_admin`) always store `''` (0 Bytes).
+ * - Admin accounts store ONLY a compact `preset:mentor-X` key (15 Bytes) or an External `https://` URL (< 500 chars).
  */
-export function toCloudAvatarKeyOrUrl(avatarOrUrl?: string | null, role?: string): string {
-  if (role && role !== 'admin') return '';
-  const raw = (avatarOrUrl || '').trim();
-  if (!raw) return DEFAULT_AVATAR_PRESET_KEY;
+export function toCloudAvatarKeyOrUrl(
+  raw: string | undefined | null,
+  role: string = 'admin'
+): string {
+  if (role !== 'admin') return '';
+  if (!raw || !raw.trim()) return DEFAULT_AVATAR_PRESET_KEY;
+  const trimmed = raw.trim();
 
-  const matchedPreset = PRESET_AVATARS.find(
-    (p) => p.presetKey === raw || p.id === raw || p.url === raw
-  );
+  if (trimmed === OFFICIAL_ACADEMY_LOGO || trimmed === DEFAULT_AVATAR_PRESET_KEY) {
+    return DEFAULT_AVATAR_PRESET_KEY;
+  }
+
+  // Already a valid preset key
+  if (PRESET_BY_KEY.has(trimmed)) {
+    return trimmed;
+  }
+
+  // Matches one of our local preset URLs -> convert to its 15-byte presetKey!
+  const matchedPreset = PRESET_BY_URL.get(trimmed);
   if (matchedPreset) {
     return matchedPreset.presetKey;
   }
 
-  if (raw.startsWith('preset:') && raw.length <= 64) {
-    return raw;
-  }
-
+  // Valid external HTTP/HTTPS URL (keep if reasonably sized)
   if (
-    (raw.startsWith('https://') || raw.startsWith('http://')) &&
-    !raw.includes('images.unsplash.com') &&
-    raw.length <= 500
+    (trimmed.startsWith('http://') || trimmed.startsWith('https://')) &&
+    trimmed.length <= 500
   ) {
-    return raw;
+    return trimmed;
   }
 
-  // Block all Base64 / data: URIs from ever entering Supabase Database
+  // Block any Base64 (`data:image/...`) from ever being sent to Supabase Database
   return DEFAULT_AVATAR_PRESET_KEY;
 }
 
 /**
- * Returns storage inspection metadata for UI display in ProfilePictureModal
+ * Returns human-readable metadata about how an avatar will be stored in Supabase.
  */
-export function getAvatarCloudStorageInfo(avatarOrUrl?: string | null): {
-  mode: 'preset' | 'external_url';
+export function getAvatarCloudStorageInfo(raw: string | undefined | null): {
   cloudKeyOrUrl: string;
+  storageType: 'preset_key' | 'external_url';
   byteSize: number;
 } {
-  const cloudVal = toCloudAvatarKeyOrUrl(avatarOrUrl, 'admin');
+  const cloudVal = toCloudAvatarKeyOrUrl(raw, 'admin');
   const isUrl = cloudVal.startsWith('http://') || cloudVal.startsWith('https://');
   return {
-    mode: isUrl ? 'external_url' : 'preset',
     cloudKeyOrUrl: cloudVal,
+    storageType: isUrl ? 'external_url' : 'preset_key',
     byteSize: new Blob([cloudVal]).size,
   };
 }

@@ -7,6 +7,7 @@ import { useBackHandler } from '../utils/backNavigation';
 import { formatFileSize, getFileTypeCategory } from '../utils/fileHelpers';
 import { renderTextWithLinks } from '../utils/linkify';
 import { ClassroomDB } from '../services/storage';
+import { resolveAvatarUrl, DEFAULT_AVATAR_SVG } from '../data/presetAvatars';
 import {
   MessageSquare,
   ThumbsUp,
@@ -1001,12 +1002,15 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
               className="flex items-center gap-3 flex-1 cursor-pointer group"
             >
               <div className="relative shrink-0">
-                {currentUser.role === 'admin' && currentUser.avatar ? (
+                {currentUser.role === 'admin' ? (
                   <img
-                    src={currentUser.avatar}
+                    src={resolveAvatarUrl(currentUser.avatar)}
                     alt={currentUser.name}
                     referrerPolicy="no-referrer"
-                    className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover ring-2 ring-indigo-500/20 group-hover:ring-indigo-500 transition-all"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = DEFAULT_AVATAR_SVG;
+                    }}
+                    className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-contain bg-white p-0.5 ring-2 ring-indigo-500/20 group-hover:ring-indigo-500 transition-all"
                   />
                 ) : (
                   <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 font-extrabold text-xs flex items-center justify-center border border-indigo-200 dark:border-indigo-800">
@@ -1092,12 +1096,15 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
             {/* Header: User profile, Audience selector & Post category */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3.5 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-3">
-                {currentUser.role === 'admin' && currentUser.avatar ? (
+                {currentUser.role === 'admin' ? (
                   <img
-                    src={currentUser.avatar}
+                    src={resolveAvatarUrl(currentUser.avatar)}
                     alt={currentUser.name}
                     referrerPolicy="no-referrer"
-                    className="w-10 h-10 rounded-full object-cover ring-2 ring-indigo-500/30 shrink-0"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = DEFAULT_AVATAR_SVG;
+                    }}
+                    className="w-10 h-10 rounded-full object-contain bg-white p-0.5 ring-2 ring-indigo-500/30 shrink-0"
                   />
                 ) : (
                   <div className="w-10 h-10 rounded-full bg-indigo-100 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 font-extrabold text-xs flex items-center justify-center border border-indigo-200 dark:border-indigo-800 shrink-0">
@@ -1695,18 +1702,15 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                     <div className="flex items-center gap-2.5 sm:gap-3">
                       {post.authorRole === 'admin' ? (
                         <img
-                          src={
-                            userByIdMap.get(post.authorId)?.avatar ||
-                            post.authorAvatar ||
-                            "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect width='150' height='150' rx='75' fill='%234f46e5'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.9'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.9'/%3E%3C/svg%3E"
-                          }
+                          src={resolveAvatarUrl(
+                            userByIdMap.get(post.authorId)?.avatar || post.authorAvatar
+                          )}
                           alt={post.authorName}
                           referrerPolicy="no-referrer"
                           onError={(e) => {
-                            (e.target as HTMLImageElement).src =
-                              "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect width='150' height='150' rx='75' fill='%234f46e5'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.9'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.9'/%3E%3C/svg%3E";
+                            (e.target as HTMLImageElement).src = DEFAULT_AVATAR_SVG;
                           }}
-                          className="w-8 h-8 sm:w-10 sm:h-10 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+                          className="w-8 h-8 sm:w-10 sm:h-10 rounded-full object-contain bg-white p-0.5 border border-indigo-200 dark:border-indigo-700 shrink-0 shadow-2xs"
                         />
                       ) : post.authorRole === 'co_admin' ? (
                         <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300 font-extrabold text-xs flex items-center justify-center border border-purple-200 dark:border-purple-800 shrink-0">
@@ -2020,23 +2024,20 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                             comm.authorRole === 'admin' || comm.authorRole === 'co_admin';
                           const commentAvatar =
                             comm.authorRole === 'admin'
-                              ? commentUser?.avatar ||
-                                comm.authorAvatar ||
-                                "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect width='150' height='150' rx='75' fill='%234f46e5'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.9'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.9'/%3E%3C/svg%3E"
+                              ? resolveAvatarUrl(commentUser?.avatar || comm.authorAvatar)
                               : '';
                           return (
                             <div key={comm.id} className="flex items-start gap-2.5 text-xs">
-                              {comm.authorRole === 'admin' && commentAvatar && (
+                              {comm.authorRole === 'admin' && (
                                 <img
-                                  src={commentAvatar}
+                                  src={commentAvatar || DEFAULT_AVATAR_SVG}
                                   alt={comm.authorName}
                                   loading="lazy"
                                   referrerPolicy="no-referrer"
                                   onError={(e) => {
-                                    (e.target as HTMLImageElement).src =
-                                      "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect width='150' height='150' rx='75' fill='%234f46e5'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.9'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.9'/%3E%3C/svg%3E";
+                                    (e.target as HTMLImageElement).src = DEFAULT_AVATAR_SVG;
                                   }}
-                                  className="w-7 h-7 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0 mt-0.5"
+                                  className="w-7 h-7 rounded-full object-contain bg-white p-0.5 border border-indigo-200 dark:border-indigo-700 shrink-0 mt-0.5"
                                 />
                               )}
                               <div className="flex-1 neu-raised-sm p-3 rounded-2xl">
@@ -2086,12 +2087,15 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
 
                     {/* Add Comment Input Form */}
                     <div className="flex items-center gap-2.5 pt-1">
-                      {currentUser.role === 'admin' && currentUser.avatar && (
+                      {currentUser.role === 'admin' && (
                         <img
-                          src={currentUser.avatar}
+                          src={resolveAvatarUrl(currentUser.avatar)}
                           alt={currentUser.name}
                           referrerPolicy="no-referrer"
-                          className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src = DEFAULT_AVATAR_SVG;
+                          }}
+                          className="w-8 h-8 rounded-full object-contain bg-white p-0.5 border border-indigo-200 dark:border-indigo-700 shrink-0"
                         />
                       )}
                       <div className="flex-1 flex items-center gap-2">

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, Suspense } from 'react';
 import { User, Course, CoursePost, Assignment, Quiz, StudentProgress, CertificateData, NotificationItem } from './types/classroom';
 import { ClassroomDB } from './services/storage';
+import { resolveAvatarUrl, DEFAULT_AVATAR_SVG } from './data/presetAvatars';
 import { useBackHandler } from './utils/backNavigation';
 import { LoginView } from './components/LoginView';
 import { Navbar } from './components/Navbar';
@@ -536,62 +537,75 @@ export default function App() {
         ) : (
           /* Dashboard: Course Catalog & Strict Enrollment View */
           <div className="space-y-7 sm:space-y-9">
-            {/* Sculpted Neumorphic Welcome & Role Command Console */}
-            <div className="neu-card rounded-3xl p-5 sm:p-7 md:p-8 flex flex-col md:flex-row md:items-center justify-between gap-5 sm:gap-6">
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center gap-2 text-xs font-mono text-slate-600 dark:text-slate-400">
-                  <span>
-                    Logged in as:{' '}
-                    <strong className="text-slate-900 dark:text-white">{currentUser.name}</strong>
-                  </span>
-                  {currentUser.role === 'student' && currentUser.rulesAccepted && (
-                    <>
-                      <span aria-hidden="true">·</span>
-                      <button
-                        type="button"
-                        onClick={() => setShowRulesModal(true)}
-                        className="neu-inset-sm inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-emerald-800 dark:text-emerald-300 font-sans font-bold text-[11px] cursor-pointer hover:text-emerald-600 transition-colors"
-                        title="သင်တန်းစည်းကမ်းချက်များကို သိရှိလိုက်နာပါမည်ဟု အတည်ပြုပြီး"
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                        <span>သိရှိ လိုက်နာပါမည်</span>
-                      </button>
-                    </>
-                  )}
-                  <span aria-hidden="true">·</span>
-                  <span className="capitalize font-semibold text-indigo-600 dark:text-indigo-400">
-                    Role:{' '}
-                    {currentUser.role === 'admin'
-                      ? 'Lead Mentor (Admin)'
-                      : currentUser.role === 'co_admin'
-                      ? 'Co-Admin (တွဲဖက် အက်ဒမင်)'
-                      : 'Student (ကျောင်းသား)'}
-                  </span>
-                </div>
+            {/* Sculpted Neumorphic Welcome & Role Command Console (Mobile, Tablet & Web Responsive) */}
+            <div className="neu-card rounded-3xl p-4 sm:p-6 lg:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-4 sm:gap-6">
+              <div className="flex items-start sm:items-center gap-3.5 sm:gap-4 min-w-0">
+                {currentUser.role === 'admin' && (
+                  <img
+                    src={resolveAvatarUrl(currentUser.avatar)}
+                    alt={currentUser.name}
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = DEFAULT_AVATAR_SVG;
+                    }}
+                    className="w-12 h-12 sm:w-14 sm:h-14 rounded-full object-contain bg-white p-1 border-2 border-indigo-200 dark:border-indigo-700 shadow-sm shrink-0"
+                  />
+                )}
+                <div className="space-y-1.5 sm:space-y-2 min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-mono text-slate-600 dark:text-slate-400">
+                    <span>
+                      Logged in as:{' '}
+                      <strong className="text-slate-900 dark:text-white">{currentUser.name}</strong>
+                    </span>
+                    {currentUser.role === 'student' && currentUser.rulesAccepted && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <button
+                          type="button"
+                          onClick={() => setShowRulesModal(true)}
+                          className="neu-inset-sm inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-xl text-emerald-800 dark:text-emerald-300 font-sans font-bold text-[11px] cursor-pointer hover:text-emerald-600 transition-colors"
+                          title="သင်တန်းစည်းကမ်းချက်များကို သိရှိလိုက်နာပါမည်ဟု အတည်ပြုပြီး"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          <span>သိရှိ လိုက်နာပါမည်</span>
+                        </button>
+                      </>
+                    )}
+                    <span aria-hidden="true">·</span>
+                    <span className="capitalize font-semibold text-indigo-600 dark:text-indigo-400">
+                      Role:{' '}
+                      {currentUser.role === 'admin'
+                        ? 'Lead Mentor (Admin)'
+                        : currentUser.role === 'co_admin'
+                        ? 'Co-Admin (တွဲဖက် အက်ဒမင်)'
+                        : 'Student (ကျောင်းသား)'}
+                    </span>
+                  </div>
 
-                <h1 className="text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100">
-                  {currentUser.role === 'admin' || currentUser.role === 'co_admin'
-                    ? 'Faculty & Classroom Management'
-                    : 'My Enrolled Classes'}
-                </h1>
+                  <h1 className="text-lg sm:text-2xl lg:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100 leading-tight">
+                    {currentUser.role === 'admin' || currentUser.role === 'co_admin'
+                      ? 'Faculty & Classroom Management'
+                      : 'My Enrolled Classes'}
+                  </h1>
 
-                {/* Clean Unboxed Security Rule Notice */}
-                <div className="flex items-center gap-2 text-[11px] sm:text-xs text-slate-600 dark:text-slate-400 pt-0.5">
-                  <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                  <span>
-                    Strict Visibility Active: Unenrolled courses are physically excluded from dashboard queries.
-                  </span>
+                  {/* Clean Unboxed Security Rule Notice */}
+                  <div className="flex items-start sm:items-center gap-2 text-[11px] sm:text-xs text-slate-600 dark:text-slate-400 pt-0.5">
+                    <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5 sm:mt-0" />
+                    <span>
+                      Strict Visibility Active: Unenrolled courses are physically excluded from dashboard queries.
+                    </span>
+                  </div>
                 </div>
               </div>
 
-              {/* Tactile Neumorphic Action Buttons */}
-              <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 shrink-0">
+              {/* Tactile Neumorphic Action Buttons (Responsive Grid on Mobile, Flex on Tablet & Desktop) */}
+              <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 sm:gap-2.5 lg:justify-end shrink-0">
                 <button
                   onClick={() => setShowRulesModal(true)}
-                  className="neu-btn flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2.5 text-emerald-800 dark:text-emerald-300 text-xs font-bold rounded-2xl cursor-pointer"
+                  className="neu-btn flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2.5 text-emerald-800 dark:text-emerald-300 text-xs font-bold rounded-2xl cursor-pointer"
                 >
-                  <ScrollText className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                  <span>စည်းကမ်းချက်များ</span>
+                  <ScrollText className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  <span className="truncate">စည်းကမ်းချက်များ</span>
                 </button>
 
                 {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
@@ -599,37 +613,37 @@ export default function App() {
                     {currentUser.role === 'admin' && (
                       <button
                         onClick={() => setShowAuditLogModal(true)}
-                        className="neu-btn flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2.5 text-amber-800 dark:text-amber-300 text-xs font-bold rounded-2xl cursor-pointer border border-amber-500/20"
+                        className="neu-btn flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2.5 text-amber-800 dark:text-amber-300 text-xs font-bold rounded-2xl cursor-pointer border border-amber-500/20"
                         title="Admin နှင့် Co-Admin တို့၏ လုပ်ဆောင်ချက် မှတ်တမ်းအားလုံးကို စစ်ဆေးရန်"
                       >
-                        <History className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-                        <span>Audit Log (လုပ်ဆောင်ချက် မှတ်တမ်း)</span>
+                        <History className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                        <span className="truncate">Audit Log</span>
                       </button>
                     )}
 
                     <button
                       onClick={() => setShowStudentDirectoryModal(true)}
-                      className="neu-btn flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2.5 text-slate-800 dark:text-slate-100 text-xs font-bold rounded-2xl cursor-pointer"
+                      className="neu-btn flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2.5 text-slate-800 dark:text-slate-100 text-xs font-bold rounded-2xl cursor-pointer"
                     >
-                      <Users className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                      <span>Manage Users (အကောင့်များ စီမံရန်)</span>
+                      <Users className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                      <span className="truncate">Manage Users</span>
                     </button>
 
                     <button
                       onClick={() => setShowCreateCourseModal(true)}
-                      className="neu-btn-indigo flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2.5 text-white text-xs font-bold rounded-2xl cursor-pointer"
+                      className="neu-btn-indigo flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2.5 text-white text-xs font-bold rounded-2xl cursor-pointer"
                     >
-                      <Plus className="w-4 h-4" />
-                      <span>Create Class / Batch</span>
+                      <Plus className="w-4 h-4 shrink-0" />
+                      <span className="truncate">Create Class</span>
                     </button>
                   </>
                 )}
 
                 <button
                   onClick={handleLogout}
-                  className="neu-btn flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-rose-700 dark:text-rose-300 text-xs font-bold rounded-2xl cursor-pointer"
+                  className="neu-btn col-span-2 sm:col-span-1 flex items-center justify-center gap-1.5 px-3.5 py-2.5 text-rose-700 dark:text-rose-300 text-xs font-bold rounded-2xl cursor-pointer"
                 >
-                  <LogOut className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                  <LogOut className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
                   <span>Sign Out</span>
                 </button>
               </div>
@@ -843,7 +857,7 @@ export default function App() {
                 </div>
               ) : (
                 <Suspense fallback={null}>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6">
                     {courses
                       .filter((c) => {
                         if (!courseSearch.trim()) return true;

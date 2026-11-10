@@ -33,7 +33,11 @@ import {
   UserCog,
 } from 'lucide-react';
 
-import { PRESET_AVATARS as SHARED_PRESET_AVATARS } from '../data/presetAvatars';
+import {
+  PRESET_AVATARS as SHARED_PRESET_AVATARS,
+  resolveAvatarUrl,
+  DEFAULT_AVATAR_SVG,
+} from '../data/presetAvatars';
 
 const PRESET_AVATARS = SHARED_PRESET_AVATARS.slice(0, 5);
 
@@ -2708,21 +2712,21 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                     </div>
                     <div className="flex items-center gap-3">
                       <img
-                        src={avatar}
+                        src={resolveAvatarUrl(avatar)}
                         alt="Preview"
-                        className="w-12 h-12 rounded-full object-cover border-2 border-indigo-500 shrink-0"
+                        className="w-12 h-12 rounded-full object-contain bg-white p-0.5 border-2 border-indigo-500 shrink-0"
                       />
                       <div className="flex items-center gap-2 overflow-x-auto pb-1">
                         {PRESET_AVATARS.map((p) => (
                           <button
                             type="button"
-                            key={p.id}
+                            key={p.presetKey}
                             onClick={() => setAvatar(p.url)}
                             className={`relative rounded-full p-0.5 transition-all shrink-0 cursor-pointer ${
                               avatar === p.url ? 'ring-2 ring-indigo-600 scale-105' : 'opacity-70 hover:opacity-100'
                             }`}
                           >
-                            <img src={p.url} alt={p.name} className="w-8 h-8 rounded-full object-cover" />
+                            <img src={p.url} alt={p.name} className="w-8 h-8 rounded-full object-contain bg-white p-0.5" />
                           </button>
                         ))}
                       </div>
@@ -3640,13 +3644,13 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                           {user.role === 'admin' ? (
                             <div className="relative group/avatar shrink-0">
                               <img
-                                src={user.avatar || PRESET_AVATARS[0].url}
+                                src={resolveAvatarUrl(user.avatar)}
                                 alt={user.name}
                                 loading="lazy"
                                 onError={(e) => {
-                                  (e.target as HTMLImageElement).src = PRESET_AVATARS[0].url;
+                                  (e.target as HTMLImageElement).src = DEFAULT_AVATAR_SVG;
                                 }}
-                                className="w-11 h-11 rounded-full object-cover border-2 border-indigo-200 dark:border-indigo-800"
+                                className="w-11 h-11 rounded-full object-contain bg-white p-0.5 border-2 border-indigo-200 dark:border-indigo-800 shadow-2xs"
                               />
                               {!isProtectedPrimaryAdmin && (
                                 <button

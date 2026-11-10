@@ -1,7 +1,7 @@
 import { User, Course, CoursePost, Assignment, Quiz, StudentProgress, AssignmentSubmission, QuizSubmission, NotificationItem, AttendanceSession } from '../types/classroom';
+import { OFFICIAL_ACADEMY_LOGO } from '../assets/officialLogoData';
 
-const MOCK_ADMIN_AVATAR =
-  "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect width='150' height='150' rx='75' fill='%234f46e5'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.9'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.9'/%3E%3C/svg%3E";
+const MOCK_ADMIN_AVATAR = OFFICIAL_ACADEMY_LOGO;
 const MOCK_COADMIN_AVATAR =
   "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect width='150' height='150' rx='75' fill='%230d9488'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.9'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.9'/%3E%3C/svg%3E";
 const MOCK_BANNER_INDIGO =

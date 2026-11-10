@@ -164,7 +164,7 @@ export const ProfilePictureModal: React.FC<ProfilePictureModalProps> = ({
                 src={resolveAvatarUrl(selectedAvatar)}
                 alt="Avatar preview"
                 referrerPolicy="no-referrer"
-                className="w-20 h-20 sm:w-24 sm:h-24 rounded-full object-cover ring-4 ring-indigo-500/20 shadow-md"
+                className="w-20 h-20 sm:w-24 sm:h-24 rounded-full object-contain bg-white p-1 ring-4 ring-indigo-500/20 shadow-md"
                 onError={(e) => {
                   (e.target as HTMLImageElement).src = DEFAULT_AVATAR_SVG;
                 }}

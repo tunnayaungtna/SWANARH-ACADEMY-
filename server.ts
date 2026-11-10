@@ -7,9 +7,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const SUPABASE_TARGET_ORIGIN =
-  process.env.VITE_SUPABASE_URL || 'https://wxfassadxuxfvywvnlxs.supabase.co';
+  process.env.VITE_SUPABASE_URL || 'https://apuyokqzskpmbnmekpyd.supabase.co';
 const SUPABASE_DEFAULT_KEY =
-  process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_mhYrcHRIdU-2EXQoXATDaw_s4vO4ZXv';
+  process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_6eYg1IuvvXOtj7e8Kf-kVg_UDPgI7Gs';
 
 const parsedTargetOrigin = new URL(SUPABASE_TARGET_ORIGIN).origin;
 
@@ -66,7 +66,7 @@ async function startServer() {
     );
     res.setHeader(
       'Access-Control-Allow-Headers',
-      'Origin, X-Requested-With, Content-Type, Accept, Accept-Profile, Content-Profile, Authorization, apikey, Prefer, Range, x-client-info, x-supabase-api-version'
+      'Origin, X-Requested-With, Content-Type, Accept, Accept-Profile, Content-Profile, Authorization, apikey, Prefer, Range, x-client-info, x-supabase-api-version, x-supabase-target-origin'
     );
     res.setHeader(
       'Access-Control-Expose-Headers',
@@ -116,8 +116,17 @@ async function startServer() {
           return;
         }
 
-        const targetUrl = new URL(normalizedSub, parsedTargetOrigin);
-        if (targetUrl.origin !== parsedTargetOrigin) {
+        const customOriginHeader = req.headers['x-supabase-target-origin'];
+        let activeTargetOrigin = parsedTargetOrigin;
+        if (
+          typeof customOriginHeader === 'string' &&
+          /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(customOriginHeader.trim())
+        ) {
+          activeTargetOrigin = new URL(customOriginHeader.trim()).origin;
+        }
+
+        const targetUrl = new URL(normalizedSub, activeTargetOrigin);
+        if (targetUrl.origin !== activeTargetOrigin) {
           res.status(403).json({
             message: 'Invalid target origin.',
           });

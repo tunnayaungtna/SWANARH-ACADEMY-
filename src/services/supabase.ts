@@ -23,12 +23,60 @@ export const NOTIFICATION_TTL_MS = 30 * 60 * 1000; // 30 minutes auto-delete win
 export const AUDIT_LOG_TTL_MS = 2 * 24 * 60 * 60 * 1000; // 2 days (48 hours) security audit auto-delete window
 const AUDIT_LOG_SYSTEM_USER_ID = 'SYSTEM_AUDIT_LOG';
 
-// Supabase Project Credentials provided by user
-export const SUPABASE_CONFIG = {
-  url: import.meta.env.VITE_SUPABASE_URL || 'https://wxfassadxuxfvywvnlxs.supabase.co',
-  publishableKey: import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_mhYrcHRIdU-2EXQoXATDaw_s4vO4ZXv',
-  jwksUrl: import.meta.env.VITE_SUPABASE_JWKS_URL || 'https://wxfassadxuxfvywvnlxs.supabase.co/auth/v1/.well-known/jwks.json',
+const CUSTOM_SUPABASE_CONFIG_STORAGE_KEY = 'classroom_custom_supabase_config_v2';
+
+export function normalizeSupabaseProjectUrl(rawUrl: string): string {
+  const trimmed = (rawUrl || '').trim();
+  const match = trimmed.match(/^(https:\/\/[a-z0-9-]+\.supabase\.co)/i);
+  if (match) {
+    return match[1].toLowerCase();
+  }
+  return trimmed.replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, '');
+}
+
+export const DEFAULT_SUPABASE_CONFIG = {
+  url: normalizeSupabaseProjectUrl(
+    import.meta.env.VITE_SUPABASE_URL || 'https://apuyokqzskpmbnmekpyd.supabase.co'
+  ),
+  publishableKey:
+    import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_6eYg1IuvvXOtj7e8Kf-kVg_UDPgI7Gs',
+  jwksUrl:
+    import.meta.env.VITE_SUPABASE_JWKS_URL ||
+    'https://apuyokqzskpmbnmekpyd.supabase.co/auth/v1/.well-known/jwks.json',
 };
+
+function loadInitialSupabaseConfig(): {
+  url: string;
+  publishableKey: string;
+  jwksUrl: string;
+} {
+  if (typeof window !== 'undefined') {
+    try {
+      // Clear legacy v1 override so the newly migrated default project takes effect immediately
+      localStorage.removeItem('classroom_custom_supabase_config_v1');
+      const raw = localStorage.getItem(CUSTOM_SUPABASE_CONFIG_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { url?: string; publishableKey?: string };
+        const cleanUrl = normalizeSupabaseProjectUrl(parsed.url || '');
+        const cleanKey = (parsed.publishableKey || '').trim();
+        if (/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(cleanUrl) && cleanKey.length > 15) {
+          return {
+            url: cleanUrl,
+            publishableKey: cleanKey,
+            jwksUrl: `${cleanUrl}/auth/v1/.well-known/jwks.json`,
+          };
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return { ...DEFAULT_SUPABASE_CONFIG };
+}
+
+// Active Supabase Project Credentials (supports zero-downtime switching to a new Supabase project)
+export const SUPABASE_CONFIG = loadInitialSupabaseConfig();
+const INITIAL_CLIENT_SUPABASE_URL = SUPABASE_CONFIG.url.replace(/\/+$/, '');
 
 // Official Singapore Cloud Run Server (Silent Background VPN-Free Relay for Myanmar and International ISPs)
 const GLOBAL_VPN_FREE_RELAY_ORIGIN =
@@ -54,12 +102,23 @@ function getCandidateRoutesForHost(): AutoRouteType[] {
     : ['direct', 'sg_cloud_relay'];
 }
 
+function extractSupabaseSubPath(originalUrl: string): string {
+  const activeBase = SUPABASE_CONFIG.url.replace(/\/+$/, '');
+  const defaultBase = DEFAULT_SUPABASE_CONFIG.url.replace(/\/+$/, '');
+  let subPath = originalUrl;
+  if (originalUrl.startsWith(activeBase)) {
+    subPath = originalUrl.slice(activeBase.length);
+  } else if (originalUrl.startsWith(INITIAL_CLIENT_SUPABASE_URL)) {
+    subPath = originalUrl.slice(INITIAL_CLIENT_SUPABASE_URL.length);
+  } else if (originalUrl.startsWith(defaultBase)) {
+    subPath = originalUrl.slice(defaultBase.length);
+  }
+  return subPath.startsWith('/') ? subPath : `/${subPath}`;
+}
+
 function buildRouteUrl(originalUrl: string, routeType: AutoRouteType): string {
-  const baseSb = SUPABASE_CONFIG.url.replace(/\/+$/, '');
-  const subPath = originalUrl.startsWith(baseSb)
-    ? originalUrl.slice(baseSb.length)
-    : originalUrl;
-  const normalizedSub = subPath.startsWith('/') ? subPath : `/${subPath}`;
+  const activeBase = SUPABASE_CONFIG.url.replace(/\/+$/, '');
+  const normalizedSub = extractSupabaseSubPath(originalUrl);
 
   if (routeType === 'same_origin_proxy' && typeof window !== 'undefined') {
     return `${window.location.origin}/api/sb-proxy${normalizedSub}`;
@@ -67,7 +126,33 @@ function buildRouteUrl(originalUrl: string, routeType: AutoRouteType): string {
   if (routeType === 'sg_cloud_relay') {
     return `${GLOBAL_VPN_FREE_RELAY_ORIGIN}/api/sb-proxy${normalizedSub}`;
   }
-  return originalUrl;
+  return `${activeBase}${normalizedSub}`;
+}
+
+function applyActiveProjectHeaders(
+  init: RequestInit | undefined,
+  routeType: AutoRouteType
+): RequestInit | undefined {
+  const headers = new Headers(init?.headers || {});
+  headers.set('apikey', SUPABASE_CONFIG.publishableKey);
+  const currentAuth = headers.get('authorization') || headers.get('Authorization') || '';
+  if (
+    !currentAuth ||
+    currentAuth.includes(DEFAULT_SUPABASE_CONFIG.publishableKey) ||
+    currentAuth.startsWith('Bearer sb_publishable_') ||
+    currentAuth.startsWith('Bearer eyJ')
+  ) {
+    headers.set('Authorization', `Bearer ${SUPABASE_CONFIG.publishableKey}`);
+  }
+  if (routeType === 'same_origin_proxy' || routeType === 'sg_cloud_relay') {
+    headers.set('x-supabase-target-origin', SUPABASE_CONFIG.url.replace(/\/+$/, ''));
+  } else {
+    headers.delete('x-supabase-target-origin');
+  }
+  return {
+    ...init,
+    headers,
+  };
 }
 
 async function fetchSingleRouteWithTimeout(
@@ -118,7 +203,12 @@ const geoResilientSupabaseFetch: typeof fetch = async (input, init) => {
       ? input.toString()
       : input.url;
 
-  if (typeof window === 'undefined' || !rawUrl.startsWith(SUPABASE_CONFIG.url)) {
+  const isSupabaseRequest =
+    rawUrl.startsWith(SUPABASE_CONFIG.url) ||
+    rawUrl.startsWith(INITIAL_CLIENT_SUPABASE_URL) ||
+    rawUrl.startsWith(DEFAULT_SUPABASE_CONFIG.url);
+
+  if (typeof window === 'undefined' || !isSupabaseRequest) {
     return fetch(input, init);
   }
 
@@ -135,7 +225,11 @@ const geoResilientSupabaseFetch: typeof fetch = async (input, init) => {
     const backupRoute = baseCandidates.find((r) => r !== primaryRoute) || 'direct';
     try {
       const primaryUrl = buildRouteUrl(rawUrl, primaryRoute);
-      const res = await fetchSingleRouteWithTimeout(primaryUrl, init, 4500);
+      const res = await fetchSingleRouteWithTimeout(
+        primaryUrl,
+        applyActiveProjectHeaders(init, primaryRoute),
+        4500
+      );
       if (primaryRoute === 'same_origin_proxy' && (res.status === 404 || res.status === 405)) {
         throw new Error('Same-origin proxy not mounted');
       }
@@ -143,7 +237,11 @@ const geoResilientSupabaseFetch: typeof fetch = async (input, init) => {
       return res;
     } catch {
       const backupUrl = buildRouteUrl(rawUrl, backupRoute);
-      const backupRes = await fetchSingleRouteWithTimeout(backupUrl, init, 8000);
+      const backupRes = await fetchSingleRouteWithTimeout(
+        backupUrl,
+        applyActiveProjectHeaders(init, backupRoute),
+        8000
+      );
       activeWinningRoute = backupRoute;
       activeWinningRouteTimestamp = Date.now();
       return backupRes;
@@ -163,7 +261,7 @@ const geoResilientSupabaseFetch: typeof fetch = async (input, init) => {
           const url = buildRouteUrl(rawUrl, route);
           const res = await fetchSingleRouteWithTimeout(
             url,
-            init,
+            applyActiveProjectHeaders(init, route),
             7500,
             raceControllers[idx].signal
           );
@@ -184,8 +282,9 @@ const geoResilientSupabaseFetch: typeof fetch = async (input, init) => {
       return winner.res;
     } catch {
       // Fallback final attempt
-      const fallbackUrl = buildRouteUrl(rawUrl, baseCandidates[0]);
-      return fetch(fallbackUrl, init);
+      const fallbackRoute = baseCandidates[0];
+      const fallbackUrl = buildRouteUrl(rawUrl, fallbackRoute);
+      return fetch(fallbackUrl, applyActiveProjectHeaders(init, fallbackRoute));
     }
   }
 
@@ -194,7 +293,11 @@ const geoResilientSupabaseFetch: typeof fetch = async (input, init) => {
   const backupRoute = baseCandidates[1] || 'direct';
   try {
     const primaryUrl = buildRouteUrl(rawUrl, primaryRoute);
-    const res = await fetchSingleRouteWithTimeout(primaryUrl, init, 2200);
+    const res = await fetchSingleRouteWithTimeout(
+      primaryUrl,
+      applyActiveProjectHeaders(init, primaryRoute),
+      2200
+    );
     if (primaryRoute === 'same_origin_proxy' && (res.status === 404 || res.status === 405)) {
       throw new Error('Same-origin proxy unavailable');
     }
@@ -203,7 +306,11 @@ const geoResilientSupabaseFetch: typeof fetch = async (input, init) => {
     return res;
   } catch {
     const backupUrl = buildRouteUrl(rawUrl, backupRoute);
-    const backupRes = await fetchSingleRouteWithTimeout(backupUrl, init, 8500);
+    const backupRes = await fetchSingleRouteWithTimeout(
+      backupUrl,
+      applyActiveProjectHeaders(init, backupRoute),
+      8500
+    );
     activeWinningRoute = backupRoute;
     activeWinningRouteTimestamp = Date.now();
     return backupRes;
@@ -239,7 +346,7 @@ if (typeof window !== 'undefined') {
 export const SUPABASE_SQL_SCHEMA = `-- ========================================================
 -- Classroom OS - Supabase Database Schema & RLS Policies
 -- Execute this script in your Supabase SQL Editor:
--- https://supabase.com/dashboard/project/wxfassadxuxfvywvnlxs/sql
+-- https://supabase.com/dashboard/project/apuyokqzskpmbnmekpyd/sql
 -- ========================================================
 
 -- 1. Enable UUID Extension
@@ -789,11 +896,94 @@ export class SupabaseService {
   // In-flight GET request deduplication map for 2,000+ concurrent user scalability
   private static inflightGetRequests = new Map<string, Promise<unknown>>();
 
+  /**
+   * Returns the active Supabase project reference ID (e.g., 'apuyokqzskpmbnmekpyd')
+   */
+  static getActiveProjectRef(): string {
+    const match = SUPABASE_CONFIG.url.match(/^https:\/\/([a-z0-9-]+)\.supabase\.co/i);
+    return match ? match[1] : 'apuyokqzskpmbnmekpyd';
+  }
+
+  static hasCustomProjectConfig(): boolean {
+    if (typeof window === 'undefined') return false;
+    try {
+      return Boolean(localStorage.getItem(CUSTOM_SUPABASE_CONFIG_STORAGE_KEY));
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Dynamically switches the active Supabase project URL & Publishable/Anon Key with zero downtime
+   */
+  static setCustomProjectConfig(
+    newUrl: string,
+    newPublishableKey: string
+  ): { success: boolean; error?: string } {
+    const cleanUrl = normalizeSupabaseProjectUrl(newUrl || '');
+    const cleanKey = (newPublishableKey || '').trim();
+    if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(cleanUrl)) {
+      return {
+        success: false,
+        error:
+          'Project URL ပုံစံ မမှန်ကန်ပါ။ https://xxxxxxxxxxxx.supabase.co ပုံစံဖြင့် ထည့်သွင်းပေးပါ။',
+      };
+    }
+    if (cleanKey.length < 15) {
+      return {
+        success: false,
+        error: 'Supabase Publishable / Anon API Key ကို ပြည့်စုံစွာ ထည့်သွင်းပေးပါ။',
+      };
+    }
+    SUPABASE_CONFIG.url = cleanUrl;
+    SUPABASE_CONFIG.publishableKey = cleanKey;
+    SUPABASE_CONFIG.jwksUrl = `${cleanUrl}/auth/v1/.well-known/jwks.json`;
+
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(
+          CUSTOM_SUPABASE_CONFIG_STORAGE_KEY,
+          JSON.stringify({ url: cleanUrl, publishableKey: cleanKey })
+        );
+      } catch {
+        // ignore
+      }
+    }
+
+    // Reset cached schema/table probes & query cache for the new project
+    this.profileSchemaMode = 'full';
+    this.notificationsTableStatus = 'unknown';
+    this.lastUpsertSignatures.clear();
+    activeWinningRoute = null;
+    activeWinningRouteTimestamp = 0;
+    this.clearClientCache();
+    return { success: true };
+  }
+
+  static resetToDefaultProjectConfig(): void {
+    SUPABASE_CONFIG.url = DEFAULT_SUPABASE_CONFIG.url;
+    SUPABASE_CONFIG.publishableKey = DEFAULT_SUPABASE_CONFIG.publishableKey;
+    SUPABASE_CONFIG.jwksUrl = DEFAULT_SUPABASE_CONFIG.jwksUrl;
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(CUSTOM_SUPABASE_CONFIG_STORAGE_KEY);
+      } catch {
+        // ignore
+      }
+    }
+    this.profileSchemaMode = 'full';
+    this.notificationsTableStatus = 'unknown';
+    this.lastUpsertSignatures.clear();
+    activeWinningRoute = null;
+    activeWinningRouteTimestamp = 0;
+    this.clearClientCache();
+  }
+
   // ============================================================================
   // CLIENT-SIDE CACHING ENGINE (Reduces Supabase Egress by up to 96%)
   // ============================================================================
   private static readonly ASSET_CACHE_STORAGE_KEY = 'classroom_os_asset_cache_v2';
-  private static readonly QUERY_CACHE_STORAGE_KEY = 'classroom_os_query_cache_v2';
+  private static readonly QUERY_CACHE_STORAGE_KEY = 'classroom_os_query_cache_v3_apuyokqz';
   private static readonly CACHE_STATS_STORAGE_KEY = 'classroom_os_cache_stats_v2';
 
   private static clientQueryCache = new Map<

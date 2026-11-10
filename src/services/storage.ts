@@ -19,7 +19,7 @@ import {
   AuditLogSeverity,
 } from '../types/classroom';
 import { SupabaseService, NOTIFICATION_TTL_MS, AUDIT_LOG_TTL_MS } from './supabase';
-import { resolveAvatarUrl, toCloudAvatarKeyOrUrl } from '../data/presetAvatars';
+import { resolveAvatarUrl, toCloudAvatarKeyOrUrl, DEFAULT_AVATAR_SVG } from '../data/presetAvatars';
 import {
   encryptPassword,
   decryptPassword,
@@ -41,9 +41,6 @@ import {
   INITIAL_NOTIFICATIONS,
   INITIAL_ATTENDANCE_SESSIONS,
 } from '../data/mockData';
-
-const DEFAULT_AVATAR_SVG =
-  "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect width='150' height='150' rx='75' fill='%234f46e5'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.9'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.9'/%3E%3C/svg%3E";
 const DEFAULT_BANNER_INDIGO =
   "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='300' viewBox='0 0 1200 300'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%231e1b4b'/%3E%3Cstop offset='100%25' stop-color='%234338ca'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='1200' height='300' fill='url(%23g)'/%3E%3Ccircle cx='1050' cy='50' r='180' fill='%23ffffff' fill-opacity='0.06'/%3E%3C/svg%3E";
 const DEFAULT_BANNER_EMERALD =
@@ -1441,7 +1438,13 @@ export class ClassroomDB {
 
   static getAllUsers(): User[] {
     const users = this.getItem<User[]>(STORAGE_KEYS.USERS, INITIAL_USERS);
-    return users.map((u) => (u.role !== 'admin' && u.avatar ? { ...u, avatar: '' } : u));
+    return users.map((u) => {
+      if (u.role !== 'admin') {
+        return u.avatar ? { ...u, avatar: '' } : u;
+      }
+      const resolved = resolveAvatarUrl(u.avatar);
+      return u.avatar === resolved ? u : { ...u, avatar: resolved };
+    });
   }
 
   static registerNewUser(data: {
@@ -1516,17 +1519,11 @@ export class ClassroomDB {
       };
     }
 
-    // Zero-latency offline-safe SVG avatars for Admin & Co-Admin only (Students never have profile photos)
-    const avatarPool = [
-      "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'><rect width='120' height='120' rx='60' fill='%23059669'/><circle cx='60' cy='45' r='22' fill='%23ffffff' fill-opacity='0.92'/><path d='M24 104c6-20 22-32 36-32s30 12 36 32' fill='%23ffffff' fill-opacity='0.92'/></svg>",
-      "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'><rect width='120' height='120' rx='60' fill='%230284c7'/><circle cx='60' cy='45' r='22' fill='%23ffffff' fill-opacity='0.92'/><path d='M24 104c6-20 22-32 36-32s30 12 36 32' fill='%23ffffff' fill-opacity='0.92'/></svg>",
-      "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'><rect width='120' height='120' rx='60' fill='%234f46e5'/><circle cx='60' cy='45' r='22' fill='%23ffffff' fill-opacity='0.92'/><path d='M24 104c6-20 22-32 36-32s30 12 36 32' fill='%23ffffff' fill-opacity='0.92'/></svg>",
-      "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'><rect width='120' height='120' rx='60' fill='%23d97706'/><circle cx='60' cy='45' r='22' fill='%23ffffff' fill-opacity='0.92'/><path d='M24 104c6-20 22-32 36-32s30 12 36 32' fill='%23ffffff' fill-opacity='0.92'/></svg>",
-    ];
+    // Default Admin profile picture is the Official SwanArh Academy Application Logo
     const finalAvatar =
       data.role !== 'admin'
         ? ''
-        : data.avatar?.trim() || avatarPool[users.length % avatarPool.length];
+        : resolveAvatarUrl(data.avatar?.trim());
 
     let uniqueTs = Date.now();
     const existingIdSet = new Set(users.map((u) => u.id));
@@ -2974,15 +2971,19 @@ export class ClassroomDB {
     };
   }
 
-  static async syncWithSupabase(): Promise<{
+  static async syncWithSupabase(options?: { pushOnly?: boolean }): Promise<{
     success: boolean;
     syncedUsers: number;
     syncedCourses: number;
+    syncedPosts?: number;
+    syncedAttendance?: number;
     cleanedOrphans?: number;
     error?: string;
   }> {
-    // First pull authoritative remote state so we never resurrect items deleted on another device
-    await this.pullFromSupabase({ force: true });
+    if (!options?.pushOnly) {
+      // First pull authoritative remote state so we never resurrect items deleted on another device
+      await this.pullFromSupabase({ force: true });
+    }
     // Clean local orphaned references first so we never push stale/orphaned data to Supabase
     await this.cleanOrphanedLocalAndCloudData(false);
 
@@ -2997,7 +2998,7 @@ export class ClassroomDB {
       INITIAL_ATTENDANCE_SESSIONS
     );
     const deletedIds = this.getDeletedIds();
-    return SupabaseService.syncAllData(
+    const res = await SupabaseService.syncAllData(
       users,
       courses,
       posts,
@@ -3007,6 +3008,214 @@ export class ClassroomDB {
       deletedIds,
       submissions
     );
+    return {
+      ...res,
+      syncedPosts: posts.filter((p) => !deletedIds.includes(p.id)).length,
+      syncedAttendance: attendance.filter((a) => !deletedIds.includes(a.id)).length,
+    };
+  }
+
+  /**
+   * Exports a complete JSON snapshot of all Classroom data (Users, Courses, Posts, Comments, Attendance, Assignments, Quizzes)
+   */
+  static exportFullDatabaseBackup(): {
+    filename: string;
+    json: string;
+    counts: {
+      users: number;
+      courses: number;
+      posts: number;
+      assignments: number;
+      submissions: number;
+      quizzes: number;
+      attendance: number;
+    };
+  } {
+    const deletedSet = new Set(this.getDeletedIds());
+    const users = this.getAllUsers().filter((u) => !deletedSet.has(u.id));
+    const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter(
+      (c) => !deletedSet.has(c.id)
+    );
+    const posts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS).filter(
+      (p) => !deletedSet.has(p.id)
+    );
+    const assignments = this.getItem<Assignment[]>(
+      STORAGE_KEYS.ASSIGNMENTS,
+      INITIAL_ASSIGNMENTS
+    ).filter((a) => !deletedSet.has(a.id));
+    const submissions = this.getItem<AssignmentSubmission[]>(
+      STORAGE_KEYS.SUBMISSIONS,
+      INITIAL_SUBMISSIONS
+    ).filter((s) => !deletedSet.has(s.id));
+    const quizzes = this.getItem<Quiz[]>(STORAGE_KEYS.QUIZZES, INITIAL_QUIZZES).filter(
+      (q) => !deletedSet.has(q.id)
+    );
+    const attendance = this.getItem<AttendanceSession[]>(
+      STORAGE_KEYS.ATTENDANCE,
+      INITIAL_ATTENDANCE_SESSIONS
+    ).filter((att) => !deletedSet.has(att.id));
+
+    const payload = {
+      schemaVersion: 'swanarh-classroom-backup-v2',
+      exportedAt: new Date().toISOString(),
+      sourceProjectUrl: SupabaseService.getActiveProjectRef(),
+      counts: {
+        users: users.length,
+        courses: courses.length,
+        posts: posts.length,
+        assignments: assignments.length,
+        submissions: submissions.length,
+        quizzes: quizzes.length,
+        attendance: attendance.length,
+      },
+      data: {
+        users,
+        courses,
+        posts,
+        assignments,
+        submissions,
+        quizzes,
+        attendance,
+      },
+    };
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    return {
+      filename: `swanarh-classroom-backup-${dateStr}.json`,
+      json: JSON.stringify(payload, null, 2),
+      counts: payload.counts,
+    };
+  }
+
+  /**
+   * Restores Classroom data from a backup JSON file and pushes it to the active Supabase project
+   */
+  static async importFullDatabaseBackup(jsonText: string): Promise<{
+    success: boolean;
+    message: string;
+  }> {
+    try {
+      const parsed = JSON.parse(jsonText) as {
+        data?: {
+          users?: User[];
+          courses?: Course[];
+          posts?: CoursePost[];
+          assignments?: Assignment[];
+          submissions?: AssignmentSubmission[];
+          quizzes?: Quiz[];
+          attendance?: AttendanceSession[];
+        };
+      };
+      if (!parsed?.data || !Array.isArray(parsed.data.users) || !Array.isArray(parsed.data.courses)) {
+        return {
+          success: false,
+          message: 'Backup JSON ဖိုင်ပုံစံ မမှန်ကန်ပါ။ swanarh-classroom-backup.json ဖိုင်ကိုသာ ရွေးချယ်ပေးပါ။',
+        };
+      }
+
+      const { users, courses, posts, assignments, submissions, quizzes, attendance } = parsed.data;
+      this.setItem(STORAGE_KEYS.DELETED_IDS, []);
+      this.setItem(STORAGE_KEYS.USERS, users);
+      this.setItem(STORAGE_KEYS.COURSES, courses);
+      if (Array.isArray(posts)) this.setItem(STORAGE_KEYS.POSTS, posts);
+      if (Array.isArray(assignments)) this.setItem(STORAGE_KEYS.ASSIGNMENTS, assignments);
+      if (Array.isArray(submissions)) this.setItem(STORAGE_KEYS.SUBMISSIONS, submissions);
+      if (Array.isArray(quizzes)) this.setItem(STORAGE_KEYS.QUIZZES, quizzes);
+      if (Array.isArray(attendance)) this.setItem(STORAGE_KEYS.ATTENDANCE, attendance);
+
+      const syncRes = await this.syncWithSupabase({ pushOnly: true });
+      if (!syncRes.success && syncRes.error) {
+        return {
+          success: false,
+          message: `Local သို့ Data ပြန်ထည့်ပြီးသော်လည်း Supabase Sync Error ရှိနေပါသည်: ${syncRes.error}`,
+        };
+      }
+      return {
+        success: true,
+        message: `✅ Backup ဖိုင်မှ အကောင့် (${users.length}) ခု၊ သင်တန်း (${courses.length}) ခု၊ Post (${posts?.length || 0}) ခုနှင့် Attendance (${attendance?.length || 0}) ခုလုံးကို အောင်မြင်စွာ ပြန်လည်ထည့်သွင်းပြီး Supabase သို့ Sync လုပ်ပြီးပါပြီ!`,
+      };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        success: false,
+        message: `Backup ဖိုင်ဖတ်ရာတွင် အမှားအယွင်းရှိနေပါသည်: ${msg}`,
+      };
+    }
+  }
+
+  /**
+   * 1-Click Zero-Downtime Migration to a New Supabase Project:
+   * 1. Switches active Supabase Project URL & Publishable/Anon Key
+   * 2. Clears old project confirmation markers without touching local Classroom data
+   * 3. Pushes 100% of Users, Courses, Posts, Comments, Assignments, Submissions, Quizzes & Attendance to the new Supabase project
+   */
+  static async migrateToNewSupabaseProject(
+    newUrl: string,
+    newPublishableKey: string
+  ): Promise<{
+    success: boolean;
+    message: string;
+    syncedUsers?: number;
+    syncedCourses?: number;
+    syncedPosts?: number;
+    syncedAttendance?: number;
+  }> {
+    const switchRes = SupabaseService.setCustomProjectConfig(newUrl, newPublishableKey);
+    if (!switchRes.success) {
+      return {
+        success: false,
+        message: switchRes.error || 'Project URL သို့မဟုတ် API Key မမှန်ကန်ပါ။',
+      };
+    }
+
+    // Reset cloud confirmation sets so all local items push cleanly to the new project
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(STORAGE_KEYS.CLOUD_SYNCED);
+        localStorage.removeItem(STORAGE_KEYS.CLOUD_CONFIRMED_POSTS);
+        localStorage.removeItem(STORAGE_KEYS.CLOUD_CONFIRMED_ATTENDANCE);
+      } catch {
+        // ignore
+      }
+    }
+    this.lastFullPullAt = 0;
+    this.lastCatalogPullAt = 0;
+    this.lastProfilePullAt = 0;
+
+    // Test connection to the new Supabase project first
+    const conn = await SupabaseService.checkConnection();
+    if (!conn.connected) {
+      return {
+        success: false,
+        message: `Project အသစ်သို့ ချိတ်ဆက်ရာတွင် Table များ မတွေ့သေးပါ (${conn.message}) — ကျေးဇူးပြု၍ Project အသစ်၏ SQL Editor တွင် အောက်ပါ SQL Script ကို အရင် RUN ပေးပါ။`,
+      };
+    }
+
+    // Push all local data directly to the new project (pushOnly: true prevents an empty new DB from deleting local items)
+    const syncRes = await this.syncWithSupabase({ pushOnly: true });
+    if (syncRes.error) {
+      return {
+        success: false,
+        message: `Migration Sync Error: ${syncRes.error} — Project အသစ်၏ SQL Editor တွင် SQL Script ကို အရင် RUN ထားကြောင်း စစ်ဆေးပေးပါ။`,
+      };
+    }
+
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(STORAGE_KEYS.CLOUD_SYNCED, 'true');
+      } catch {
+        // ignore
+      }
+    }
+
+    return {
+      success: true,
+      syncedUsers: syncRes.syncedUsers,
+      syncedCourses: syncRes.syncedCourses,
+      syncedPosts: syncRes.syncedPosts,
+      syncedAttendance: syncRes.syncedAttendance,
+      message: `🎉 Project အသစ် (${newUrl}) သို့ အောင်မြင်စွာ ပြောင်းလဲချိတ်ဆက်ပြီး အကောင့် (${syncRes.syncedUsers}) ခု၊ သင်တန်း (${syncRes.syncedCourses}) ခု၊ Post (${syncRes.syncedPosts || 0}) ခုနှင့် Attendance (${syncRes.syncedAttendance || 0}) ခုလုံးကို Data မပျက်ဘဲ အပြည့်အဝ ရွှေ့ပြောင်းပြီးပါပြီ!`,
+    };
   }
 
   private static activePullPromise: Promise<boolean> | null = null;
@@ -3355,9 +3564,17 @@ export class ClassroomDB {
         ]);
 
         let updated = purgedLocalNotifs;
+        // Detect if the remote Supabase project was just created (e.g. 0 courses in cloud while local has courses)
+        const isFreshUnseededRemoteDb =
+          shouldFetchCatalog &&
+          remoteCourses !== null &&
+          remoteCourses.length === 0 &&
+          currentCourses.length > 0;
+
         const hasRemoteCatalogData =
-          (remoteProfiles && remoteProfiles.length > 0) ||
-          (remoteCourses && remoteCourses.length > 0);
+          !isFreshUnseededRemoteDb &&
+          ((remoteProfiles && remoteProfiles.length > 0) ||
+            (remoteCourses && remoteCourses.length > 0));
         if (hasRemoteCatalogData) {
           try {
             localStorage.setItem(STORAGE_KEYS.CLOUD_SYNCED, 'true');
@@ -3365,14 +3582,15 @@ export class ClassroomDB {
             // ignore
           }
         } else if (
-          shouldFetchCatalog &&
-          remoteProfiles !== null &&
-          remoteProfiles.length === 0 &&
-          remoteCourses !== null &&
-          remoteCourses.length === 0 &&
-          localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) !== 'true'
+          isFreshUnseededRemoteDb ||
+          (shouldFetchCatalog &&
+            remoteProfiles !== null &&
+            remoteProfiles.length === 0 &&
+            remoteCourses !== null &&
+            remoteCourses.length === 0 &&
+            localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) !== 'true')
         ) {
-          // Brand-new empty Supabase tables detected: automatically push initial local data in the background
+          // Brand-new or freshly migrated Supabase tables detected: automatically push all local data to the new project
           try {
             const seedUsers = this.getAllUsers();
             const seedCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
@@ -3409,8 +3627,9 @@ export class ClassroomDB {
           }
         }
         const cloudActive =
-          hasRemoteCatalogData ||
-          localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) === 'true';
+          !isFreshUnseededRemoteDb &&
+          (hasRemoteCatalogData ||
+            localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) === 'true');
 
         // 1. Reconcile Profiles & Verify Single-Device Session Lock (Students Only)
         const latestAvatarByUserId = new Map<string, string>();
@@ -3422,6 +3641,8 @@ export class ClassroomDB {
 
           localUsers.forEach((u) => {
             if (
+              !cloudActive ||
+              isFreshUnseededRemoteDb ||
               remoteProfileIds.has(u.id) ||
               this.isRecentLocalWrite(u.id) ||
               (isStudentLightweight && u.role === 'student' && u.id !== loggedUser?.id)

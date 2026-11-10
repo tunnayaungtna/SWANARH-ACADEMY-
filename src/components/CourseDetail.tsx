@@ -69,43 +69,43 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
         </div>
 
         {/* Recessed Neumorphic 3-Tab Switcher (Stream · Attendance · People) */}
-        <div className="neu-inset p-1.5 rounded-2xl flex items-center gap-1.5 text-xs font-bold self-stretch sm:self-auto justify-center overflow-x-auto">
+        <div className="neu-inset p-1.5 rounded-2xl grid grid-cols-3 sm:flex items-center gap-1 sm:gap-1.5 text-xs font-bold self-stretch sm:self-auto">
           <button
             onClick={() => handleSwitchTab('stream')}
-            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
+            className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2 sm:px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'stream'
                 ? 'neu-raised-sm text-indigo-700 dark:text-indigo-300'
                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
-            <MessageSquare className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+            <MessageSquare className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
             <span>Stream</span>
           </button>
 
           <button
             onClick={() => handleSwitchTab('attendance')}
-            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
+            className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2 sm:px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'attendance'
                 ? 'neu-raised-sm text-emerald-700 dark:text-emerald-300'
                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
-            <CalendarCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            <CalendarCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
             <span>Attendance</span>
             {hasOpenAttendance && (
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="Attendance Check-in Open" />
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" title="Attendance Check-in Open" />
             )}
           </button>
 
           <button
             onClick={() => handleSwitchTab('people')}
-            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
+            className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2 sm:px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'people'
                 ? 'neu-raised-sm text-indigo-700 dark:text-indigo-300'
                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
-            <Users className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+            <Users className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
             <span>People</span>
           </button>
         </div>
