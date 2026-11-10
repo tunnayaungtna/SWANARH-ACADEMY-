@@ -38,7 +38,6 @@ interface NavbarProps {
   onSelectUser: (user: User) => void;
   onLogout: () => void;
   onOpenArchitecture: () => void;
-  onOpenSecurity: () => void;
   onOpenStudentDirectory?: () => void;
   onOpenAuditLog?: () => void;
   onOpenRules?: () => void;
@@ -58,7 +57,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSelectUser: _onSelectUser,
   onLogout,
   onOpenArchitecture,
-  onOpenSecurity,
   onOpenStudentDirectory,
   onOpenAuditLog,
   onOpenRules,
@@ -196,12 +194,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <span>Audit Log</span>
                 </button>
               )}
-              <button
-                onClick={onOpenSecurity}
-                className="hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                Video Protection
-              </button>
             </>
           )}
         </nav>
@@ -681,19 +673,6 @@ export const Navbar: React.FC<NavbarProps> = ({
               >
                 <Shield className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                 <span>Security Audit Log (လုပ်ဆောင်ချက် မှတ်တမ်း)</span>
-              </button>
-            )}
-
-            {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
-              <button
-                onClick={() => {
-                  onOpenSecurity();
-                  setIsMobileMenuOpen(false);
-                }}
-                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-left cursor-pointer"
-              >
-                <Shield className="w-4 h-4 text-slate-600 dark:text-slate-400" />
-                <span>Video Protection & Anti-Piracy</span>
               </button>
             )}
           </div>

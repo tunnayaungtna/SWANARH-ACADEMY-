@@ -10,7 +10,7 @@ export const SecurityArchitectureModal: React.FC<SecurityArchitectureModalProps>
   isOpen,
   onClose,
 }) => {
-  const [activeTab, setActiveTab] = useState<'stack' | 'schema' | 'rls' | 'video' | 'roadmap' | 'zoom'>('stack');
+  const [activeTab, setActiveTab] = useState<'stack' | 'schema' | 'rls' | 'roadmap' | 'zoom'>('stack');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   if (!isOpen) return null;
@@ -328,7 +328,7 @@ GRANT USAGE, SELECT ON SEQUENCES TO anon, authenticated, service_role;`;
                 Architecture, Security & Technical Specifications
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Deliverables: Tech Stack Recommendation, Database Schema, RLS, Anti-Piracy DRM, and Implementation Roadmap
+                Deliverables: Tech Stack Recommendation, Database Schema, RLS, Client-Side Caching, and Implementation Roadmap
               </p>
             </div>
           </div>
@@ -374,16 +374,6 @@ GRANT USAGE, SELECT ON SEQUENCES TO anon, authenticated, service_role;`;
             3. Row-Level Security (RLS)
           </button>
           <button
-            onClick={() => setActiveTab('video')}
-            className={`px-3.5 py-2 font-medium border-b-2 transition-colors cursor-pointer whitespace-nowrap ${
-              activeTab === 'video'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
-                : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            4. Anti-Piracy & DRM Pipeline
-          </button>
-          <button
             onClick={() => setActiveTab('roadmap')}
             className={`px-3.5 py-2 font-medium border-b-2 transition-colors cursor-pointer whitespace-nowrap ${
               activeTab === 'roadmap'
@@ -391,7 +381,7 @@ GRANT USAGE, SELECT ON SEQUENCES TO anon, authenticated, service_role;`;
                 : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            5. Step-by-Step Roadmap
+            4. Step-by-Step Roadmap
           </button>
           <button
             onClick={() => setActiveTab('zoom')}
@@ -401,7 +391,7 @@ GRANT USAGE, SELECT ON SEQUENCES TO anon, authenticated, service_role;`;
                 : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            6. Zoom Deep Linking Spec
+            5. Zoom Deep Linking Spec
           </button>
         </div>
 
@@ -519,49 +509,7 @@ GRANT USAGE, SELECT ON SEQUENCES TO anon, authenticated, service_role;`;
             </div>
           )}
 
-          {/* TAB 4: ANTI-PIRACY & VIDEO DRM PIPELINE */}
-          {activeTab === 'video' && (
-            <div className="space-y-4 leading-relaxed">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800">
-                  <div className="font-semibold text-slate-900 dark:text-slate-100 mb-1">1. URL Obfuscation & Tokens</div>
-                  <p className="text-slate-600 dark:text-slate-400 text-[11px]">
-                    Video URLs are never embedded as raw .mp4 in the DOM. Server-side middleware issues short-lived SHA256 signed tokens for HLS playlist segments (.ts chunks). Direct file download requests return HTTP 403.
-                  </p>
-                </div>
-
-                <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800">
-                  <div className="font-semibold text-slate-900 dark:text-slate-100 mb-1">2. Domain-Restricted Embeds</div>
-                  <p className="text-slate-600 dark:text-slate-400 text-[11px]">
-                    Bunny Stream or Vimeo Private delivery restricts origin headers strictly to the authorized platform domain. Hotlinking from other websites or third-party players is rejected.
-                  </p>
-                </div>
-
-                <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800">
-                  <div className="font-semibold text-slate-900 dark:text-slate-100 mb-1">3. Dynamic Floating Watermark</div>
-                  <p className="text-slate-600 dark:text-slate-400 text-[11px]">
-                    The authenticated student's full name, email, phone number, and IP/timestamp randomly drift across coordinates in the video frame every 3-7 seconds. If recorded via OBS/phone camera, the leaker is forensically identified.
-                  </p>
-                </div>
-              </div>
-
-              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/50">
-                <div className="font-semibold text-slate-900 dark:text-slate-100 text-sm mb-2">
-                  Client-Side Text Selection & Right-Click Disabling
-                </div>
-                <p className="text-slate-600 dark:text-slate-400 text-[11px] mb-2">
-                  To prevent bulk copy-pasting of proprietary course material and exam prompts:
-                </p>
-                <div className="p-2.5 bg-slate-900 text-emerald-300 font-mono text-[11px] rounded overflow-x-auto whitespace-pre">
-                  <code>
-                    {'onContextMenu={(e) => e.preventDefault()}  // Blocks right-click inspect\nclassName="select-none"                     // Prevents text highlighting'}
-                  </code>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* TAB 5: ROADMAP */}
+          {/* TAB 4: ROADMAP */}
           {activeTab === 'roadmap' && (
             <div className="space-y-4">
               <div className="space-y-3">

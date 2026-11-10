@@ -13,6 +13,11 @@ import {
   AuditLogEntry,
 } from '../types/classroom';
 import { encryptPassword } from '../utils/passwordCrypto';
+import {
+  resolveAvatarUrl,
+  toCloudAvatarKeyOrUrl,
+  DEFAULT_AVATAR_PRESET_KEY,
+} from '../data/presetAvatars';
 
 export const NOTIFICATION_TTL_MS = 30 * 60 * 1000; // 30 minutes auto-delete window
 export const AUDIT_LOG_TTL_MS = 2 * 24 * 60 * 60 * 1000; // 2 days (48 hours) security audit auto-delete window
@@ -463,7 +468,7 @@ CREATE POLICY "Attendance sessions full access" ON public.attendance_sessions FO
 -- 8. Seed Initial Demo Accounts (Admin, Co-Admin, Students)
 INSERT INTO public.profiles (id, name, username, email, role, phone, avatar, title, gender, address)
 VALUES
-  ('user-admin-1', 'Dr. Kyaw Swar', 'kyawswar.admin', 'kyaw.admin@classroomos.edu', 'admin', '+95 9 791 234567', '', 'Dean of Computing & Lead Mentor', 'male', 'No. 45, Pyay Road, Kamayut, Yangon'),
+  ('user-admin-1', 'Dr. Kyaw Swar', 'kyawswar.admin', 'kyaw.admin@classroomos.edu', 'admin', '+95 9 791 234567', 'preset:mentor-1', 'Dean of Computing & Lead Mentor', 'male', 'No. 45, Pyay Road, Kamayut, Yangon'),
   ('user-coadmin-1', 'Daw Khin Myo', 'khinmyo.coadmin', 'khinmyo.coadmin@classroomos.edu', 'co_admin', '+95 9 512 889900', '', 'Course Coordinator & Assistant Instructor', 'female', 'No. 12, University Avenue, Bahan, Yangon'),
   ('user-student-1', 'Aung Min', 'aungmin2026', 'aung.min@student.edu', 'student', '+95 9 970 882190', '', 'Computer Science Undergraduate', 'male', 'Room 3B, Insein Road, Hlaing, Yangon'),
   ('user-student-2', 'Su Su Win', 'susu.win', 'susu.win@student.edu', 'student', '+95 9 420 551829', '', 'Software Engineering Scholar', 'female', 'No. 88, Bogyoke Aung San Road, Kyauktada, Yangon'),
@@ -538,14 +543,14 @@ DELETE FROM public.quiz_submissions WHERE quiz_id NOT IN (SELECT id FROM public.
 DELETE FROM public.attendance_sessions WHERE course_id NOT IN (SELECT id FROM public.courses);
 DELETE FROM public.notifications WHERE course_id NOT IN (SELECT id FROM public.courses) OR user_id NOT IN (SELECT id FROM public.profiles) OR expires_at <= now();
 
--- Strip redundant Base64 avatars from posts, student profiles, and submissions to cut Egress by 90%
+-- Strip redundant Base64 avatars from posts, profiles, and submissions to cut Egress by 96%
 UPDATE public.posts SET author_avatar = '' WHERE author_avatar IS NOT NULL AND author_avatar <> '';
-UPDATE public.profiles SET avatar = '' WHERE role = 'student' AND avatar IS NOT NULL AND avatar <> '';
+UPDATE public.profiles SET avatar = '' WHERE role IN ('student', 'co_admin') AND avatar IS NOT NULL AND avatar <> '';
+UPDATE public.profiles SET avatar = 'preset:mentor-1' WHERE role = 'admin' AND (avatar LIKE 'data:%' OR length(avatar) > 500);
 UPDATE public.assignment_submissions SET student_avatar = '' WHERE student_avatar IS NOT NULL AND student_avatar <> '';
 `;
 
-const DEFAULT_FALLBACK_AVATAR =
-  "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'><rect width='120' height='120' rx='60' fill='%23059669'/><circle cx='60' cy='45' r='22' fill='%23ffffff' fill-opacity='0.92'/><path d='M24 104c6-20 22-32 36-32s30 12 36 32' fill='%23ffffff' fill-opacity='0.92'/></svg>";
+const DEFAULT_FALLBACK_AVATAR = resolveAvatarUrl(DEFAULT_AVATAR_PRESET_KEY);
 const DEFAULT_FALLBACK_BANNER =
   "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 300'><defs><linearGradient id='g' x1='0%' y1='0%' x2='100%' y2='100%'><stop offset='0%' stop-color='%23064e3b'/><stop offset='50%' stop-color='%23047857'/><stop offset='100%' stop-color='%230f172a'/></linearGradient></defs><rect width='1200' height='300' fill='url(%23g)'/><circle cx='1050' cy='60' r='180' fill='%2310b981' fill-opacity='0.14'/><circle cx='180' cy='260' r='220' fill='%2334d399' fill-opacity='0.1'/></svg>";
 
@@ -560,15 +565,13 @@ function sanitizeBlockedExternalImageUrl(url: string | undefined, fallback: stri
 
 /**
  * Compacts avatars & banners for Supabase SQL sync (< 5.5 GB Free Plan Guard):
- * - Students and Co-Admins NEVER have profile photos (`''`).
- * - Only Primary Admin (`role === 'admin'`) compressed profile photos (up to 45KB) sync across all devices.
- * - Classroom header banners (up to 65KB) sync across all devices.
+ * - NEVER stores Base64 (`data:...`) in Supabase `public.profiles.avatar`!
+ * - Students and Co-Admins always store `''` (0 Bytes).
+ * - Primary Admin (`role === 'admin'`) stores ONLY a short Preset Key (`preset:mentor-1`, 15 Bytes)
+ *   or an External Image URL (`https://...`, <= 500 chars).
  */
 function compactAvatarForCloud(avatar?: string, role?: UserRole): string {
-  if (role !== 'admin') return '';
-  if (!avatar || avatar.includes('images.unsplash.com')) return DEFAULT_FALLBACK_AVATAR;
-  if (avatar.length > 45_000) return DEFAULT_FALLBACK_AVATAR;
-  return avatar;
+  return toCloudAvatarKeyOrUrl(avatar, role);
 }
 
 function compactBannerForCloud(banner?: string): string {
@@ -1109,7 +1112,7 @@ export class SupabaseService {
       avatar:
         role !== 'admin'
           ? ''
-          : sanitizeBlockedExternalImageUrl(String(row.avatar || ''), DEFAULT_FALLBACK_AVATAR),
+          : resolveAvatarUrl(String(row.avatar || '')),
       title: decoded.title,
       gender: (row.gender as User['gender']) || undefined,
       address: row.address ? String(row.address) : undefined,
@@ -1153,17 +1156,21 @@ export class SupabaseService {
           filterSet.add(`email.ilike.${idLocalPart}@%`);
         }
 
+        const profileFullCols =
+          'id,name,username,email,role,phone,avatar,title,gender,address,password,rules_accepted,rules_accepted_at';
+        const profileCoreCols = 'id,name,username,email,role,phone,avatar,title';
+
         const { data, error } = await supabase
           .from('profiles')
-          .select('*')
+          .select(profileFullCols)
           .or(Array.from(filterSet).join(','))
           .limit(15);
 
         if (!error && Array.isArray(data) && data.length > 0) {
-          return data.map((r) => this.mapProfileRowToUser(r as Record<string, unknown>));
+          return data.map((r) => this.mapProfileRowToUser(r as unknown as Record<string, unknown>));
         }
 
-        // Fallback if `username` column is missing in an older Supabase table schema
+        // Fallback if optional columns (`username`, `password`, `gender`, `address`, `rules_accepted`) are missing in an older Supabase table schema
         if (error) {
           const fallbackFilters = [
             `email.ilike.${compactId}`,
@@ -1171,11 +1178,11 @@ export class SupabaseService {
           ];
           const { data: fbData, error: fbErr } = await supabase
             .from('profiles')
-            .select('*')
+            .select(profileCoreCols)
             .or(Array.from(new Set(fallbackFilters)).join(','))
             .limit(15);
           if (!fbErr && Array.isArray(fbData) && fbData.length > 0) {
-            return fbData.map((r) => this.mapProfileRowToUser(r as Record<string, unknown>));
+            return fbData.map((r) => this.mapProfileRowToUser(r as unknown as Record<string, unknown>));
           }
         }
         return [];
@@ -1262,9 +1269,17 @@ export class SupabaseService {
             ? 'id,name,username,email,role,phone,title,gender,address,rules_accepted,rules_accepted_at,created_at,updated_at'
             : 'id,name,username,email,role,phone,title,gender,address,password,rules_accepted,rules_accepted_at,created_at,updated_at';
 
+        const fullCols =
+          this.profileSchemaMode === 'core'
+            ? 'id,name,username,email,role,phone,avatar,title,created_at,updated_at'
+            : this.profileSchemaMode === 'no_password'
+            ? 'id,name,username,email,role,phone,avatar,title,gender,address,rules_accepted,rules_accepted_at,created_at,updated_at'
+            : 'id,name,username,email,role,phone,avatar,title,gender,address,password,rules_accepted,rules_accepted_at,created_at,updated_at';
+
+        const selectedCols: string = useAvatarLite ? liteCols : fullCols;
         let query = supabase
           .from('profiles')
-          .select(useAvatarLite ? liteCols : '*');
+          .select(selectedCols);
 
         if (isStudentLite && options?.currentUserId) {
           const safeUid = options.currentUserId.replace(/[,()"'\\]/g, '').trim();
@@ -1273,11 +1288,17 @@ export class SupabaseService {
           query = query.limit(3000);
         }
 
-        let { data, error } = await query;
+        const primaryRes = await query;
+        let rows: Record<string, unknown>[] | null =
+          !primaryRes.error && Array.isArray(primaryRes.data)
+            ? (primaryRes.data as unknown as Record<string, unknown>[])
+            : null;
+        let error = primaryRes.error;
 
-        // Fallback if optional columns in liteCols are missing on an older schema
-        if (error && useAvatarLite) {
-          let fbQuery = supabase.from('profiles').select('*');
+        // Fallback to core explicit columns if optional columns are missing on an older schema
+        if (error) {
+          const coreFallbackCols = 'id,name,username,email,role,phone,avatar,title';
+          let fbQuery = supabase.from('profiles').select(coreFallbackCols);
           if (isStudentLite && options?.currentUserId) {
             const safeUid = options.currentUserId.replace(/[,()"'\\]/g, '').trim();
             fbQuery = fbQuery.or(`id.eq.${safeUid},role.in.(admin,co_admin)`).limit(25);
@@ -1285,15 +1306,16 @@ export class SupabaseService {
             fbQuery = fbQuery.limit(3000);
           }
           const fbRes = await fbQuery;
-          data = fbRes.data;
+          rows =
+            !fbRes.error && Array.isArray(fbRes.data)
+              ? (fbRes.data as unknown as Record<string, unknown>[])
+              : null;
           error = fbRes.error;
         }
 
-        if (error || !data) {
+        if (error || !rows) {
           return null;
         }
-
-        const rows = data as unknown as Record<string, unknown>[];
         const fetchedAvatars = new Map<string, string>();
         let avatarCacheChanged = false;
 
@@ -1381,7 +1403,7 @@ export class SupabaseService {
       try {
         const selectCols = useLiteColumns
           ? 'id,code,title,section,batch,description,instructor_name,instructor_email,theme_color,enrolled_student_ids,total_lessons,total_assignments,total_quizzes,created_at'
-          : '*';
+          : 'id,code,title,section,batch,description,instructor_name,instructor_email,banner_image,theme_color,enrolled_student_ids,total_lessons,total_assignments,total_quizzes,created_at';
 
         const { data, error } = await supabase
           .from('courses')
@@ -1727,7 +1749,7 @@ export class SupabaseService {
       try {
         const { data, error } = await supabase
           .from('assignments')
-          .select('*')
+          .select('id,course_id,title,description,due_date,total_points')
           .limit(200);
         if (error || !data) return null;
 
@@ -1812,7 +1834,7 @@ export class SupabaseService {
       try {
         const { data, error } = await supabase
           .from('quizzes')
-          .select('*')
+          .select('id,course_id,title,time_limit_minutes,passing_score,questions')
           .limit(150);
         if (error || !data) return null;
 
@@ -3458,7 +3480,7 @@ export class SupabaseService {
         slimmedRows += subAvRes.value.data.length;
       }
 
-      // 2. Check Primary Admin avatars and Course banners for oversized legacy Base64 payloads
+      // 2. Check Primary Admin avatars for any Base64 (`data:...`) or non-key/non-URL values, and Course banners for oversized payloads
       const [adminRowsRes, courseRowsRes] = await Promise.allSettled([
         supabase.from('profiles').select('id,role,avatar').eq('role', 'admin'),
         supabase.from('courses').select('id,banner_image'),
@@ -3467,10 +3489,11 @@ export class SupabaseService {
       if (adminRowsRes.status === 'fulfilled' && Array.isArray(adminRowsRes.value.data)) {
         for (const r of adminRowsRes.value.data) {
           const av = String(r.avatar || '');
-          if (av.length > 45_000) {
+          const cloudSafe = toCloudAvatarKeyOrUrl(av, 'admin');
+          if (av !== cloudSafe) {
             await supabase
               .from('profiles')
-              .update({ avatar: DEFAULT_FALLBACK_AVATAR })
+              .update({ avatar: cloudSafe })
               .eq('id', String(r.id));
             slimmedRows++;
           }
@@ -3678,10 +3701,10 @@ export class SupabaseService {
       }
 
       if (data?.user) {
-        // Fetch matching profile
+        // Fetch matching profile using selective columns
         const { data: profile } = await supabase
           .from('profiles')
-          .select('*')
+          .select('id,name,username,email,role,phone,avatar,title,gender,address,rules_accepted,rules_accepted_at')
           .eq('email', email.trim())
           .maybeSingle();
 
@@ -3691,15 +3714,16 @@ export class SupabaseService {
             profile.rules_accepted,
             profile.rules_accepted_at
           );
+          const resolvedRole = (profile.role as UserRole) || 'student';
           return {
             user: {
               id: profile.id,
               name: profile.name,
               username: profile.username,
               email: profile.email,
-              role: profile.role as UserRole,
+              role: resolvedRole,
               phone: profile.phone || '',
-              avatar: profile.avatar || '',
+              avatar: resolvedRole === 'admin' ? resolveAvatarUrl(profile.avatar) : '',
               title: decoded.title,
               gender: profile.gender || undefined,
               address: profile.address || undefined,

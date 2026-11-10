@@ -9,7 +9,6 @@ import { LowBandwidthBar } from './components/LowBandwidthBar';
 import { CourseDetail } from './components/CourseDetail';
 import { CertificateModal } from './components/CertificateModal';
 import { SecurityArchitectureModal } from './components/SecurityArchitectureModal';
-import { SecurityControlsModal } from './components/SecurityControlsModal';
 import { CreateCourseModal } from './components/CreateCourseModal';
 import { AdminStudentDirectoryModal } from './components/AdminStudentDirectoryModal';
 import { SupabaseModal } from './components/SupabaseModal';
@@ -68,7 +67,6 @@ export default function App() {
   // Modals & Drawers
   const [activeCertificate, setActiveCertificate] = useState<CertificateData | null>(null);
   const [showArchitectureModal, setShowArchitectureModal] = useState(false);
-  const [showSecurityModal, setShowSecurityModal] = useState(false);
   const [showCreateCourseModal, setShowCreateCourseModal] = useState(false);
   const [showStudentDirectoryModal, setShowStudentDirectoryModal] = useState(false);
   const [showSupabaseModal, setShowSupabaseModal] = useState(false);
@@ -83,7 +81,6 @@ export default function App() {
   useBackHandler(!!selectedCourse, () => setSelectedCourse(null));
   useBackHandler(!!activeCertificate, () => setActiveCertificate(null));
   useBackHandler(showArchitectureModal, () => setShowArchitectureModal(false));
-  useBackHandler(showSecurityModal, () => setShowSecurityModal(false));
   useBackHandler(showCreateCourseModal, () => setShowCreateCourseModal(false));
   useBackHandler(showStudentDirectoryModal, () => setShowStudentDirectoryModal(false));
   useBackHandler(showSupabaseModal, () => setShowSupabaseModal(false));
@@ -91,11 +88,10 @@ export default function App() {
   useBackHandler(showRulesModal, () => setShowRulesModal(false));
   useBackHandler(showAuditLogModal, () => setShowAuditLogModal(false));
 
-  // Performance & Security Settings
+  // Performance & Theme Settings
   const [isLowBandwidth, setIsLowBandwidth] = useState(false);
   const isLowBandwidthRef = useRef(false);
   isLowBandwidthRef.current = isLowBandwidth;
-  const [securitySettings, setSecuritySettings] = useState(() => ClassroomDB.getSecuritySettings());
   const [theme, setTheme] = useState<'light' | 'dark'>(() => ClassroomDB.getTheme());
   const [, setRefreshTick] = useState(0);
 
@@ -125,9 +121,6 @@ export default function App() {
 
     // Notifications
     setNotifications(ClassroomDB.getNotifications(user.id));
-
-    // Security
-    setSecuritySettings(ClassroomDB.getSecuritySettings());
 
     // If a course is selected, refresh its child items using ref so background intervals never see stale null state
     const activeCourse = selectedCourseRef.current;
@@ -416,11 +409,7 @@ export default function App() {
   }
 
   return (
-    <div
-      className={`min-h-screen neu-canvas text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-300 ${
-        securitySettings.textProtectionEnabled && currentUser.role === 'student' ? 'select-none' : ''
-      }`}
-    >
+    <div className="min-h-screen neu-canvas text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-300">
       <Suspense fallback={null}>
         {/* Low Bandwidth & One-Click Update Bar */}
         <LowBandwidthBar
@@ -436,7 +425,6 @@ export default function App() {
           onSelectUser={handleSelectUser}
           onLogout={handleLogout}
           onOpenArchitecture={() => setShowArchitectureModal(true)}
-          onOpenSecurity={() => setShowSecurityModal(true)}
           onOpenStudentDirectory={() => setShowStudentDirectoryModal(true)}
           onOpenAuditLog={() => setShowAuditLogModal(true)}
           onOpenRules={() => setShowRulesModal(true)}
@@ -543,7 +531,6 @@ export default function App() {
               onBack={() => setSelectedCourse(null)}
               onRefresh={refreshData}
               onOpenCertificate={(cert) => setActiveCertificate(cert)}
-              textProtectionEnabled={securitySettings.textProtectionEnabled}
             />
           </Suspense>
         ) : (
@@ -910,16 +897,6 @@ export default function App() {
           />
         )}
 
-        {/* Content Security & Watermark Settings Modal */}
-        {showSecurityModal && (
-          <SecurityControlsModal
-            isOpen={showSecurityModal}
-            onClose={() => setShowSecurityModal(false)}
-            currentUser={currentUser}
-            onUpdate={refreshData}
-          />
-        )}
-
         {/* Admin Create Course & Batch Modal */}
         {showCreateCourseModal && (
           <CreateCourseModal
@@ -1025,9 +1002,9 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
           <span>Dr. Si Thu Aung · Swanarh Academy · Classroom OS Learning Platform</span>
           <div className="flex items-center gap-3 text-slate-400 dark:text-slate-500">
-            <span>Protected Video Playback</span>
-            <span>·</span>
             <span>Row-Level Security</span>
+            <span>·</span>
+            <span>Client-Side Cache Engine</span>
             <span>·</span>
             <span>Mobile-First Engine</span>
           </div>

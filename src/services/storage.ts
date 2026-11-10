@@ -19,6 +19,7 @@ import {
   AuditLogSeverity,
 } from '../types/classroom';
 import { SupabaseService, NOTIFICATION_TTL_MS, AUDIT_LOG_TTL_MS } from './supabase';
+import { resolveAvatarUrl, toCloudAvatarKeyOrUrl } from '../data/presetAvatars';
 import {
   encryptPassword,
   decryptPassword,
@@ -1725,53 +1726,45 @@ export class ClassroomDB {
       };
     }
 
-    users[userIndex].avatar = avatarUrl;
+    const cloudKeyOrUrl = toCloudAvatarKeyOrUrl(avatarUrl, 'admin');
+    const resolvedDisplayAvatar = resolveAvatarUrl(cloudKeyOrUrl);
+
+    users[userIndex].avatar = resolvedDisplayAvatar;
     this.markLocalWrite(userId);
     this.setItem(STORAGE_KEYS.USERS, users);
 
     const currentLogged = this.getCurrentUser();
     if (currentLogged && currentLogged.id === userId) {
-      currentLogged.avatar = avatarUrl;
+      currentLogged.avatar = resolvedDisplayAvatar;
       this.setCurrentUser(currentLogged);
     }
 
-    // Immediately propagate the new Admin profile picture to all their authored posts & comments
+    // Immediately propagate the new Admin profile picture to local posts & comments
     const posts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS);
-    const updatedPostsToSync: CoursePost[] = [];
     let postsChanged = false;
     const nextPosts = posts.map((p) => {
       let postModified = false;
       let nextAuthorAvatar = p.authorAvatar;
-      if (p.authorId === userId && p.authorAvatar !== avatarUrl) {
-        nextAuthorAvatar = avatarUrl;
+      if (p.authorId === userId && p.authorAvatar !== resolvedDisplayAvatar) {
+        nextAuthorAvatar = resolvedDisplayAvatar;
         postModified = true;
       }
       const nextComments = (p.comments || []).map((c) => {
-        if (c.authorId === userId && c.authorAvatar !== avatarUrl) {
+        if (c.authorId === userId && c.authorAvatar !== resolvedDisplayAvatar) {
           postModified = true;
-          return { ...c, authorAvatar: avatarUrl };
+          return { ...c, authorAvatar: resolvedDisplayAvatar };
         }
         return c;
       });
       if (postModified) {
         postsChanged = true;
-        const updatedPost = { ...p, authorAvatar: nextAuthorAvatar, comments: nextComments };
-        updatedPostsToSync.push(updatedPost);
-        return updatedPost;
+        return { ...p, authorAvatar: nextAuthorAvatar, comments: nextComments };
       }
       return p;
     });
 
     if (postsChanged) {
       this.setItem(STORAGE_KEYS.POSTS, nextPosts);
-      updatedPostsToSync.forEach((up) => {
-        this.markLocalWrite(up.id);
-        try {
-          SupabaseService.upsertPost(up).catch(() => {});
-        } catch {
-          // ignore
-        }
-      });
     }
 
     try {
@@ -1789,8 +1782,8 @@ export class ClassroomDB {
       targetType: 'user',
       targetId: users[userIndex].id,
       targetName: `${users[userIndex].name} (@${users[userIndex].username})`,
-      summary: `${users[userIndex].name} (@${users[userIndex].username}) ၏ Profile ဓာတ်ပုံကို ပြောင်းလဲခဲ့ပြီး အတန်းအားလုံးတွင် တန်းပြောင်းပြီးဖြစ်ပါသည်။`,
-      details: `Updated posts/comments avatar sync count: ${updatedPostsToSync.length}`,
+      summary: `${users[userIndex].name} (@${users[userIndex].username}) ၏ Profile ဓာတ်ပုံကို (${cloudKeyOrUrl}) သို့ ပြောင်းလဲခဲ့ပြီး အတန်းအားလုံးတွင် တန်းပြောင်းပြီးဖြစ်ပါသည်။`,
+      details: `Supabase Cloud Avatar Key/URL: ${cloudKeyOrUrl}`,
     });
 
     return { success: true, user: users[userIndex] };

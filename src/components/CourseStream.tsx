@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Course, CoursePost, User, VideoAsset, Attachment, AttendanceStatus } from '../types/classroom';
-import { SecureVideoPlayer } from './SecureVideoPlayer';
+import { Course, CoursePost, User, Attachment, AttendanceStatus } from '../types/classroom';
 import { EditPostModal } from './EditPostModal';
 import { PinSwapModal } from './PinSwapModal';
 import { CourseBannerModal } from './CourseBannerModal';
@@ -55,7 +54,6 @@ interface CourseStreamProps {
   currentUser: User;
   posts: CoursePost[];
   onRefresh: () => void;
-  textProtectionEnabled: boolean;
   onOpenAttendance?: () => void;
 }
 
@@ -64,7 +62,6 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   currentUser,
   posts,
   onRefresh,
-  textProtectionEnabled,
   onOpenAttendance,
 }) => {
   // Post Composer State (for Admin/Instructor)
@@ -434,31 +431,6 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
     }
   };
 
-  const handleLessonViewed = (lessonPostId: string) => {
-    ClassroomDB.markLessonCompleted(currentUser.id, course.id, lessonPostId);
-    onRefresh();
-  };
-
-  const handleContentContextMenu = (e: React.MouseEvent) => {
-    const targetEl = e.target as HTMLElement | null;
-    const isEditableField =
-      targetEl &&
-      (targetEl.tagName === 'INPUT' ||
-        targetEl.tagName === 'TEXTAREA' ||
-        targetEl.isContentEditable);
-
-    // Admin & Co-Admin (and any input/textarea fields) always have full native Copy & Paste access
-    if (isInstructor || isEditableField) {
-      return;
-    }
-
-    if (textProtectionEnabled) {
-      e.preventDefault();
-      setRateLimitError('Academic Content Protection: Text selection and copying are disabled.');
-      setTimeout(() => setRateLimitError(null), 3000);
-    }
-  };
-
   // Copy & Paste helpers for Admin / Co-Admin Post Composer & Post Cards
   const handlePasteIntoTitle = async () => {
     try {
@@ -589,12 +561,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   };
 
   return (
-    <div
-      onContextMenu={handleContentContextMenu}
-      className={`space-y-4 sm:space-y-6 w-full max-w-full ${
-        textProtectionEnabled && !isInstructor ? 'select-none' : 'select-text'
-      }`}
-    >
+    <div className="space-y-4 sm:space-y-6 w-full max-w-full select-text">
       {/* Toast Alert for Rate Limiting / Content Protection */}
       {rateLimitError && (
         <div className="fixed bottom-6 right-4 sm:right-6 z-50 flex items-center gap-2.5 px-4 py-3 bg-slate-900 border border-amber-500/40 text-amber-200 text-xs rounded-xl shadow-2xl backdrop-blur-md max-w-[calc(100vw-32px)]">
@@ -1857,7 +1824,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                   </div>
 
                   {/* Post Title & Content */}
-                  <div className={`mt-3 ${isInstructor ? 'select-text' : ''}`}>
+                  <div className="mt-3 select-text">
                     <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-slate-100 leading-snug">
                       {post.title}
                     </h3>
@@ -1866,28 +1833,6 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                     </p>
                   </div>
                 </div>
-
-                {/* Video Asset Section */}
-                {post.videoAsset && (
-                  <div className="px-3.5 sm:px-5 py-2">
-                    <div className="mb-2 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
-                      <span className="font-semibold flex items-center gap-1 text-indigo-600 dark:text-indigo-400">
-                        <Lock className="w-3.5 h-3.5" />
-                        <span>Protected Video Playback</span>
-                      </span>
-                      <span className="text-[11px] text-slate-500 dark:text-slate-400 font-mono hidden sm:inline">
-                        Watermark: {currentUser.name} ({currentUser.username})
-                      </span>
-                    </div>
-
-                    <SecureVideoPlayer
-                      video={post.videoAsset}
-                      currentUser={currentUser}
-                      onCompleted={() => handleLessonViewed(post.id)}
-                      textProtectionEnabled={textProtectionEnabled}
-                    />
-                  </div>
-                )}
 
                 {/* Attachments Section - Any File Format */}
                 {post.attachments && post.attachments.length > 0 && (

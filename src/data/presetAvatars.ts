@@ -1,9 +1,12 @@
 export interface PresetAvatar {
   id: string;
+  presetKey: string;
   name: string;
   category: 'Student' | 'Scholar' | 'Tech' | 'Creative';
   url: string;
 }
+
+export const DEFAULT_AVATAR_PRESET_KEY = 'preset:mentor-1';
 
 export const DEFAULT_AVATAR_SVG =
   "data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%234f46e5'/%3E%3Cstop offset='100%25' stop-color='%237c3aed'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='150' height='150' rx='75' fill='url(%23g)'/%3E%3Ccircle cx='75' cy='56' r='26' fill='%23ffffff' fill-opacity='0.92'/%3E%3Cpath d='M30 132c8-26 26-38 45-38s37 12 45 38' fill='%23ffffff' fill-opacity='0.92'/%3E%3C/svg%3E";
@@ -18,112 +21,171 @@ function makeAvatarSvg(bgStart: string, bgEnd: string, initials: string): string
 export const PRESET_AVATARS: PresetAvatar[] = [
   {
     id: 'avatar-student-1',
-    name: 'Dr. Si Thu / Lead',
+    presetKey: 'preset:mentor-1',
+    name: 'Lead Mentor (Indigo)',
     category: 'Scholar',
-    url: makeAvatarSvg('#4f46e5', '#7c3aed', 'ST'),
+    url: makeAvatarSvg('#4f46e5', '#7c3aed', 'LM'),
   },
   {
     id: 'avatar-student-2',
-    name: 'Coordinator',
+    presetKey: 'preset:mentor-2',
+    name: 'Lead Mentor (Teal)',
     category: 'Student',
-    url: makeAvatarSvg('#0d9488', '#0284c7', 'CO'),
+    url: makeAvatarSvg('#0d9488', '#0284c7', 'ST'),
   },
   {
     id: 'avatar-student-3',
-    name: 'Academic Staff',
+    presetKey: 'preset:mentor-3',
+    name: 'Academic Dean (Royal)',
     category: 'Tech',
-    url: makeAvatarSvg('#2563eb', '#4f46e5', 'AS'),
+    url: makeAvatarSvg('#2563eb', '#4f46e5', 'AD'),
   },
   {
     id: 'avatar-student-4',
-    name: 'Faculty Member',
+    presetKey: 'preset:mentor-4',
+    name: 'Faculty Lead (Rose)',
     category: 'Creative',
-    url: makeAvatarSvg('#db2777', '#9333ea', 'FM'),
+    url: makeAvatarSvg('#db2777', '#9333ea', 'FL'),
   },
   {
     id: 'avatar-student-5',
-    name: 'Senior Lecturer',
+    presetKey: 'preset:mentor-5',
+    name: 'Senior Mentor (Emerald)',
     category: 'Scholar',
-    url: makeAvatarSvg('#059669', '#0d9488', 'SL'),
+    url: makeAvatarSvg('#059669', '#0d9488', 'SM'),
   },
   {
     id: 'avatar-student-6',
-    name: 'May Thu',
+    presetKey: 'preset:mentor-6',
+    name: 'Academy Director (Crimson)',
     category: 'Student',
-    url: makeAvatarSvg('#e11d48', '#db2777', 'MT'),
+    url: makeAvatarSvg('#e11d48', '#db2777', 'DR'),
   },
   {
     id: 'avatar-student-7',
-    name: 'Zin Ko',
+    presetKey: 'preset:mentor-7',
+    name: 'Cloud Architect (Sky)',
     category: 'Tech',
-    url: makeAvatarSvg('#0284c7', '#2563eb', 'ZK'),
+    url: makeAvatarSvg('#0284c7', '#2563eb', 'CA'),
   },
   {
     id: 'avatar-student-8',
-    name: 'Ei Phyu',
+    presetKey: 'preset:mentor-8',
+    name: 'Principal Mentor (Violet)',
     category: 'Creative',
-    url: makeAvatarSvg('#9333ea', '#6366f1', 'EP'),
+    url: makeAvatarSvg('#9333ea', '#6366f1', 'PM'),
   },
   {
     id: 'avatar-student-9',
-    name: 'Hein Htet',
+    presetKey: 'preset:mentor-9',
+    name: 'Course Lead (Amber)',
     category: 'Scholar',
-    url: makeAvatarSvg('#d97706', '#ea580c', 'HH'),
+    url: makeAvatarSvg('#d97706', '#ea580c', 'CL'),
   },
   {
     id: 'avatar-student-10',
-    name: 'Phyu Sin',
+    presetKey: 'preset:mentor-10',
+    name: 'Program Chair (Fuchsia)',
     category: 'Student',
-    url: makeAvatarSvg('#7c3aed', '#c026d3', 'PS'),
+    url: makeAvatarSvg('#7c3aed', '#c026d3', 'PC'),
   },
   {
     id: 'avatar-student-11',
-    name: 'Min Khant',
+    presetKey: 'preset:mentor-11',
+    name: 'Systems Lead (Slate)',
     category: 'Tech',
-    url: makeAvatarSvg('#334155', '#0f172a', 'MK'),
+    url: makeAvatarSvg('#334155', '#0f172a', 'SL'),
   },
   {
     id: 'avatar-student-12',
-    name: 'Shwe Yee',
+    presetKey: 'preset:mentor-12',
+    name: 'Research Mentor (Cyan)',
     category: 'Creative',
-    url: makeAvatarSvg('#0891b2', '#0d9488', 'SY'),
+    url: makeAvatarSvg('#0891b2', '#0d9488', 'RM'),
   },
 ];
 
 /**
- * Compresses an image file client-side to a square avatar JPEG data URI.
- * Guaranteed to be small (< 100KB) to ensure localStorage stability.
+ * Resolves a stored Preset Key (`preset:mentor-1`) or External URL (`https://...`)
+ * into a renderable image src for `<img>` elements on the client.
  */
-export async function compressImageFile(file: File, maxDimension = 128, quality = 0.72): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Failed to read image file'));
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error('Invalid image format'));
-      img.onload = () => {
-        // Calculate center crop to square
-        const minDim = Math.min(img.width, img.height);
-        const startX = (img.width - minDim) / 2;
-        const startY = (img.height - minDim) / 2;
+export function resolveAvatarUrl(avatarOrKey?: string | null): string {
+  const raw = (avatarOrKey || '').trim();
+  if (!raw) return DEFAULT_AVATAR_SVG;
 
-        const canvas = document.createElement('canvas');
-        canvas.width = maxDimension;
-        canvas.height = maxDimension;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          return resolve(reader.result as string);
-        }
+  const matchedPreset = PRESET_AVATARS.find(
+    (p) => p.presetKey === raw || p.id === raw || p.url === raw
+  );
+  if (matchedPreset) {
+    return matchedPreset.url;
+  }
 
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(img, startX, startY, minDim, minDim, 0, 0, maxDimension, maxDimension);
+  if (raw.startsWith('preset:')) {
+    return PRESET_AVATARS[0]?.url || DEFAULT_AVATAR_SVG;
+  }
 
-        const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
-        resolve(compressedDataUrl);
-      };
-      img.src = reader.result as string;
-    };
-    reader.readAsDataURL(file);
-  });
+  if (raw.startsWith('https://') || raw.startsWith('http://')) {
+    if (raw.includes('images.unsplash.com')) {
+      return DEFAULT_AVATAR_SVG;
+    }
+    return raw;
+  }
+
+  if (raw.startsWith('data:image/svg+xml')) {
+    return raw;
+  }
+
+  // Any legacy Base64 raster image (`data:image/jpeg;base64,...`) falls back to clean SVG
+  return DEFAULT_AVATAR_SVG;
+}
+
+/**
+ * Converts any avatar value into a strict Cloud-safe value for Supabase `public.profiles.avatar`:
+ * - NEVER stores Base64 (`data:...`) in Supabase Database!
+ * - Only stores a short Preset Key (`preset:mentor-1`, ~15 Bytes) or External URL (`https://...`, <= 500 chars).
+ * - Co-Admins and Students always store `''` (0 Bytes).
+ */
+export function toCloudAvatarKeyOrUrl(avatarOrUrl?: string | null, role?: string): string {
+  if (role && role !== 'admin') return '';
+  const raw = (avatarOrUrl || '').trim();
+  if (!raw) return DEFAULT_AVATAR_PRESET_KEY;
+
+  const matchedPreset = PRESET_AVATARS.find(
+    (p) => p.presetKey === raw || p.id === raw || p.url === raw
+  );
+  if (matchedPreset) {
+    return matchedPreset.presetKey;
+  }
+
+  if (raw.startsWith('preset:') && raw.length <= 64) {
+    return raw;
+  }
+
+  if (
+    (raw.startsWith('https://') || raw.startsWith('http://')) &&
+    !raw.includes('images.unsplash.com') &&
+    raw.length <= 500
+  ) {
+    return raw;
+  }
+
+  // Block all Base64 / data: URIs from ever entering Supabase Database
+  return DEFAULT_AVATAR_PRESET_KEY;
+}
+
+/**
+ * Returns storage inspection metadata for UI display in ProfilePictureModal
+ */
+export function getAvatarCloudStorageInfo(avatarOrUrl?: string | null): {
+  mode: 'preset' | 'external_url';
+  cloudKeyOrUrl: string;
+  byteSize: number;
+} {
+  const cloudVal = toCloudAvatarKeyOrUrl(avatarOrUrl, 'admin');
+  const isUrl = cloudVal.startsWith('http://') || cloudVal.startsWith('https://');
+  return {
+    mode: isUrl ? 'external_url' : 'preset',
+    cloudKeyOrUrl: cloudVal,
+    byteSize: new Blob([cloudVal]).size,
+  };
 }

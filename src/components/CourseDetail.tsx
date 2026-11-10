@@ -14,7 +14,6 @@ interface CourseDetailProps {
   onBack: () => void;
   onRefresh: () => void;
   onOpenCertificate: (cert: CertificateData) => void;
-  textProtectionEnabled: boolean;
 }
 
 type ClassroomTab = 'stream' | 'attendance' | 'people';
@@ -26,7 +25,6 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
   onBack,
   onRefresh,
   onOpenCertificate,
-  textProtectionEnabled,
 }) => {
   const [tabHistory, setTabHistory] = useState<ClassroomTab[]>(['stream']);
   const activeTab = tabHistory[tabHistory.length - 1] || 'stream';
@@ -121,7 +119,6 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
             currentUser={currentUser}
             posts={posts}
             onRefresh={onRefresh}
-            textProtectionEnabled={textProtectionEnabled}
             onOpenAttendance={() => handleSwitchTab('attendance')}
           />
         )}
