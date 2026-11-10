@@ -74,6 +74,7 @@ const STORAGE_KEYS = {
   SESSION_SEAL: 'classroom_os_session_seal_v1',
   CLOUD_CONFIRMED_POSTS: 'classroom_os_cloud_confirmed_posts_v1',
   CLOUD_CONFIRMED_ATTENDANCE: 'classroom_os_cloud_confirmed_attendance_v1',
+  DELETED_USERS_META: 'classroom_deleted_users_meta_v1',
 };
 
 // Rate limiting in-memory / storage tracker
@@ -203,6 +204,178 @@ export class ClassroomDB {
     }
   }
 
+  private static getDeletedUsersMeta(): { usernames: string[]; emails: string[] } {
+    const raw = this.getItem<{ usernames?: string[]; emails?: string[] }>(
+      STORAGE_KEYS.DELETED_USERS_META,
+      { usernames: [], emails: [] }
+    );
+    return {
+      usernames: Array.isArray(raw?.usernames) ? raw.usernames : [],
+      emails: Array.isArray(raw?.emails) ? raw.emails : [],
+    };
+  }
+
+  private static recordDeletedUserMeta(usernames: string[], emails: string[]): void {
+    const meta = this.getDeletedUsersMeta();
+    const uSet = new Set(meta.usernames);
+    const eSet = new Set(meta.emails);
+    let changed = false;
+    usernames.forEach((u) => {
+      const clean = (u || '').trim().replace(/^@+/, '').toLowerCase();
+      if (clean && clean !== 'user' && !uSet.has(clean)) {
+        uSet.add(clean);
+        changed = true;
+      }
+    });
+    emails.forEach((e) => {
+      const clean = (e || '').trim().toLowerCase();
+      if (clean && !eSet.has(clean)) {
+        eSet.add(clean);
+        changed = true;
+      }
+    });
+    if (changed) {
+      this.setItem(STORAGE_KEYS.DELETED_USERS_META, {
+        usernames: Array.from(uSet).slice(-800),
+        emails: Array.from(eSet).slice(-800),
+      });
+    }
+  }
+
+  private static unmarkDeletedUserMeta(username?: string, email?: string): void {
+    const cleanU = (username || '').trim().replace(/^@+/, '').toLowerCase();
+    const cleanE = (email || '').trim().toLowerCase();
+    if (!cleanU && !cleanE) return;
+    const meta = this.getDeletedUsersMeta();
+    const nextUsernames = cleanU ? meta.usernames.filter((u) => u !== cleanU) : meta.usernames;
+    const nextEmails = cleanE ? meta.emails.filter((e) => e !== cleanE) : meta.emails;
+    if (
+      nextUsernames.length !== meta.usernames.length ||
+      nextEmails.length !== meta.emails.length
+    ) {
+      this.setItem(STORAGE_KEYS.DELETED_USERS_META, {
+        usernames: nextUsernames,
+        emails: nextEmails,
+      });
+    }
+  }
+
+  private static isUserDeleted(
+    user: User,
+    deletedSet: Set<string>,
+    deletedMeta?: { usernames: string[]; emails: string[] }
+  ): boolean {
+    if (!user) return true;
+    if (deletedSet.has(user.id)) return true;
+    const meta = deletedMeta || this.getDeletedUsersMeta();
+    const uName = (user.username || '').trim().replace(/^@+/, '').toLowerCase();
+    const uEmail = (user.email || '').trim().toLowerCase();
+    if (uName && uName !== 'user' && meta.usernames.includes(uName)) return true;
+    if (uEmail && meta.emails.includes(uEmail)) return true;
+    return false;
+  }
+
+  /**
+   * Immediately applies deletion broadcasts received over Realtime Channel / Postgres Changes
+   * with 0 Bytes of database egress and logs out any deleted account right away.
+   */
+  static applyRemoteDeletions(meta?: {
+    deletedIds?: string[];
+    deletedUsernames?: string[];
+    deletedEmails?: string[];
+  }): boolean {
+    if (!meta) return false;
+    const ids = Array.isArray(meta.deletedIds) ? meta.deletedIds.filter(Boolean) : [];
+    const usernames = Array.isArray(meta.deletedUsernames)
+      ? meta.deletedUsernames.filter(Boolean)
+      : [];
+    const emails = Array.isArray(meta.deletedEmails) ? meta.deletedEmails.filter(Boolean) : [];
+    if (ids.length === 0 && usernames.length === 0 && emails.length === 0) {
+      return false;
+    }
+
+    if (ids.length > 0) {
+      this.recordDeletedIds(ids);
+    }
+    if (usernames.length > 0 || emails.length > 0) {
+      this.recordDeletedUserMeta(usernames, emails);
+    }
+
+    const deletedSet = new Set(this.getDeletedIds());
+    const deletedMeta = this.getDeletedUsersMeta();
+    let changed = false;
+
+    const rawUsers = this.getItem<User[]>(STORAGE_KEYS.USERS, INITIAL_USERS);
+    const filteredUsers = rawUsers.filter((u) => !this.isUserDeleted(u, deletedSet, deletedMeta));
+    if (filteredUsers.length !== rawUsers.length) {
+      this.setItem(STORAGE_KEYS.USERS, filteredUsers);
+      changed = true;
+    }
+
+    const loggedUser = this.getCurrentUser();
+    if (loggedUser && this.isUserDeleted(loggedUser, deletedSet, deletedMeta)) {
+      this.forceLocalLogoutWithReason(
+        'သင်၏ အကောင့်သည် စနစ်မှ ဖယ်ရှားခံထားရသဖြင့် အလိုအလျောက် Logout ထွက်ပေးထားပါသည်။'
+      );
+      changed = true;
+    }
+
+    if (ids.length > 0) {
+      const rawCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+      const nextCourses = rawCourses
+        .filter((c) => !deletedSet.has(c.id))
+        .map((c) => {
+          const nextEnrolled = c.enrolledStudentIds.filter((sid) => !deletedSet.has(sid));
+          return nextEnrolled.length !== c.enrolledStudentIds.length
+            ? { ...c, enrolledStudentIds: nextEnrolled }
+            : c;
+        });
+      if (JSON.stringify(nextCourses) !== JSON.stringify(rawCourses)) {
+        this.setItem(STORAGE_KEYS.COURSES, nextCourses);
+        changed = true;
+      }
+
+      const rawPosts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS);
+      const nextPosts = rawPosts.filter(
+        (p) => !deletedSet.has(p.id) && !deletedSet.has(p.courseId)
+      );
+      if (nextPosts.length !== rawPosts.length) {
+        this.setItem(STORAGE_KEYS.POSTS, nextPosts);
+        changed = true;
+      }
+
+      const rawAss = this.getItem<Assignment[]>(STORAGE_KEYS.ASSIGNMENTS, INITIAL_ASSIGNMENTS);
+      const nextAss = rawAss.filter((a) => !deletedSet.has(a.id) && !deletedSet.has(a.courseId));
+      if (nextAss.length !== rawAss.length) {
+        this.setItem(STORAGE_KEYS.ASSIGNMENTS, nextAss);
+        changed = true;
+      }
+
+      const rawQuizzes = this.getItem<Quiz[]>(STORAGE_KEYS.QUIZZES, INITIAL_QUIZZES);
+      const nextQuizzes = rawQuizzes.filter(
+        (q) => !deletedSet.has(q.id) && !deletedSet.has(q.courseId)
+      );
+      if (nextQuizzes.length !== rawQuizzes.length) {
+        this.setItem(STORAGE_KEYS.QUIZZES, nextQuizzes);
+        changed = true;
+      }
+
+      const rawAtt = this.getItem<AttendanceSession[]>(
+        STORAGE_KEYS.ATTENDANCE,
+        INITIAL_ATTENDANCE_SESSIONS
+      );
+      const nextAtt = rawAtt.filter(
+        (att) => !deletedSet.has(att.id) && !deletedSet.has(att.courseId)
+      );
+      if (nextAtt.length !== rawAtt.length) {
+        this.setItem(STORAGE_KEYS.ATTENDANCE, nextAtt);
+        changed = true;
+      }
+    }
+
+    return changed;
+  }
+
   private static getCloudConfirmedPostIds(): Set<string> {
     return new Set(this.getItem<string[]>(STORAGE_KEYS.CLOUD_CONFIRMED_POSTS, []));
   }
@@ -302,7 +475,7 @@ export class ClassroomDB {
     const map = this.getItem<Record<string, number>>(STORAGE_KEYS.RECENT_WRITES, {});
     const next: Record<string, number> = {};
     for (const [k, ts] of Object.entries(map)) {
-      if (k !== id && now - ts < 600_000) {
+      if (k !== id && now - ts < 30_000) {
         next[k] = ts;
       }
     }
@@ -320,7 +493,7 @@ export class ClassroomDB {
     }
   }
 
-  private static isRecentLocalWrite(id: string, maxAgeMs: number = 600_000): boolean {
+  private static isRecentLocalWrite(id: string, maxAgeMs: number = 12_000): boolean {
     if (!id) return false;
     const map = this.getItem<Record<string, number>>(STORAGE_KEYS.RECENT_WRITES, {});
     const ts = map[id];
@@ -332,49 +505,45 @@ export class ClassroomDB {
   static init(): void {
     const isCloudSynced = localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) === 'true';
     const deletedSet = new Set(this.getDeletedIds());
+    const deletedMeta = this.getDeletedUsersMeta();
 
     if (!localStorage.getItem(STORAGE_KEYS.USERS)) {
       this.setItem(
         STORAGE_KEYS.USERS,
-        INITIAL_USERS.filter((u) => !deletedSet.has(u.id)).map((u) => ({
+        INITIAL_USERS.filter((u) => !this.isUserDeleted(u, deletedSet, deletedMeta)).map((u) => ({
           ...u,
           avatar: u.role !== 'admin' ? '' : u.avatar,
           password: encryptPassword(u.password, u.role, u.id),
         }))
       );
     } else {
-      // Ensure existing local student and co_admin accounts never retain any profile photo
-      // and automatically encrypt any legacy plaintext passwords into ENC_V1 ciphertext
+      // Ensure existing local student and co_admin accounts never retain any profile photo,
+      // purge any deleted accounts, and encrypt any legacy plaintext passwords into ENC_V1 ciphertext locally
+      // (Never push local users to Supabase on startup before pullFromSupabase runs so deleted accounts never resurrect!)
       const existingUsers = this.getItem<User[]>(STORAGE_KEYS.USERS, []);
       let usersChanged = false;
-      const upgradedUsersForCloud: User[] = [];
-      const sanitizedUsers = existingUsers.map((u) => {
+      const filteredExisting = existingUsers.filter((u) => {
+        if (this.isUserDeleted(u, deletedSet, deletedMeta)) {
+          usersChanged = true;
+          return false;
+        }
+        return true;
+      });
+      const sanitizedUsers = filteredExisting.map((u) => {
         const shouldStripAvatar = u.role !== 'admin' && Boolean(u.avatar);
         const needsEncryption = !isEncryptedPassword(u.password);
         if (shouldStripAvatar || needsEncryption) {
           usersChanged = true;
-          const upgraded: User = {
+          return {
             ...u,
             avatar: u.role !== 'admin' ? '' : u.avatar,
             password: encryptPassword(u.password, u.role, u.id),
           };
-          if (needsEncryption || shouldStripAvatar) {
-            upgradedUsersForCloud.push(upgraded);
-          }
-          return upgraded;
         }
         return u;
       });
       if (usersChanged) {
         this.setItem(STORAGE_KEYS.USERS, sanitizedUsers);
-        // Push migrated encrypted passwords to Supabase in the background
-        upgradedUsersForCloud.forEach((u) => {
-          try {
-            SupabaseService.upsertProfile(u).catch(() => {});
-          } catch {
-            // ignore
-          }
-        });
       }
     }
     if (!localStorage.getItem(STORAGE_KEYS.COURSES)) {
@@ -1324,9 +1493,10 @@ export class ClassroomDB {
   }
 
   /**
-   * Ultra-Fast Login by Username or Email:
-   * 1. Instant 0ms Local Fast-Path when credentials already match locally (for Admin/Co-Admin, same-device students, or first-time students).
-   * 2. Parallelized Cloud Lookup (candidate lookup + full profile fallback simultaneously) with a short timeout so newly created accounts on another device log in rapidly.
+   * Authoritative Cloud-Verified Login by Username or Email:
+   * 1. When online, ALWAYS verifies against Supabase `profiles` first (< 0.5 KB query) before allowing login.
+   * 2. If Supabase confirms the account was deleted (`dbSeeded && validRemoteUsers.length === 0`),
+   *    purges any stale local/initial copy immediately and blocks login so deleted students can NEVER log in or re-upload themselves!
    */
   static async loginWithRemoteFallback(
     identifier: string,
@@ -1334,7 +1504,7 @@ export class ClassroomDB {
     expectedRole?: UserRole,
     forceTakeover: boolean = false
   ): Promise<{ user: User | null; deviceLocked?: boolean; error?: string }> {
-    const { cleanId } = this.normalizeLoginIdentifier(identifier);
+    const { cleanId, compactId, idLocalPart } = this.normalizeLoginIdentifier(identifier);
     const cleanPwd = this.normalizeLoginPassword(password);
     if (!cleanId || !cleanPwd) {
       return {
@@ -1352,92 +1522,105 @@ export class ClassroomDB {
     }
 
     const deletedSet = new Set(this.getDeletedIds());
-    const localDeviceId = this.getDeviceId();
+    const deletedMeta = this.getDeletedUsersMeta();
 
-    // 1. Instant 0ms Fast-Path: Check if user + password already match in local memory/storage
-    const instantLocal = this.verifyCredentialsOnly(identifier, cleanPwd, expectedRole);
-    if (instantLocal.user) {
-      const matched = instantLocal.user;
-      const canLoginImmediately =
-        matched.role !== 'student' ||
-        forceTakeover ||
-        !matched.rulesAccepted ||
-        !matched.activeDeviceId ||
-        matched.activeDeviceId === 'LOGGED_OUT' ||
-        matched.activeDeviceId === localDeviceId;
-
-      if (canLoginImmediately) {
-        // Sync latest profile in background without delaying login
-        if (typeof navigator === 'undefined' || navigator.onLine !== false) {
-          SupabaseService.getRemoteCandidateProfiles(identifier, true)
-            .then((rows) => {
-              rows.forEach((ru) => this.mergeRemoteUserIntoLocal(ru, deletedSet));
-            })
-            .catch(() => {});
-        }
-        return this.login(identifier, cleanPwd, expectedRole, forceTakeover);
-      }
-
-      // Student account that might be active on another device: do a quick max 1.2s cloud check
-      if (typeof navigator === 'undefined' || navigator.onLine !== false) {
-        await Promise.race([
-          SupabaseService.getRemoteCandidateProfiles(identifier, true)
-            .then((rows) => {
-              rows.forEach((ru) => this.mergeRemoteUserIntoLocal(ru, deletedSet));
-            })
-            .catch(() => {}),
-          new Promise<void>((r) => setTimeout(r, 1200)),
-        ]);
-      }
-      return this.login(identifier, cleanPwd, expectedRole, forceTakeover);
-    }
-
-    // 2. User not found locally yet (or password was just changed on another device):
-    // Run candidate query and full profiles query in PARALLEL with a fast 3.2s cap so we never wait sequentially
     if (typeof navigator === 'undefined' || navigator.onLine !== false) {
-      const candidatePromise = SupabaseService.getRemoteCandidateProfiles(identifier, true)
-        .then((rows) => {
-          if (rows && rows.length > 0) {
-            rows.forEach((ru) => this.mergeRemoteUserIntoLocal(ru, deletedSet));
-          }
-          return rows;
-        })
-        .catch(() => [] as User[]);
-
-      const fullProfilesPromise = SupabaseService.getRemoteProfiles(true)
-        .then((allRemote) => {
-          if (allRemote && allRemote.length > 0) {
-            this.mergeRemoteUsersBatchIntoLocal(allRemote, deletedSet);
-          }
-          return allRemote;
-        })
-        .catch(() => null);
-
-      // Wait for candidate query first (bounded by 1.5s)
-      await Promise.race([
-        candidatePromise,
-        new Promise<void>((r) => setTimeout(r, 1500)),
+      const remoteCheck = await Promise.race([
+        SupabaseService.checkRemoteLoginCandidates(identifier),
+        new Promise<{ networkOk: boolean; dbSeeded: boolean; users: User[] }>((resolve) =>
+          setTimeout(() => resolve({ networkOk: false, dbSeeded: false, users: [] }), 2500)
+        ),
       ]);
 
-      // If candidate query already resolved our user, log in right away without waiting for fullProfilesPromise!
-      const afterCandidateCheck = this.verifyCredentialsOnly(identifier, cleanPwd, expectedRole);
-      if (afterCandidateCheck.user) {
-        return this.login(identifier, cleanPwd, expectedRole, forceTakeover);
+      if (remoteCheck.networkOk && remoteCheck.dbSeeded) {
+        const validRemoteUsers = remoteCheck.users.filter(
+          (ru) => !this.isUserDeleted(ru, deletedSet, deletedMeta)
+        );
+
+        if (validRemoteUsers.length > 0) {
+          validRemoteUsers.forEach((ru) => this.mergeRemoteUserIntoLocal(ru, deletedSet));
+          return this.login(identifier, cleanPwd, expectedRole, forceTakeover);
+        }
+
+        // 0 matching profiles in Supabase! Check if this user was just created locally on this device within the last 15s
+        const localUsersNow = this.getAllUsers();
+        const recentlyCreatedLocal = localUsersNow.find((u) => {
+          const uName = (u.username || '').trim().replace(/^@+/, '').toLowerCase();
+          const uEmail = (u.email || '').trim().toLowerCase();
+          const uEmailLocal = uEmail.includes('@') ? uEmail.split('@')[0].trim() : uEmail;
+          const matchesIdentifier =
+            uName === cleanId ||
+            uName === compactId ||
+            uName === idLocalPart ||
+            uEmail === cleanId ||
+            uEmail === compactId ||
+            uEmailLocal === idLocalPart;
+          return matchesIdentifier && this.isRecentLocalWrite(u.id, 15_000);
+        });
+
+        if (!recentlyCreatedLocal) {
+          // Account does NOT exist in Supabase (or was deleted by Admin/Co-Admin)!
+          // Purge any stale local or INITIAL_USERS entry matching this identifier so it can never log in offline or resurrect
+          const rawUsers = this.getItem<User[]>(STORAGE_KEYS.USERS, INITIAL_USERS);
+          const staleIds: string[] = [];
+          const staleUsernames: string[] = [];
+          const staleEmails: string[] = [];
+          const remainingUsers = rawUsers.filter((u) => {
+            const uName = (u.username || '').trim().replace(/^@+/, '').toLowerCase();
+            const uEmail = (u.email || '').trim().toLowerCase();
+            const uEmailLocal = uEmail.includes('@') ? uEmail.split('@')[0].trim() : uEmail;
+            const isStaleMatch =
+              uName === cleanId ||
+              uName === compactId ||
+              uName === idLocalPart ||
+              uEmail === cleanId ||
+              uEmail === compactId ||
+              uEmailLocal === idLocalPart;
+            if (isStaleMatch) {
+              staleIds.push(u.id);
+              if (uName) staleUsernames.push(uName);
+              if (uEmail) staleEmails.push(uEmail);
+              return false;
+            }
+            return true;
+          });
+
+          if (staleIds.length > 0) {
+            this.recordDeletedIds(staleIds);
+            this.recordDeletedUserMeta(staleUsernames, staleEmails);
+            this.setItem(STORAGE_KEYS.USERS, remainingUsers);
+          }
+
+          return {
+            user: null,
+            error:
+              'ဤအကောင့်သည် စနစ်မှ ဖျက်သိမ်းထားပြီးဖြစ်ပါသည် သို့မဟုတ် Username/Password မှားယွင်းနေပါသည်။',
+          };
+        }
       }
-
-      // Otherwise wait up to 2.0s more for the already-in-flight fullProfilesPromise
-      await Promise.race([
-        fullProfilesPromise,
-        new Promise<void>((r) => setTimeout(r, 2000)),
-      ]);
     }
 
-    // 3. Final credential & single-device check
+    // Fallback when offline or when network timed out (still strictly blocks any locally known deleted user)
+    if (
+      deletedMeta.usernames.includes(compactId) ||
+      deletedMeta.usernames.includes(idLocalPart) ||
+      deletedMeta.emails.includes(compactId)
+    ) {
+      return {
+        user: null,
+        error: 'ဤအကောင့်သည် စနစ်မှ ဖျက်သိမ်းထားပြီးဖြစ်ပါသည်။',
+      };
+    }
+
     return this.login(identifier, cleanPwd, expectedRole, forceTakeover);
   }
 
   static getAllUsers(): User[] {
-    const users = this.getItem<User[]>(STORAGE_KEYS.USERS, INITIAL_USERS);
+    const deletedSet = new Set(this.getDeletedIds());
+    const deletedMeta = this.getDeletedUsersMeta();
+    const users = this.getItem<User[]>(STORAGE_KEYS.USERS, INITIAL_USERS).filter(
+      (u) => !this.isUserDeleted(u, deletedSet, deletedMeta)
+    );
     return users.map((u) => {
       if (u.role !== 'admin') {
         return u.avatar ? { ...u, avatar: '' } : u;
@@ -1546,6 +1729,8 @@ export class ClassroomDB {
     };
 
     const updatedUsers = [...users, newUser];
+    this.unmarkDeletedId(newUser.id);
+    this.unmarkDeletedUserMeta(cleanUsername, cleanEmail);
     this.markLocalWrite(newUser.id);
     this.setItem(STORAGE_KEYS.USERS, updatedUsers);
 
@@ -2175,8 +2360,9 @@ export class ClassroomDB {
       return { success: false, error: 'ခွင့်ပြုချက် မရှိပါ။' };
     }
 
+    const rawUsers = this.getItem<User[]>(STORAGE_KEYS.USERS, INITIAL_USERS);
     const users = this.getAllUsers();
-    const target = users.find((u) => u.id === userId);
+    const target = users.find((u) => u.id === userId) || rawUsers.find((u) => u.id === userId);
     if (!target) {
       return { success: false, error: 'အသုံးပြုသူ မတွေ့ရှိပါ။' };
     }
@@ -2188,20 +2374,48 @@ export class ClassroomDB {
       return { success: false, error: 'တစ်ခုတည်းသော Primary Admin အား ဖျက်၍မရပါ။' };
     }
 
-    const updatedUsers = users.filter((u) => u.id !== userId);
-    this.setItem(STORAGE_KEYS.USERS, updatedUsers);
-    this.recordDeletedIds([userId]);
+    const targetUName = (target.username || '').trim().replace(/^@+/, '').toLowerCase();
+    const targetEmail = (target.email || '').trim().toLowerCase();
 
-    if (currentLogged && currentLogged.id === userId) {
+    // Match target user ID plus any duplicate/initial user entries sharing the same username or email
+    const matchingUserIds = new Set<string>([userId, target.id]);
+    [...rawUsers, ...INITIAL_USERS].forEach((u) => {
+      const uName = (u.username || '').trim().replace(/^@+/, '').toLowerCase();
+      const uEmail = (u.email || '').trim().toLowerCase();
+      if (
+        u.id === userId ||
+        (targetUName && targetUName !== 'user' && uName === targetUName) ||
+        (targetEmail && uEmail === targetEmail)
+      ) {
+        matchingUserIds.add(u.id);
+      }
+    });
+    const allDeletedUserIds = Array.from(matchingUserIds);
+
+    this.recordDeletedIds(allDeletedUserIds);
+    this.recordDeletedUserMeta(
+      targetUName ? [targetUName] : [],
+      targetEmail ? [targetEmail] : []
+    );
+    allDeletedUserIds.forEach((id) => this.clearLocalWrite(id));
+
+    const updatedUsers = rawUsers.filter((u) => !matchingUserIds.has(u.id));
+    this.setItem(STORAGE_KEYS.USERS, updatedUsers);
+
+    if (currentLogged && matchingUserIds.has(currentLogged.id)) {
       this.logout();
     }
 
-    // Remove from all course enrollments
+    // Remove from all course enrollments (and only upsert courses that actually had this student enrolled to save Egress!)
     const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    let coursesChanged = false;
     const updatedCourses = courses.map((c) => {
-      const updatedCourse = {
+      const hadStudent = c.enrolledStudentIds.some((id) => matchingUserIds.has(id));
+      if (!hadStudent) return c;
+      coursesChanged = true;
+      const updatedCourse: Course = {
         ...c,
-        enrolledStudentIds: c.enrolledStudentIds.filter((id) => id !== userId),
+        enrolledStudentIds: c.enrolledStudentIds.filter((id) => !matchingUserIds.has(id)),
       };
       try {
         SupabaseService.upsertCourse(updatedCourse).catch(() => {});
@@ -2210,38 +2424,81 @@ export class ClassroomDB {
       }
       return updatedCourse;
     });
-    this.setItem(STORAGE_KEYS.COURSES, updatedCourses);
+    if (coursesChanged) {
+      this.setItem(STORAGE_KEYS.COURSES, updatedCourses);
+    }
+
+    // Clean up attendance records for the deleted user
+    const sessions = this.getItem<AttendanceSession[]>(
+      STORAGE_KEYS.ATTENDANCE,
+      INITIAL_ATTENDANCE_SESSIONS
+    );
+    let attChanged = false;
+    const updatedSessions = sessions.map((s) => {
+      if (!s.records) return s;
+      const hasRec = allDeletedUserIds.some((id) => id in s.records);
+      if (!hasRec) return s;
+      attChanged = true;
+      const nextRecs = { ...s.records };
+      allDeletedUserIds.forEach((id) => {
+        delete nextRecs[id];
+      });
+      return { ...s, records: nextRecs };
+    });
+    if (attChanged) {
+      this.setItem(STORAGE_KEYS.ATTENDANCE, updatedSessions);
+    }
+
+    // Clean up likes & comments authored by the deleted user on posts
+    const posts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS);
+    let postsChanged = false;
+    const updatedPosts = posts.map((p) => {
+      const hadLike = (p.likes || []).some((id) => matchingUserIds.has(id));
+      const hadComment = (p.comments || []).some((cm) => matchingUserIds.has(cm.authorId));
+      if (!hadLike && !hadComment) return p;
+      postsChanged = true;
+      return {
+        ...p,
+        likes: (p.likes || []).filter((id) => !matchingUserIds.has(id)),
+        comments: (p.comments || []).filter((cm) => !matchingUserIds.has(cm.authorId)),
+      };
+    });
+    if (postsChanged) {
+      this.setItem(STORAGE_KEYS.POSTS, updatedPosts);
+    }
 
     // Clean up local student submissions, quiz submissions, progress & notifications
     const submissions = this.getItem<AssignmentSubmission[]>(STORAGE_KEYS.SUBMISSIONS, INITIAL_SUBMISSIONS);
-    const removedSubIds = submissions.filter((s) => s.studentId === userId).map((s) => s.id);
+    const removedSubIds = submissions
+      .filter((s) => matchingUserIds.has(s.studentId))
+      .map((s) => s.id);
     this.recordDeletedIds(removedSubIds);
     this.setItem(
       STORAGE_KEYS.SUBMISSIONS,
-      submissions.filter((s) => s.studentId !== userId)
+      submissions.filter((s) => !matchingUserIds.has(s.studentId))
     );
 
     const quizSubs = this.getItem<QuizSubmission[]>(STORAGE_KEYS.QUIZ_SUBMISSIONS, INITIAL_QUIZ_SUBMISSIONS);
     this.setItem(
       STORAGE_KEYS.QUIZ_SUBMISSIONS,
-      quizSubs.filter((qs) => qs.studentId !== userId)
+      quizSubs.filter((qs) => !matchingUserIds.has(qs.studentId))
     );
 
     const allProgress = this.getItem<StudentProgress[]>(STORAGE_KEYS.PROGRESS, INITIAL_PROGRESS);
     this.setItem(
       STORAGE_KEYS.PROGRESS,
-      allProgress.filter((p) => p.studentId !== userId)
+      allProgress.filter((p) => !matchingUserIds.has(p.studentId))
     );
 
     const notifs = this.getItem<NotificationItem[]>(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
     this.setItem(
       STORAGE_KEYS.NOTIFICATIONS,
-      notifs.filter((n) => n.userId !== userId)
+      notifs.filter((n) => !matchingUserIds.has(n.userId))
     );
 
-    // Auto-delete from Supabase SQL database
+    // Auto-delete from Supabase SQL database (by ID + username + email)
     try {
-      SupabaseService.deleteProfile(userId).catch(() => {});
+      SupabaseService.deleteProfile(userId, targetUName, targetEmail).catch(() => {});
     } catch {
       // ignore
     }
@@ -2289,7 +2546,10 @@ export class ClassroomDB {
 
   // Strict Course & Class Access Control (RLS simulation)
   static getCourses(currentUser: User): Course[] {
-    const rawCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const deletedSet = new Set(this.getDeletedIds());
+    const rawCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter(
+      (c) => !deletedSet.has(c.id)
+    );
     const allCourses = this.sortCoursesByCustomOrder(rawCourses);
     if (currentUser.role === 'admin' || currentUser.role === 'co_admin') {
       return allCourses;
@@ -2299,8 +2559,12 @@ export class ClassroomDB {
   }
 
   static getCourseById(courseId: string, currentUser: User): { course: Course | null; error?: string } {
+    const deletedSet = new Set(this.getDeletedIds());
+    if (deletedSet.has(courseId)) {
+      return { course: null, error: 'Course not found.' };
+    }
     const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
-    const course = allCourses.find((c) => c.id === courseId);
+    const course = allCourses.find((c) => c.id === courseId && !deletedSet.has(c.id));
     if (!course) {
       return { course: null, error: 'Course not found.' };
     }
@@ -2331,7 +2595,11 @@ export class ClassroomDB {
           enrolledCourse = updatedCourse;
           this.markLocalWrite(course.id);
           try {
-            SupabaseService.upsertCourse(updatedCourse).catch(() => {});
+            SupabaseService.upsertCourse(updatedCourse)
+              .then((res) => {
+                if (res.success) this.clearLocalWrite(course.id);
+              })
+              .catch(() => {});
           } catch {
             // ignore
           }
@@ -2379,7 +2647,11 @@ export class ClassroomDB {
         unenrolledCourse = updatedCourse;
         this.markLocalWrite(course.id);
         try {
-          SupabaseService.upsertCourse(updatedCourse).catch(() => {});
+          SupabaseService.upsertCourse(updatedCourse)
+            .then((res) => {
+              if (res.success) this.clearLocalWrite(course.id);
+            })
+            .catch(() => {});
         } catch {
           // ignore
         }
@@ -2495,7 +2767,11 @@ export class ClassroomDB {
     this.setItem(STORAGE_KEYS.COURSES, normalized);
     normalized.forEach((c) => {
       try {
-        SupabaseService.upsertCourse(c).catch(() => {});
+        SupabaseService.upsertCourse(c)
+          .then((res) => {
+            if (res.success) this.clearLocalWrite(c.id);
+          })
+          .catch(() => {});
       } catch {
         // ignore
       }
@@ -2592,7 +2868,11 @@ export class ClassroomDB {
       this.setItem(STORAGE_KEYS.COURSES, updated);
       coursesToSync.forEach((c) => {
         try {
-          SupabaseService.upsertCourse(c).catch(() => {});
+          SupabaseService.upsertCourse(c)
+            .then((res) => {
+              if (res.success) this.clearLocalWrite(c.id);
+            })
+            .catch(() => {});
         } catch {
           // ignore
         }
@@ -3361,8 +3641,8 @@ export class ClassroomDB {
     const onlyProfiles = Boolean(options?.onlyProfiles);
     const isBackground = Boolean(options?.background);
     const now = Date.now();
-    const COOLDOWN_MS = 35_000; // 35s Client-Side Cache TTL for stream/attendance to keep Supabase Egress strictly < 5.5 GB
-    const CATALOG_TTL_MS = 600_000; // 10-minute Client-Side Cache TTL for catalog (courses, assignments, quizzes, profiles)
+    const COOLDOWN_MS = 15_000; // 15s background delta cooldown (Realtime events pass force=true for 0ms latency while saving Egress)
+    const CATALOG_TTL_MS = 45_000; // 45s catalog TTL for full profiles, assignments & quizzes in background polls
 
     if (!force) {
       if (onlyProfiles && now - this.lastProfilePullAt < COOLDOWN_MS) {
@@ -3388,12 +3668,15 @@ export class ClassroomDB {
     this.activePullPromise = (async () => {
       try {
         const deletedSet = new Set(this.getDeletedIds());
+        const deletedMeta = this.getDeletedUsersMeta();
         const newlyDiscoveredRemoteDeletions: string[] = [];
+        const newlyDeletedUsernames: string[] = [];
+        const newlyDeletedEmails: string[] = [];
 
         if (onlyProfiles) {
           this.lastProfilePullAt = Date.now();
           this.savePullTimestampsToCache();
-          const remoteProfiles = await SupabaseService.getRemoteProfiles();
+          const remoteProfiles = await SupabaseService.getRemoteProfiles(force);
           if (!remoteProfiles || remoteProfiles.length === 0) {
             return purgedLocalNotifs;
           }
@@ -3403,7 +3686,9 @@ export class ClassroomDB {
             // ignore
           }
           const remoteProfileIds = new Set(remoteProfiles.map((ru) => ru.id));
-          const localUsers = this.getAllUsers().filter((u) => !deletedSet.has(u.id));
+          const localUsers = this.getAllUsers().filter(
+            (u) => !this.isUserDeleted(u, deletedSet, deletedMeta)
+          );
           const prevJson = JSON.stringify(localUsers);
           const userMap = new Map<string, User>();
           localUsers.forEach((u) => {
@@ -3412,10 +3697,12 @@ export class ClassroomDB {
             } else {
               newlyDiscoveredRemoteDeletions.push(u.id);
               deletedSet.add(u.id);
+              if (u.username) newlyDeletedUsernames.push(u.username);
+              if (u.email) newlyDeletedEmails.push(u.email);
             }
           });
           remoteProfiles.forEach((ru) => {
-            if (deletedSet.has(ru.id)) return;
+            if (this.isUserDeleted(ru, deletedSet, deletedMeta)) return;
             const existing = userMap.get(ru.id);
             const resolvedAvatar =
               ru.role !== 'admin'
@@ -3440,6 +3727,7 @@ export class ClassroomDB {
           });
           if (newlyDiscoveredRemoteDeletions.length > 0) {
             this.recordDeletedIds(newlyDiscoveredRemoteDeletions);
+            this.recordDeletedUserMeta(newlyDeletedUsernames, newlyDeletedEmails);
           }
           const mergedUsers = Array.from(userMap.values());
           if (JSON.stringify(mergedUsers) !== prevJson) {
@@ -3470,7 +3758,7 @@ export class ClassroomDB {
                 .filter((c) => c.enrolledStudentIds.includes(loggedUser.id))
                 .map((c) => c.id)
             : undefined;
-        const studentScopedCourseIds =
+        let studentScopedCourseIds =
           enrolledIdsForStudent && enrolledIdsForStudent.length > 0
             ? enrolledIdsForStudent
             : undefined;
@@ -3494,7 +3782,14 @@ export class ClassroomDB {
         );
         const knownPostsMap = new Map<
           string,
-          { title: string; content: string; comments: CoursePost['comments'] }
+          {
+            title: string;
+            content: string;
+            comments: CoursePost['comments'];
+            sig?: string;
+            isPinned?: boolean;
+            pinOrder?: number;
+          }
         >();
         currentPosts.forEach((p) => {
           if (p.id) {
@@ -3502,6 +3797,14 @@ export class ClassroomDB {
               title: p.title || '',
               content: p.content || '',
               comments: p.comments || [],
+              sig: SupabaseService.computePostSignature(
+                p.content || '',
+                p.comments || [],
+                p.isPinned,
+                p.pinOrder
+              ),
+              isPinned: p.isPinned,
+              pinOrder: p.pinOrder,
             });
           }
         });
@@ -3542,41 +3845,67 @@ export class ClassroomDB {
           typeof window !== 'undefined' &&
           localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) === 'true';
 
+        // Always fetch courses (using knownBanners so banner_image is omitted unless changed: ~1.5 KB)
+        // so classroom creation, edits, reordering, and student enrollments reflect immediately!
         const [
           remoteProfiles,
           remoteCourses,
-          remotePosts,
+          initialRemotePosts,
           remoteAssignments,
           remoteQuizzes,
-          remoteAttendance,
+          initialRemoteAttendance,
           remoteNotifications,
           singleLoggedProfile,
         ] = await Promise.all([
-          shouldFetchCatalog
-            ? SupabaseService.getRemoteProfiles(false, {
+          shouldFetchCatalog || isStudentLightweight
+            ? SupabaseService.getRemoteProfiles(force, {
                 studentLightweight: Boolean(isStudentLightweight && loggedUser),
                 currentUserId: loggedUser?.id,
                 knownAvatars: isAlreadyCloudSynced || isBackground ? knownAvatars : undefined,
               })
             : Promise.resolve(null),
-          shouldFetchCatalog ? SupabaseService.getRemoteCourses(knownBanners) : Promise.resolve(null),
+          SupabaseService.getRemoteCourses(knownBanners),
           SupabaseService.getRemotePosts(
             studentScopedCourseIds,
             isAlreadyCloudSynced || isBackground ? knownPostsMap : undefined
           ),
-          shouldFetchCatalog ? SupabaseService.getRemoteAssignments() : Promise.resolve(null),
-          shouldFetchCatalog ? SupabaseService.getRemoteQuizzes() : Promise.resolve(null),
+          shouldFetchCatalog ? SupabaseService.getRemoteAssignments(force) : Promise.resolve(null),
+          shouldFetchCatalog ? SupabaseService.getRemoteQuizzes(force) : Promise.resolve(null),
           SupabaseService.getRemoteAttendanceSessions(studentScopedCourseIds, knownAttendanceMap),
           loggedUser ? SupabaseService.getRemoteNotifications(loggedUser.id) : Promise.resolve(null),
-          !shouldFetchCatalog && loggedUser
+          !shouldFetchCatalog && !isStudentLightweight && loggedUser
             ? SupabaseService.getRemoteProfileByIdentifier(loggedUser.username || loggedUser.email, true)
             : Promise.resolve(null),
         ]);
 
+        let remotePosts = initialRemotePosts;
+        let remoteAttendance = initialRemoteAttendance;
+
+        // If a student was just enrolled into a new classroom by Admin/Co-Admin, immediately fetch posts & attendance for their updated course list!
+        if (loggedUser && loggedUser.role === 'student' && remoteCourses) {
+          const updatedStudentCourseIds = remoteCourses
+            .filter((rc) => !deletedSet.has(rc.id) && rc.enrolledStudentIds.includes(loggedUser.id))
+            .map((rc) => rc.id);
+          const prevSet = new Set(studentScopedCourseIds || []);
+          const hasNewlyEnrolledCourse = updatedStudentCourseIds.some((id) => !prevSet.has(id));
+          if (hasNewlyEnrolledCourse && updatedStudentCourseIds.length > 0) {
+            studentScopedCourseIds = updatedStudentCourseIds;
+            const [refetchedPosts, refetchedAtt] = await Promise.all([
+              SupabaseService.getRemotePosts(studentScopedCourseIds, knownPostsMap),
+              SupabaseService.getRemoteAttendanceSessions(studentScopedCourseIds, knownAttendanceMap),
+            ]);
+            if (refetchedPosts) remotePosts = refetchedPosts;
+            if (refetchedAtt) remoteAttendance = refetchedAtt;
+          }
+        }
+
         let updated = purgedLocalNotifs;
-        // Detect if the remote Supabase project was just created (e.g. 0 courses in cloud while local has courses)
+        // Detect if the remote Supabase project was just created (ONLY when both profiles and courses are empty AND never cloud synced before)
         const isFreshUnseededRemoteDb =
+          !isAlreadyCloudSynced &&
           shouldFetchCatalog &&
+          remoteProfiles !== null &&
+          remoteProfiles.length === 0 &&
           remoteCourses !== null &&
           remoteCourses.length === 0 &&
           currentCourses.length > 0;
@@ -3591,15 +3920,7 @@ export class ClassroomDB {
           } catch {
             // ignore
           }
-        } else if (
-          isFreshUnseededRemoteDb ||
-          (shouldFetchCatalog &&
-            remoteProfiles !== null &&
-            remoteProfiles.length === 0 &&
-            remoteCourses !== null &&
-            remoteCourses.length === 0 &&
-            localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) !== 'true')
-        ) {
+        } else if (isFreshUnseededRemoteDb) {
           // Brand-new or freshly migrated Supabase tables detected: automatically push all local data to the new project
           try {
             const seedUsers = this.getAllUsers();
@@ -3645,7 +3966,9 @@ export class ClassroomDB {
         const latestAvatarByUserId = new Map<string, string>();
         if (remoteProfiles && remoteProfiles.length > 0) {
           const remoteProfileIds = new Set(remoteProfiles.map((ru) => ru.id));
-          const localUsers = this.getAllUsers().filter((u) => !deletedSet.has(u.id));
+          const localUsers = this.getAllUsers().filter(
+            (u) => !this.isUserDeleted(u, deletedSet, deletedMeta)
+          );
           const prevJson = JSON.stringify(localUsers);
           const userMap = new Map<string, User>();
 
@@ -3661,14 +3984,16 @@ export class ClassroomDB {
             } else {
               newlyDiscoveredRemoteDeletions.push(u.id);
               deletedSet.add(u.id);
+              if (u.username) newlyDeletedUsernames.push(u.username);
+              if (u.email) newlyDeletedEmails.push(u.email);
             }
           });
 
           remoteProfiles.forEach((ru) => {
-            if (deletedSet.has(ru.id)) {
+            if (this.isUserDeleted(ru, deletedSet, deletedMeta)) {
               if (!this.purgedRemoteIds.has(ru.id)) {
                 this.purgedRemoteIds.add(ru.id);
-                SupabaseService.deleteProfile(ru.id).catch(() => {});
+                SupabaseService.deleteProfile(ru.id, ru.username, ru.email).catch(() => {});
               }
               return;
             }
@@ -3853,11 +4178,9 @@ export class ClassroomDB {
               !cloudActive ||
               !isInQueriedScope ||
               this.isRecentLocalWrite(p.id) ||
-              p.status === 'scheduled' ||
-              (!wasConfirmedInCloud && !isInitialDemo) ||
-              (remotePosts.length === 0 && !isInitialDemo)
+              (!wasConfirmedInCloud && !isInitialDemo)
             ) {
-              // Keep local post and ensure it is synced to Supabase so it never disappears
+              // Keep unconfirmed/recent local post and sync to Supabase; never resurrect confirmed posts that were deleted remotely!
               postMap.set(p.id, p);
               if (!isInitialDemo) {
                 postsToPushToCloud.push(p);
@@ -3927,15 +4250,15 @@ export class ClassroomDB {
                 ? ''
                 : latestAvatarByUserId.get(rp.authorId) || rp.authorAvatar || existing?.authorAvatar || '';
 
-            const syncedComments = (rp.comments && rp.comments.length > 0 ? rp.comments : existing?.comments || []).map(
-              (cm) => ({
-                ...cm,
-                authorAvatar:
-                  cm.authorRole !== 'admin'
-                    ? ''
-                    : latestAvatarByUserId.get(cm.authorId) || cm.authorAvatar || '',
-              })
-            );
+            const syncedComments = (
+              Array.isArray(rp.comments) ? rp.comments : existing?.comments || []
+            ).map((cm) => ({
+              ...cm,
+              authorAvatar:
+                cm.authorRole !== 'admin'
+                  ? ''
+                  : latestAvatarByUserId.get(cm.authorId) || cm.authorAvatar || '',
+            }));
 
             const mergedPost: CoursePost = {
               ...existing,
@@ -3953,16 +4276,15 @@ export class ClassroomDB {
               createdAt: formattedTime,
               createdAtMs: postTimestampMs,
               comments: syncedComments,
-              attachments:
-                rp.attachments && rp.attachments.length > 0
-                  ? rp.attachments.map((att, idx) => {
-                      const localAtt = existing?.attachments?.[idx];
-                      if (att.url === '#attachment' && localAtt?.url) {
-                        return localAtt;
-                      }
-                      return att;
-                    })
-                  : existing?.attachments || [],
+              attachments: Array.isArray(rp.attachments)
+                ? rp.attachments.map((att, idx) => {
+                    const localAtt = existing?.attachments?.[idx];
+                    if (att.url === '#attachment' && localAtt?.url) {
+                      return localAtt;
+                    }
+                    return att;
+                  })
+                : existing?.attachments || [],
             };
 
             postMap.set(rp.id, mergedPost);
@@ -4104,6 +4426,9 @@ export class ClassroomDB {
 
         if (newlyDiscoveredRemoteDeletions.length > 0) {
           this.recordDeletedIds(newlyDiscoveredRemoteDeletions);
+          if (newlyDeletedUsernames.length > 0 || newlyDeletedEmails.length > 0) {
+            this.recordDeletedUserMeta(newlyDeletedUsernames, newlyDeletedEmails);
+          }
           updated = true;
         }
 
@@ -4169,8 +4494,7 @@ export class ClassroomDB {
         !cloudActive ||
         !isInQueriedScope ||
         this.isRecentLocalWrite(att.id, 30_000) ||
-        (!wasConfirmedInCloud && !isInitialDemo) ||
-        (remoteAttendance.length === 0 && !isInitialDemo)
+        (!wasConfirmedInCloud && !isInitialDemo)
       ) {
         attMap.set(att.id, att);
         if (!isInitialDemo) {
@@ -4295,7 +4619,7 @@ export class ClassroomDB {
       return false;
     }
     const now = Date.now();
-    if (!force && now - this.lastAttendanceSyncAt < 12_000) {
+    if (!force && now - this.lastAttendanceSyncAt < 5_000) {
       return false;
     }
     if (this.activeAttendanceSyncPromise) {
@@ -4539,7 +4863,10 @@ export class ClassroomDB {
     try {
       SupabaseService.upsertPost(newPost, course)
         .then((ok) => {
-          if (ok) this.markPostCloudConfirmed(newPost.id);
+          if (ok) {
+            this.clearLocalWrite(newPost.id);
+            this.markPostCloudConfirmed(newPost.id);
+          }
         })
         .catch(() => {});
     } catch {
@@ -4639,7 +4966,10 @@ export class ClassroomDB {
     try {
       SupabaseService.upsertPost(finalPost, course)
         .then((ok) => {
-          if (ok) this.markPostCloudConfirmed(finalPost.id);
+          if (ok) {
+            this.clearLocalWrite(finalPost.id);
+            this.markPostCloudConfirmed(finalPost.id);
+          }
         })
         .catch(() => {});
     } catch {
@@ -4706,7 +5036,10 @@ export class ClassroomDB {
         try {
           SupabaseService.upsertPost(finalTarget, course)
             .then((ok) => {
-              if (ok) this.markPostCloudConfirmed(finalTarget.id);
+              if (ok) {
+                this.clearLocalWrite(finalTarget.id);
+                this.markPostCloudConfirmed(finalTarget.id);
+              }
             })
             .catch(() => {});
         } catch {
@@ -4759,7 +5092,10 @@ export class ClassroomDB {
         try {
           SupabaseService.upsertPost(finalTarget, course)
             .then((ok) => {
-              if (ok) this.markPostCloudConfirmed(finalTarget.id);
+              if (ok) {
+                this.clearLocalWrite(finalTarget.id);
+                this.markPostCloudConfirmed(finalTarget.id);
+              }
             })
             .catch(() => {});
         } catch {
@@ -5080,12 +5416,19 @@ export class ClassroomDB {
 
   // Assignments
   static getAssignments(courseId: string): Assignment[] {
+    const deletedSet = new Set(this.getDeletedIds());
     const assignments = this.getItem<Assignment[]>(STORAGE_KEYS.ASSIGNMENTS, INITIAL_ASSIGNMENTS);
-    return assignments.filter((a) => a.courseId === courseId);
+    return assignments.filter(
+      (a) => a.courseId === courseId && !deletedSet.has(a.id) && !deletedSet.has(a.courseId)
+    );
   }
 
   static getSubmissions(assignmentId: string, currentUser: User): AssignmentSubmission[] {
-    const submissions = this.getItem<AssignmentSubmission[]>(STORAGE_KEYS.SUBMISSIONS, INITIAL_SUBMISSIONS);
+    const deletedSet = new Set(this.getDeletedIds());
+    const submissions = this.getItem<AssignmentSubmission[]>(
+      STORAGE_KEYS.SUBMISSIONS,
+      INITIAL_SUBMISSIONS
+    ).filter((s) => !deletedSet.has(s.id) && !deletedSet.has(s.assignmentId));
     if (currentUser.role === 'admin' || currentUser.role === 'co_admin') {
       return submissions.filter((s) => s.assignmentId === assignmentId);
     }
@@ -5265,8 +5608,11 @@ export class ClassroomDB {
 
   // Quizzes & Scoring
   static getQuizzes(courseId: string): Quiz[] {
+    const deletedSet = new Set(this.getDeletedIds());
     const quizzes = this.getItem<Quiz[]>(STORAGE_KEYS.QUIZZES, INITIAL_QUIZZES);
-    return quizzes.filter((q) => q.courseId === courseId);
+    return quizzes.filter(
+      (q) => q.courseId === courseId && !deletedSet.has(q.id) && !deletedSet.has(q.courseId)
+    );
   }
 
   static deleteQuiz(quizId: string, currentUser: User): boolean {
@@ -5534,10 +5880,11 @@ export class ClassroomDB {
 
   // Student Attendance & Daily Check-in System
   static getAttendanceSessions(courseId?: string): AttendanceSession[] {
+    const deletedSet = new Set(this.getDeletedIds());
     const sessions = this.getItem<AttendanceSession[]>(
       STORAGE_KEYS.ATTENDANCE,
       INITIAL_ATTENDANCE_SESSIONS
-    );
+    ).filter((s) => !deletedSet.has(s.id) && !deletedSet.has(s.courseId));
     const filtered = courseId ? sessions.filter((s) => s.courseId === courseId) : sessions;
     return filtered.sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
   }
@@ -5984,11 +6331,13 @@ export class ClassroomDB {
     );
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     let updatedSession: AttendanceSession | null = null;
+    const nowMs = Date.now();
     const updated = sessions.map((s) => {
       if (s.id === sessionId) {
         const prevRecord = s.records[student.id];
         updatedSession = {
           ...s,
+          statusUpdatedAtMs: nowMs,
           records: {
             ...s.records,
             [student.id]: {
@@ -6012,7 +6361,11 @@ export class ClassroomDB {
       try {
         SupabaseService.upsertAttendanceSession(updatedSession, {
           preserveRemoteOpenState: true,
-        }).catch(() => {});
+        })
+          .then((ok) => {
+            if (ok) this.clearLocalWrite(`att-rec:${sessionId}:${student.id}`);
+          })
+          .catch(() => {});
       } catch {
         // ignore
       }
@@ -6034,6 +6387,7 @@ export class ClassroomDB {
       INITIAL_ATTENDANCE_SESSIONS
     );
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const nowMs = Date.now();
     let updatedSession: AttendanceSession | null = null;
     const updated = sessions.map((s) => {
       if (s.id === sessionId) {
@@ -6048,7 +6402,7 @@ export class ClassroomDB {
             checkedInBy: 'instructor',
           };
         });
-        updatedSession = { ...s, records: nextRecords };
+        updatedSession = { ...s, statusUpdatedAtMs: nowMs, records: nextRecords };
         return updatedSession;
       }
       return s;
@@ -6059,7 +6413,13 @@ export class ClassroomDB {
       try {
         SupabaseService.upsertAttendanceSession(updatedSession, {
           preserveRemoteOpenState: true,
-        }).catch(() => {});
+        })
+          .then((ok) => {
+            if (ok) {
+              students.forEach((stu) => this.clearLocalWrite(`att-rec:${sessionId}:${stu.id}`));
+            }
+          })
+          .catch(() => {});
       } catch {
         // ignore
       }

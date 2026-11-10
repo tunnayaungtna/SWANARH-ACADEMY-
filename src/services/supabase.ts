@@ -749,35 +749,48 @@ function decodeAttendanceOpenedBy(
   };
 }
 
+function computeFastStringHash(str: string): string {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash) ^ str.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 function encodeCourseThemeWithOrder(course: Course): string {
   const baseTheme =
     (course.themeColor || 'indigo')
       .split(COURSE_ORDER_MARKER_PREFIX)[0]
       .split('~B')[0]
       .trim() || 'indigo';
-  const bannerLen = (course.bannerImage || '').length;
+  const bannerStr = course.bannerImage || '';
+  const bannerLen = bannerStr.length;
+  const bannerHash = bannerLen > 0 ? computeFastStringHash(bannerStr) : '0';
   const orderVal =
     typeof course.sortOrder === 'number' && Number.isFinite(course.sortOrder)
       ? Math.max(1, Math.round(course.sortOrder))
       : 0;
-  return `${baseTheme}${COURSE_ORDER_MARKER_PREFIX}${orderVal}~B${bannerLen}`;
+  return `${baseTheme}${COURSE_ORDER_MARKER_PREFIX}${orderVal}~B${bannerLen}_${bannerHash}`;
 }
 
 function decodeCourseThemeAndOrder(rawTheme?: string | null): {
   themeColor: Course['themeColor'];
   sortOrder?: number;
   bannerLen?: number;
+  bannerHash?: string;
 } {
   const str = String(rawTheme || 'indigo');
   if (str.includes(COURSE_ORDER_MARKER_PREFIX)) {
     const [cleanTheme, restRaw] = str.split(COURSE_ORDER_MARKER_PREFIX);
-    const [orderRaw, bannerLenRaw] = (restRaw || '').split('~B');
+    const [orderRaw, bannerMetaRaw] = (restRaw || '').split('~B');
+    const [bannerLenRaw, bannerHashRaw] = (bannerMetaRaw || '').split('_');
     const parsedOrder = Number(orderRaw);
     const parsedBannerLen = Number(bannerLenRaw);
     return {
       themeColor: ((cleanTheme || 'indigo').trim() as Course['themeColor']) || 'indigo',
       sortOrder: Number.isFinite(parsedOrder) && parsedOrder > 0 ? parsedOrder : undefined,
       bannerLen: Number.isFinite(parsedBannerLen) && parsedBannerLen > 0 ? parsedBannerLen : undefined,
+      bannerHash: bannerHashRaw ? bannerHashRaw.trim() : undefined,
     };
   }
   return {
@@ -900,6 +913,203 @@ export class SupabaseService {
   private static lastOrphanCleanupAt = 0;
   // In-flight GET request deduplication map for 2,000+ concurrent user scalability
   private static inflightGetRequests = new Map<string, Promise<unknown>>();
+  // Live Realtime Broadcast + Postgres Changes synchronization across all accounts & browsers
+  private static realtimeListeners = new Set<
+    (payload?: {
+      kind?: string;
+      deletedIds?: string[];
+      deletedUsernames?: string[];
+      deletedEmails?: string[];
+    }) => void
+  >();
+  private static activeRealtimeChannel: ReturnType<typeof supabase.channel> | null = null;
+  private static localBroadcastChannel: BroadcastChannel | null = null;
+  private static realtimeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private static pendingDeletedIds = new Set<string>();
+  private static pendingDeletedUsernames = new Set<string>();
+  private static pendingDeletedEmails = new Set<string>();
+  private static pendingKind: string | undefined;
+
+  static computePostSignature(
+    content: string,
+    comments: CoursePost['comments'] | Record<string, unknown>[],
+    isPinned?: boolean,
+    pinOrder?: number | null
+  ): string {
+    const cleanComments = (comments || []).slice(-50).map((c) => {
+      const rec = c as Record<string, unknown>;
+      return `${String(rec.id || '')}:${String(rec.content || '').slice(0, 1000)}`;
+    });
+    return computeFastStringHash(
+      `${content || ''}||${cleanComments.join('|')}||${Boolean(isPinned)}:${pinOrder ?? ''}`
+    );
+  }
+
+  private static ensureRealtimeChannel(): void {
+    if (typeof window === 'undefined') return;
+    if (!this.localBroadcastChannel && typeof BroadcastChannel !== 'undefined') {
+      try {
+        this.localBroadcastChannel = new BroadcastChannel('classroom_os_local_sync_v1');
+        this.localBroadcastChannel.onmessage = (ev) => {
+          const data = (ev?.data || {}) as {
+            kind?: string;
+            deletedIds?: string[];
+            deletedUsernames?: string[];
+            deletedEmails?: string[];
+          };
+          this.triggerRealtimeListeners(data);
+        };
+      } catch {
+        // ignore
+      }
+    }
+    if (this.activeRealtimeChannel) return;
+    try {
+      const ch = supabase
+        .channel('classroom-live-sync-v1', {
+          config: { broadcast: { self: false } },
+        })
+        .on('broadcast', { event: 'classroom_update' }, (msg) => {
+          const data = (msg?.payload || {}) as {
+            kind?: string;
+            deletedIds?: string[];
+            deletedUsernames?: string[];
+            deletedEmails?: string[];
+          };
+          this.triggerRealtimeListeners(data);
+        })
+        .on('postgres_changes', { event: '*', schema: 'public' }, (payload) => {
+          if (payload?.eventType === 'DELETE' && payload?.old && typeof payload.old === 'object') {
+            const oldRec = payload.old as Record<string, unknown>;
+            const delId = oldRec.id ? String(oldRec.id) : '';
+            const delUName = oldRec.username ? String(oldRec.username).toLowerCase() : '';
+            const delEmail = oldRec.email ? String(oldRec.email).toLowerCase() : '';
+            this.triggerRealtimeListeners({
+              kind: 'delete',
+              deletedIds: delId ? [delId] : undefined,
+              deletedUsernames: delUName ? [delUName] : undefined,
+              deletedEmails: delEmail ? [delEmail] : undefined,
+            });
+            return;
+          }
+          this.triggerRealtimeListeners();
+        })
+        .subscribe();
+      this.activeRealtimeChannel = ch;
+    } catch {
+      // ignore if WebSocket is unavailable
+    }
+  }
+
+  private static triggerRealtimeListeners(meta?: {
+    kind?: string;
+    deletedIds?: string[];
+    deletedUsernames?: string[];
+    deletedEmails?: string[];
+  }): void {
+    if (meta?.kind) {
+      this.pendingKind = meta.kind;
+    }
+    if (Array.isArray(meta?.deletedIds)) {
+      meta.deletedIds.forEach((id) => {
+        if (id) this.pendingDeletedIds.add(id);
+      });
+    }
+    if (Array.isArray(meta?.deletedUsernames)) {
+      meta.deletedUsernames.forEach((u) => {
+        if (u) this.pendingDeletedUsernames.add(u.trim().toLowerCase());
+      });
+    }
+    if (Array.isArray(meta?.deletedEmails)) {
+      meta.deletedEmails.forEach((e) => {
+        if (e) this.pendingDeletedEmails.add(e.trim().toLowerCase());
+      });
+    }
+
+    if (this.realtimeDebounceTimer) {
+      clearTimeout(this.realtimeDebounceTimer);
+    }
+    this.realtimeDebounceTimer = setTimeout(() => {
+      this.realtimeDebounceTimer = null;
+      const snapshot = {
+        kind: this.pendingKind,
+        deletedIds:
+          this.pendingDeletedIds.size > 0 ? Array.from(this.pendingDeletedIds) : undefined,
+        deletedUsernames:
+          this.pendingDeletedUsernames.size > 0
+            ? Array.from(this.pendingDeletedUsernames)
+            : undefined,
+        deletedEmails:
+          this.pendingDeletedEmails.size > 0 ? Array.from(this.pendingDeletedEmails) : undefined,
+      };
+      this.pendingKind = undefined;
+      this.pendingDeletedIds.clear();
+      this.pendingDeletedUsernames.clear();
+      this.pendingDeletedEmails.clear();
+
+      this.realtimeListeners.forEach((cb) => {
+        try {
+          cb(snapshot);
+        } catch {
+          // ignore
+        }
+      });
+    }, 180);
+  }
+
+  static subscribeToRealtimeChanges(
+    onChange: (payload?: {
+      kind?: string;
+      deletedIds?: string[];
+      deletedUsernames?: string[];
+      deletedEmails?: string[];
+    }) => void
+  ): () => void {
+    this.realtimeListeners.add(onChange);
+    this.ensureRealtimeChannel();
+    return () => {
+      this.realtimeListeners.delete(onChange);
+    };
+  }
+
+  static notifyRealtimePeers(
+    kind: string = 'all',
+    meta?: {
+      deletedIds?: string[];
+      deletedUsernames?: string[];
+      deletedEmails?: string[];
+    }
+  ): void {
+    if (typeof window === 'undefined') return;
+    this.ensureRealtimeChannel();
+    const messagePayload = {
+      kind,
+      ts: Date.now(),
+      ...(meta?.deletedIds?.length ? { deletedIds: meta.deletedIds } : {}),
+      ...(meta?.deletedUsernames?.length ? { deletedUsernames: meta.deletedUsernames } : {}),
+      ...(meta?.deletedEmails?.length ? { deletedEmails: meta.deletedEmails } : {}),
+    };
+    try {
+      if (this.localBroadcastChannel) {
+        this.localBroadcastChannel.postMessage(messagePayload);
+      }
+    } catch {
+      // ignore
+    }
+    try {
+      if (this.activeRealtimeChannel) {
+        this.activeRealtimeChannel
+          .send({
+            type: 'broadcast',
+            event: 'classroom_update',
+            payload: messagePayload,
+          })
+          .catch(() => {});
+      }
+    } catch {
+      // ignore
+    }
+  }
 
   /**
    * Returns the active Supabase project reference ID (e.g., 'apuyokqzskpmbnmekpyd')
@@ -1393,6 +1603,108 @@ export class SupabaseService {
   }
 
   /**
+   * Authoritative Cloud Login Existence Check:
+   * - Queries Supabase `profiles` for matching username/email (costs < 0.5 KB egress).
+   * - Distinguishes between a network/query error vs. an account that was genuinely deleted in Supabase (`users.length === 0 && dbSeeded === true`).
+   * - Prevents deleted student accounts from ever logging in via local `INITIAL_USERS` or stale `localStorage`!
+   */
+  static async checkRemoteLoginCandidates(identifier: string): Promise<{
+    networkOk: boolean;
+    dbSeeded: boolean;
+    users: User[];
+  }> {
+    const rawClean = (identifier || '')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/^(🔑\s*|📧\s*|👤\s*)?(username|email|e-mail|mail|id)\s*[:：=\-]\s*/i, '')
+      .trim()
+      .replace(/^@+/, '')
+      .toLowerCase();
+    if (!rawClean) return { networkOk: false, dbSeeded: false, users: [] };
+
+    const safeId = rawClean.replace(/[,()"'\\]/g, '').trim();
+    const compactId = safeId.replace(/\s+/g, '');
+    if (!compactId) return { networkOk: false, dbSeeded: false, users: [] };
+
+    const idLocalPart = compactId.includes('@') ? compactId.split('@')[0].trim() : compactId;
+
+    try {
+      const filterSet = new Set<string>();
+      filterSet.add(`username.ilike.${compactId}`);
+      filterSet.add(`email.ilike.${compactId}`);
+      if (idLocalPart) {
+        filterSet.add(`username.ilike.${idLocalPart}`);
+        filterSet.add(`email.ilike.${idLocalPart}@%`);
+      }
+
+      const profileFullCols =
+        'id,name,username,email,role,phone,avatar,title,gender,address,password,rules_accepted,rules_accepted_at';
+      const profileCoreCols = 'id,name,username,email,role,phone,avatar,title';
+
+      const { data, error } = await supabase
+        .from('profiles')
+        .select(profileFullCols)
+        .or(Array.from(filterSet).join(','))
+        .limit(15);
+
+      if (!error && Array.isArray(data)) {
+        if (data.length > 0) {
+          return {
+            networkOk: true,
+            dbSeeded: true,
+            users: data.map((r) => this.mapProfileRowToUser(r as unknown as Record<string, unknown>)),
+          };
+        }
+        // 0 rows matched: verify via lightweight HEAD count (0 bytes row payload) that `profiles` table is seeded
+        const { count, error: countErr } = await supabase
+          .from('profiles')
+          .select('id', { count: 'exact', head: true });
+        if (!countErr) {
+          return {
+            networkOk: true,
+            dbSeeded: (count ?? 0) > 0,
+            users: [],
+          };
+        }
+        return { networkOk: false, dbSeeded: false, users: [] };
+      }
+
+      if (error) {
+        const fallbackFilters = [
+          `email.ilike.${compactId}`,
+          ...(idLocalPart ? [`email.ilike.${idLocalPart}@%`, `title.ilike.%||USR:${idLocalPart}%`] : []),
+        ];
+        const { data: fbData, error: fbErr } = await supabase
+          .from('profiles')
+          .select(profileCoreCols)
+          .or(Array.from(new Set(fallbackFilters)).join(','))
+          .limit(15);
+        if (!fbErr && Array.isArray(fbData)) {
+          if (fbData.length > 0) {
+            return {
+              networkOk: true,
+              dbSeeded: true,
+              users: fbData.map((r) => this.mapProfileRowToUser(r as unknown as Record<string, unknown>)),
+            };
+          }
+          const { count, error: countErr } = await supabase
+            .from('profiles')
+            .select('id', { count: 'exact', head: true });
+          if (!countErr) {
+            return {
+              networkOk: true,
+              dbSeeded: (count ?? 0) > 0,
+              users: [],
+            };
+          }
+        }
+      }
+      return { networkOk: false, dbSeeded: false, users: [] };
+    } catch {
+      return { networkOk: false, dbSeeded: false, users: [] };
+    }
+  }
+
+  /**
    * Fast single-row lookup by username, email, or name for Login (handles mobile @ prefix, spaces, and copy-paste formatting)
    */
   static async getRemoteProfileByIdentifier(
@@ -1620,10 +1932,13 @@ export class SupabaseService {
             const localBanner = mergedBanners.get(cId);
             const decodedTheme = decodeCourseThemeAndOrder(row.theme_color as string | null);
             const remoteBannerLen = decodedTheme.bannerLen;
+            const remoteBannerHash = decodedTheme.bannerHash;
+            const localBannerHash = localBanner ? computeFastStringHash(localBanner) : '';
             if (
               !localBanner ||
               localBanner === DEFAULT_FALLBACK_BANNER ||
-              (remoteBannerLen && remoteBannerLen !== localBanner.length)
+              (remoteBannerLen && remoteBannerLen !== localBanner.length) ||
+              (remoteBannerHash && remoteBannerHash !== '0' && remoteBannerHash !== localBannerHash)
             ) {
               idsNeedingBanner.push(cId);
             } else {
@@ -1711,7 +2026,14 @@ export class SupabaseService {
     courseIds?: string[],
     knownPosts?: Map<
       string,
-      { title: string; content: string; comments: CoursePost['comments'] }
+      {
+        title: string;
+        content: string;
+        comments: CoursePost['comments'];
+        sig?: string;
+        isPinned?: boolean;
+        pinOrder?: number;
+      }
     >
   ): Promise<CoursePost[] | null> {
     if (courseIds && courseIds.length === 0) {
@@ -1773,9 +2095,19 @@ export class SupabaseService {
               typeof rowMeta.commentCount === 'number' ? rowMeta.commentCount : undefined;
             const remoteContentLen =
               typeof rowMeta.contentLen === 'number' ? rowMeta.contentLen : undefined;
+            const remoteSig = typeof rowMeta.sig === 'string' ? rowMeta.sig : undefined;
+            const localSig =
+              localPost.sig ||
+              this.computePostSignature(
+                localPost.content || '',
+                localPost.comments || [],
+                localPost.isPinned,
+                localPost.pinOrder
+              );
 
             if (
               localPost.title !== remoteTitle ||
+              (remoteSig !== undefined && remoteSig !== localSig) ||
               (remoteCommentCount !== undefined &&
                 remoteCommentCount !== (localPost.comments?.length || 0)) ||
               (remoteContentLen !== undefined &&
@@ -1957,7 +2289,7 @@ export class SupabaseService {
           maxPoints: row.total_points ?? 100,
           rubricItems: ['Code Quality & Correctness', 'Documentation & Verification'],
         }));
-        this.setCachedQuery('assignments:all', mapped, 300_000);
+        this.setCachedQuery('assignments:all', mapped, 15_000);
         return mapped;
       } catch {
         return null;
@@ -1966,7 +2298,7 @@ export class SupabaseService {
   }
 
   /**
-   * Fetch all assignment submissions from Supabase (with 3-minute Client-Side Cache TTL & no student_avatar column)
+   * Fetch all assignment submissions from Supabase (with 15s Client-Side Cache TTL & no student_avatar column)
    */
   static async getRemoteSubmissions(
     forceRefresh: boolean = false
@@ -2009,7 +2341,7 @@ export class SupabaseService {
               | 'graded',
           };
         });
-        this.setCachedQuery('submissions:all', mapped, 180_000);
+        this.setCachedQuery('submissions:all', mapped, 15_000);
         return mapped;
       } catch {
         return null;
@@ -2018,7 +2350,7 @@ export class SupabaseService {
   }
 
   /**
-   * Fetch all quizzes from Supabase (with 5-minute Client-Side Cache TTL)
+   * Fetch all quizzes from Supabase (with 15s Client-Side Cache TTL)
    */
   static async getRemoteQuizzes(forceRefresh: boolean = false): Promise<Quiz[] | null> {
     if (!forceRefresh) {
@@ -2043,7 +2375,7 @@ export class SupabaseService {
           passingScore: row.passing_score ?? 70,
           questions: Array.isArray(row.questions) ? row.questions : [],
         }));
-        this.setCachedQuery('quizzes:all', mapped, 300_000);
+        this.setCachedQuery('quizzes:all', mapped, 15_000);
         return mapped;
       } catch {
         return null;
@@ -2670,6 +3002,7 @@ export class SupabaseService {
 
       if (!error) {
         this.recordSignature(sigKey, comparablePayload);
+        this.notifyRealtimePeers('profile');
         return { success: true };
       }
 
@@ -2698,6 +3031,7 @@ export class SupabaseService {
             .upsert(payload, { onConflict: 'id' });
           if (!retryErr) {
             this.recordSignature(sigKey, comparablePayload);
+            this.notifyRealtimePeers('profile');
             return { success: true };
           }
         } catch {
@@ -2719,6 +3053,7 @@ export class SupabaseService {
         if (!errNoPwd) {
           this.profileSchemaMode = 'no_password';
           this.recordSignature(sigKey, comparablePayload);
+          this.notifyRealtimePeers('profile');
           return { success: true };
         }
       }
@@ -2734,6 +3069,7 @@ export class SupabaseService {
           this.profileSchemaMode = 'core';
         }
         this.recordSignature(sigKey, comparablePayload);
+        this.notifyRealtimePeers('profile');
         return { success: true };
       }
 
@@ -2746,19 +3082,74 @@ export class SupabaseService {
 
   /**
    * Delete a profile and all associated student submissions & notifications from Supabase SQL database
+   * (Deletes by id AND any duplicate rows matching username or email so deleted accounts can NEVER log in again)
    */
-  static async deleteProfile(userId: string): Promise<boolean> {
+  static async deleteProfile(
+    userId: string,
+    username?: string,
+    email?: string
+  ): Promise<boolean> {
     try {
       this.lastUpsertSignatures.delete(`profile:${userId}`);
+      this.invalidateClientCache('profiles');
+      const cleanUName = (username || '').trim().replace(/^@+/, '').toLowerCase();
+      const cleanEmail = (email || '').trim().toLowerCase();
+
+      // Lookup any duplicate profile IDs sharing the same username or email so their submissions/notifications are also deleted
+      const allTargetIds = new Set<string>([userId]);
+      if (cleanUName || cleanEmail) {
+        try {
+          const filters: string[] = [];
+          if (cleanUName) filters.push(`username.ilike.${cleanUName}`);
+          if (cleanEmail) filters.push(`email.ilike.${cleanEmail}`);
+          if (filters.length > 0) {
+            const { data: dupRows } = await supabase
+              .from('profiles')
+              .select('id')
+              .or(filters.join(','));
+            if (Array.isArray(dupRows)) {
+              dupRows.forEach((r) => {
+                if (r?.id) allTargetIds.add(String(r.id));
+              });
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      const idList = Array.from(allTargetIds);
+      idList.forEach((id) => this.lastUpsertSignatures.delete(`profile:${id}`));
+
       await Promise.allSettled([
-        supabase.from('assignment_submissions').delete().eq('student_id', userId),
-        supabase.from('quiz_submissions').delete().eq('student_id', userId),
+        supabase.from('assignment_submissions').delete().in('student_id', idList),
+        supabase.from('quiz_submissions').delete().in('student_id', idList),
         this.notificationsTableStatus !== 'missing'
-          ? supabase.from('notifications').delete().eq('user_id', userId)
+          ? supabase.from('notifications').delete().in('user_id', idList)
           : Promise.resolve(),
       ]);
-      const { error } = await supabase.from('profiles').delete().eq('id', userId);
-      return !error;
+
+      const deleteTasks: PromiseLike<unknown>[] = [
+        supabase.from('profiles').delete().in('id', idList),
+      ];
+      if (cleanUName && cleanUName !== 'user') {
+        deleteTasks.push(supabase.from('profiles').delete().ilike('username', cleanUName));
+      }
+      if (cleanEmail) {
+        deleteTasks.push(supabase.from('profiles').delete().ilike('email', cleanEmail));
+      }
+      const results = await Promise.allSettled(deleteTasks);
+      const primaryOk =
+        results[0].status === 'fulfilled' &&
+        !(results[0].value as { error?: unknown })?.error;
+
+      this.notifyRealtimePeers('delete', {
+        deletedIds: idList,
+        deletedUsernames: cleanUName ? [cleanUName] : undefined,
+        deletedEmails: cleanEmail ? [cleanEmail] : undefined,
+      });
+
+      return primaryOk;
     } catch {
       return false;
     }
@@ -2794,6 +3185,7 @@ export class SupabaseService {
         return { success: false, error: error.message };
       }
       this.recordSignature(sigKey, row);
+      this.notifyRealtimePeers('course');
       return { success: true };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2847,6 +3239,11 @@ export class SupabaseService {
           : Promise.resolve(),
       ]);
       const { error } = await supabase.from('courses').delete().eq('id', courseId);
+      if (!error) {
+        this.notifyRealtimePeers('delete', {
+          deletedIds: [courseId, ...assIds, ...quizIds],
+        });
+      }
       return !error;
     } catch {
       return false;
@@ -2889,6 +3286,12 @@ export class SupabaseService {
       (isInitialDemoPost ? 1_704_067_200_000 : Date.now());
 
     const postStatus = post.status || 'published';
+    const postSig = this.computePostSignature(
+      post.content || '',
+      safeComments,
+      post.isPinned,
+      post.pinOrder
+    );
     const metaAttachment = {
       id: '__post_meta__',
       name: '__post_meta__',
@@ -2905,6 +3308,7 @@ export class SupabaseService {
         authorRole: post.authorRole || 'admin',
         commentCount: safeComments.length,
         contentLen: (post.content || '').length,
+        sig: postSig,
       }),
     };
 
@@ -2963,6 +3367,7 @@ export class SupabaseService {
       const { error } = await supabase.from('posts').upsert(row, { onConflict: 'id' });
       if (!error) {
         this.recordSignature(sigKey, row);
+        this.notifyRealtimePeers('post');
         return true;
       }
 
@@ -2976,6 +3381,7 @@ export class SupabaseService {
         const { error: retryFkErr } = await supabase.from('posts').upsert(row, { onConflict: 'id' });
         if (!retryFkErr) {
           this.recordSignature(sigKey, row);
+          this.notifyRealtimePeers('post');
           return true;
         }
       }
@@ -2985,6 +3391,7 @@ export class SupabaseService {
       const { error: coreErr } = await supabase.from('posts').upsert(coreRow, { onConflict: 'id' });
       if (!coreErr) {
         this.recordSignature(sigKey, row);
+        this.notifyRealtimePeers('post');
         return true;
       }
 
@@ -3002,6 +3409,9 @@ export class SupabaseService {
       this.lastUpsertSignatures.delete(`post:${postId}`);
       await this.deleteNotificationsByPostId(postId);
       const { error } = await supabase.from('posts').delete().eq('id', postId);
+      if (!error) {
+        this.notifyRealtimePeers('delete', { deletedIds: [postId] });
+      }
       return !error;
     } catch {
       return false;
@@ -3025,6 +3435,9 @@ export class SupabaseService {
         },
         { onConflict: 'id' }
       );
+      if (!error) {
+        this.notifyRealtimePeers('assignment');
+      }
       return !error;
     } catch {
       return false;
@@ -3040,6 +3453,9 @@ export class SupabaseService {
       this.invalidateClientCache('submissions');
       await supabase.from('assignment_submissions').delete().eq('assignment_id', assignmentId);
       const { error } = await supabase.from('assignments').delete().eq('id', assignmentId);
+      if (!error) {
+        this.notifyRealtimePeers('delete', { deletedIds: [assignmentId] });
+      }
       return !error;
     } catch {
       return false;
@@ -3079,6 +3495,9 @@ export class SupabaseService {
       const { error } = await supabase
         .from('assignment_submissions')
         .upsert(this.formatSubmissionRow(sub), { onConflict: 'id' });
+      if (!error) {
+        this.notifyRealtimePeers('submission');
+      }
       return !error;
     } catch {
       return false;
@@ -3092,6 +3511,9 @@ export class SupabaseService {
     try {
       this.invalidateClientCache('submissions');
       const { error } = await supabase.from('assignment_submissions').delete().eq('id', submissionId);
+      if (!error) {
+        this.notifyRealtimePeers('delete', { deletedIds: [submissionId] });
+      }
       return !error;
     } catch {
       return false;
@@ -3115,6 +3537,9 @@ export class SupabaseService {
         },
         { onConflict: 'id' }
       );
+      if (!error) {
+        this.notifyRealtimePeers('quiz');
+      }
       return !error;
     } catch {
       return false;
@@ -3129,6 +3554,9 @@ export class SupabaseService {
       this.invalidateClientCache('quizzes');
       await supabase.from('quiz_submissions').delete().eq('quiz_id', quizId);
       const { error } = await supabase.from('quizzes').delete().eq('id', quizId);
+      if (!error) {
+        this.notifyRealtimePeers('delete', { deletedIds: [quizId] });
+      }
       return !error;
     } catch {
       return false;
@@ -3159,6 +3587,9 @@ export class SupabaseService {
         },
         { onConflict: 'id' }
       );
+      if (!error) {
+        this.notifyRealtimePeers('quiz_submission');
+      }
       return !error;
     } catch {
       return false;
@@ -3208,15 +3639,10 @@ export class SupabaseService {
         };
 
         if (options?.preserveRemoteOpenState) {
-          const decodedRemote = decodeAttendanceOpenedBy(
-            existingRow.opened_by as string | null,
-            existingRow.is_open
-          );
           resolvedIsOpen = Boolean(existingRow.is_open);
-          if (decodedRemote.statusUpdatedAtMs) {
-            resolvedStatusMs = decodedRemote.statusUpdatedAtMs;
-          }
         }
+        // Always bump statusUpdatedAtMs when records or state are updated so delta sync downloads the updated records
+        resolvedStatusMs = Math.max(Date.now(), session.statusUpdatedAtMs || 0);
       }
 
       const sessionToEncode: AttendanceSession = {
@@ -3243,6 +3669,7 @@ export class SupabaseService {
         .upsert(row, { onConflict: 'id' });
       if (!error) {
         this.recordSignature(sigKey, row);
+        this.notifyRealtimePeers('attendance');
         return true;
       }
 
@@ -3258,6 +3685,7 @@ export class SupabaseService {
           .eq('id', session.id);
         if (!updErr) {
           this.recordSignature(sigKey, row);
+          this.notifyRealtimePeers('attendance');
           return true;
         }
       }
@@ -3347,6 +3775,10 @@ export class SupabaseService {
           })
           .eq('id', sessionId);
 
+        if (!updateErr) {
+          this.notifyRealtimePeers('attendance');
+        }
+
         return {
           success: !updateErr,
           remoteIsOpen: true,
@@ -3372,6 +3804,9 @@ export class SupabaseService {
     try {
       this.lastUpsertSignatures.delete(`att:${sessionId}`);
       const { error } = await supabase.from('attendance_sessions').delete().eq('id', sessionId);
+      if (!error) {
+        this.notifyRealtimePeers('delete', { deletedIds: [sessionId] });
+      }
       return !error;
     } catch {
       return false;

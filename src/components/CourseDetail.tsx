@@ -32,6 +32,13 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
   const handleSwitchTab = (nextTab: ClassroomTab) => {
     if (nextTab === activeTab) return;
     setTabHistory((prev) => [...prev, nextTab]);
+    if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+      ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
+        if (updated) {
+          onRefresh();
+        }
+      });
+    }
   };
 
   // Step back through visited tabs when mobile Back button is pressed

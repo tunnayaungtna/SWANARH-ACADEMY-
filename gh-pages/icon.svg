@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+  <defs>
+    <path id="topArc" d="M 55,205 A 145,145 0 1,1 345,205" fill="none" />
+    <path id="bottomArc" d="M 32,205 A 168,168 0 0,0 368,205" fill="none" />
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F6C653" />
+      <stop offset="50%" stop-color="#EBA534" />
+      <stop offset="100%" stop-color="#D68522" />
+    </linearGradient>
+  </defs>
+  <rect x="6" y="6" width="388" height="388" rx="84" fill="#FFFFFF" stroke="#148823" stroke-width="8" />
+  <circle cx="200" cy="200" r="176" fill="#FFFFFF" stroke="#0A0A0A" stroke-width="4" />
+  <circle cx="200" cy="200" r="114" fill="#FFFFFF" stroke="#0A0A0A" stroke-width="3" />
+  <text fill="#E31E24" font-size="34" font-weight="900" font-family="Georgia, serif" letter-spacing="2">
+    <textPath href="#topArc" startOffset="50%" text-anchor="middle">DR. SI THU AUNG</textPath>
+  </text>
+  <text fill="#158E26" font-size="22" font-weight="800" font-family="sans-serif" letter-spacing="2.5">
+    <textPath href="#bottomArc" startOffset="50%" text-anchor="middle">SWANARH ACADEMY</textPath>
+  </text>
+  <g transform="translate(0, -6)">
+    <path d="M 200,108 L 254,128 L 254,188 C 254,224 200,252 200,252 C 200,252 146,224 146,188 L 146,128 Z" fill="#FFFFFF" stroke="#148823" stroke-width="6" stroke-linejoin="round" />
+    <path d="M 197,115 L 152,132 L 152,184 L 197,184 Z" fill="#148823" />
+    <path d="M 203,115 L 248,132 L 248,184 L 203,184 Z" fill="#E31E24" />
+    <path d="M 152,190 L 197,190 L 197,244 C 180,234 152,215 152,192 Z" fill="#E31E24" />
+    <path d="M 203,190 L 248,190 L 248,192 C 248,215 220,234 203,244 Z" fill="#148823" />
+  </g>
+</svg>

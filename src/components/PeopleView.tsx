@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Course, User } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
 import { AddStudentModal } from './AddStudentModal';
@@ -32,6 +32,25 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
   const [enrollmentStatusMessage, setEnrollmentStatusMessage] = useState<string | null>(null);
   const [searchFilter, setSearchFilter] = useState('');
   const [visibleStudentLimit, setVisibleStudentLimit] = useState<number>(60);
+
+  useEffect(() => {
+    let mounted = true;
+    const knownIds = new Set(ClassroomDB.getAllUsers().map((u) => u.id));
+    const hasMissingEnrolledStudent = course.enrolledStudentIds.some((id) => !knownIds.has(id));
+    if (
+      hasMissingEnrolledStudent &&
+      (typeof navigator === 'undefined' || navigator.onLine !== false)
+    ) {
+      ClassroomDB.pullFromSupabase({ force: true, onlyProfiles: true }).then((updated) => {
+        if (mounted && updated) {
+          onRefresh();
+        }
+      });
+    }
+    return () => {
+      mounted = false;
+    };
+  }, [course.id, course.enrolledStudentIds.length]);
 
   // Step-by-step mobile Back button handlers for PeopleView modals
   useBackHandler(showAddModal, () => setShowAddModal(false));

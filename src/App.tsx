@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, Suspense } from 'react';
 import { User, Course, CoursePost, Assignment, Quiz, StudentProgress, CertificateData, NotificationItem } from './types/classroom';
 import { ClassroomDB } from './services/storage';
+import { SupabaseService } from './services/supabase';
 import { resolveAvatarUrl, DEFAULT_AVATAR_SVG } from './data/presetAvatars';
 import { useBackHandler } from './utils/backNavigation';
 import { LoginView } from './components/LoginView';
@@ -147,18 +148,30 @@ export default function App() {
       refreshData();
       const loggedUser = ClassroomDB.getCurrentUser();
       if (loggedUser) {
-        const isAlreadyCloudSynced =
-          localStorage.getItem('classroom_os_cloud_synced_v1') === 'true';
-        ClassroomDB.pullFromSupabase({
-          force: !isAlreadyCloudSynced,
-          background: isAlreadyCloudSynced,
-        }).then((updated) => {
+        ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
           if (updated || !ClassroomDB.getCurrentUser()) {
             refreshData();
           }
         });
       }
     }, 30);
+
+    // Instant Realtime Broadcast + Postgres Changes subscription across all accounts & devices
+    const unsubscribeRealtime = SupabaseService.subscribeToRealtimeChanges((payload) => {
+      const deletedChanged = ClassroomDB.applyRemoteDeletions(payload);
+      if (deletedChanged) {
+        refreshData();
+      }
+      if (navigator.onLine === false) return;
+      const loggedUser = ClassroomDB.getCurrentUser();
+      if (loggedUser) {
+        ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
+          if (updated || !ClassroomDB.getCurrentUser()) {
+            refreshData();
+          }
+        });
+      }
+    });
 
     // Multi-user / multi-tab synchronization
     const handleStorageChange = () => {
@@ -168,7 +181,7 @@ export default function App() {
 
     let lastUserInteractionAt = Date.now();
     const markUserActive = () => {
-      const wasIdle = Date.now() - lastUserInteractionAt > 360_000;
+      const wasIdle = Date.now() - lastUserInteractionAt > 60_000;
       lastUserInteractionAt = Date.now();
       if (wasIdle && document.visibilityState === 'visible' && navigator.onLine !== false) {
         const loggedUser = ClassroomDB.getCurrentUser();
@@ -186,12 +199,10 @@ export default function App() {
     window.addEventListener('touchstart', markUserActive, { passive: true });
 
     // When refreshing, focusing, or reopening the installed PWA from the background,
-    // throttle cloud pulls to at most once per 60s and use lightweight delta sync unless hidden >5 minutes
-    let lastWakeUpPullAt = Date.now();
-    let lastHiddenAt = 0;
+    // immediately pull latest updates (throttled to 5s)
+    let lastWakeUpPullAt = 0;
     const handleWakeUp = () => {
       if (document.visibilityState === 'hidden') {
-        lastHiddenAt = Date.now();
         return;
       }
       if (document.visibilityState === 'visible') {
@@ -203,19 +214,13 @@ export default function App() {
 
         const loggedUser = ClassroomDB.getCurrentUser();
         if (loggedUser && navigator.onLine !== false && !isLowBandwidthRef.current) {
-          // Lightweight 0.3KB delta attendance check (throttled internally to 12s)
           ClassroomDB.syncAttendanceFromCloud().then((attChanged) => {
             if (attChanged) refreshData();
           });
 
-          // Only trigger a cloud pull if at least 60s elapsed since last wake-up pull
-          if (now - lastWakeUpPullAt >= 60_000) {
-            const wasHiddenLong = lastHiddenAt > 0 && now - lastHiddenAt > 300_000;
+          if (now - lastWakeUpPullAt >= 5_000) {
             lastWakeUpPullAt = now;
-            lastHiddenAt = 0;
-            ClassroomDB.pullFromSupabase(
-              wasHiddenLong ? { force: true } : { background: true }
-            ).then((updated) => {
+            ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
               if (updated || !ClassroomDB.getCurrentUser()) {
                 refreshData();
               }
@@ -228,8 +233,7 @@ export default function App() {
     window.addEventListener('pageshow', handleWakeUp);
     window.addEventListener('focus', handleWakeUp);
 
-    // Egress-optimized background sync (180s–240s jittered when user is active; auto-pauses when idle >6m)
-    const jitteredIntervalMs = 180000 + Math.floor(Math.random() * 60000);
+    // Low-egress 30s delta background sync fallback when user is active (Realtime WebSocket handles instant <200ms updates)
     const syncInterval = setInterval(() => {
       const isUserActive = Date.now() - lastUserInteractionAt <= 360_000;
       if (
@@ -247,7 +251,7 @@ export default function App() {
           });
         }
       }
-    }, jitteredIntervalMs);
+    }, 30_000);
 
     // 10-second timer to immediately auto-publish any due scheduled posts and perform 0.3KB delta Attendance checks when active
     let attendanceTickCounter = 0;
@@ -305,6 +309,7 @@ export default function App() {
 
     return () => {
       clearTimeout(initTimer);
+      unsubscribeRealtime();
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('pointerdown', markUserActive);
       window.removeEventListener('keydown', markUserActive);
@@ -363,6 +368,15 @@ export default function App() {
     setAssignments(ClassroomDB.getAssignments(check.course.id));
     setQuizzes(ClassroomDB.getQuizzes(check.course.id));
     setProgress(ClassroomDB.getStudentProgress(currentUser.id, check.course.id));
+
+    // Immediately pull latest classroom updates when entering a classroom
+    if (navigator.onLine !== false && !isLowBandwidthRef.current) {
+      ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
+        if (updated) {
+          refreshData();
+        }
+      });
+    }
   };
 
   const handleOpenCourseById = (courseId: string) => {
