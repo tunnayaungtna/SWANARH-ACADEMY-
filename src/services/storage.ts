@@ -18,7 +18,14 @@ import {
   AuditLogCategory,
   AuditLogSeverity,
 } from '../types/classroom';
-import { SupabaseService, NOTIFICATION_TTL_MS, AUDIT_LOG_TTL_MS } from './supabase';
+import {
+  SupabaseService,
+  NOTIFICATION_TTL_MS,
+  AUDIT_LOG_TTL_MS,
+  COMMENT_TTL_MS,
+  resolveCommentTimestampMs,
+  isCommentExpired,
+} from './supabase';
 import { resolveAvatarUrl, toCloudAvatarKeyOrUrl, DEFAULT_AVATAR_SVG } from '../data/presetAvatars';
 import {
   encryptPassword,
@@ -1060,15 +1067,8 @@ export class ClassroomDB {
 
     try {
       const storedSeal = localStorage.getItem(STORAGE_KEYS.SESSION_SEAL);
-      if (!storedSeal) {
-        // One-time seal initialization for pre-existing valid sessions
-        const initialSeal = computeSessionIntegritySeal(
-          freshUser.id,
-          freshUser.role,
-          freshUser.username
-        );
-        localStorage.setItem(STORAGE_KEYS.SESSION_SEAL, initialSeal);
-      } else if (
+      if (
+        !storedSeal ||
         !verifySessionIntegritySeal(
           freshUser.id,
           freshUser.role,
@@ -1076,14 +1076,15 @@ export class ClassroomDB {
           storedSeal
         )
       ) {
-        // Session or role was tampered with in DevTools localStorage!
+        // Session or role was tampered with or missing seal in DevTools localStorage!
         this.memoryCache.delete(STORAGE_KEYS.CURRENT_USER);
         localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
         localStorage.removeItem(STORAGE_KEYS.SESSION_SEAL);
         return null;
       }
     } catch {
-      // ignore storage read errors
+      this.memoryCache.delete(STORAGE_KEYS.CURRENT_USER);
+      return null;
     }
 
     const { password: _pwd, ...safeUser } = freshUser;
@@ -3384,6 +3385,14 @@ export class ClassroomDB {
     success: boolean;
     message: string;
   }> {
+    const currentLogged = this.getCurrentUser();
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
+      return {
+        success: false,
+        message: 'ခွင့်ပြုချက် မရှိပါ: Admin နှင့် Co-Admin အကောင့်များသာ Database Backup ပြန်လည်ထည့်သွင်းခွင့်ရှိပါသည်။',
+      };
+    }
+
     try {
       const parsed = JSON.parse(jsonText) as {
         data?: {
@@ -3404,8 +3413,13 @@ export class ClassroomDB {
       }
 
       const { users, courses, posts, assignments, submissions, quizzes, attendance } = parsed.data;
+      const sanitizedUsers = users.map((u) => ({
+        ...u,
+        avatar: u.role !== 'admin' ? '' : resolveAvatarUrl(u.avatar),
+        password: encryptPassword(u.password, u.role, u.id),
+      }));
       this.setItem(STORAGE_KEYS.DELETED_IDS, []);
-      this.setItem(STORAGE_KEYS.USERS, users);
+      this.setItem(STORAGE_KEYS.USERS, sanitizedUsers);
       this.setItem(STORAGE_KEYS.COURSES, courses);
       if (Array.isArray(posts)) this.setItem(STORAGE_KEYS.POSTS, posts);
       if (Array.isArray(assignments)) this.setItem(STORAGE_KEYS.ASSIGNMENTS, assignments);
@@ -3422,7 +3436,7 @@ export class ClassroomDB {
       }
       return {
         success: true,
-        message: `✅ Backup ဖိုင်မှ အကောင့် (${users.length}) ခု၊ သင်တန်း (${courses.length}) ခု၊ Post (${posts?.length || 0}) ခုနှင့် Attendance (${attendance?.length || 0}) ခုလုံးကို အောင်မြင်စွာ ပြန်လည်ထည့်သွင်းပြီး Supabase သို့ Sync လုပ်ပြီးပါပြီ!`,
+        message: `✅ Backup ဖိုင်မှ အကောင့် (${sanitizedUsers.length}) ခု၊ သင်တန်း (${courses.length}) ခု၊ Post (${posts?.length || 0}) ခုနှင့် Attendance (${attendance?.length || 0}) ခုလုံးကို အောင်မြင်စွာ ပြန်လည်ထည့်သွင်းပြီး Supabase သို့ Sync လုပ်ပြီးပါပြီ!`,
       };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -3450,6 +3464,14 @@ export class ClassroomDB {
     syncedPosts?: number;
     syncedAttendance?: number;
   }> {
+    const currentLogged = this.getCurrentUser();
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
+      return {
+        success: false,
+        message: 'ခွင့်ပြုချက် မရှိပါ: Admin နှင့် Co-Admin အကောင့်များသာ Supabase Project ပြောင်းရွှေ့ခွင့်ရှိပါသည်။',
+      };
+    }
+
     const switchRes = SupabaseService.setCustomProjectConfig(newUrl, newPublishableKey);
     if (!switchRes.success) {
       return {
@@ -3630,9 +3652,10 @@ export class ClassroomDB {
       return false;
     }
 
-    // Always check due scheduled posts first, plus 30-minute notification cleanup & 2-day Audit Log cleanup
+    // Always check due scheduled posts first, plus silent 2-day comment cleanup, 30-minute notification cleanup & 2-day Audit Log cleanup
     const purgedLocalNotifs =
       this.checkAndPublishDueScheduledPosts() ||
+      this.purgeExpiredComments() ||
       this.purgeExpiredNotifications() ||
       this.purgeExpiredAuditLogs();
 
@@ -4250,15 +4273,24 @@ export class ClassroomDB {
                 ? ''
                 : latestAvatarByUserId.get(rp.authorId) || rp.authorAvatar || existing?.authorAvatar || '';
 
-            const syncedComments = (
-              Array.isArray(rp.comments) ? rp.comments : existing?.comments || []
-            ).map((cm) => ({
-              ...cm,
-              authorAvatar:
-                cm.authorRole !== 'admin'
-                  ? ''
-                  : latestAvatarByUserId.get(cm.authorId) || cm.authorAvatar || '',
-            }));
+            const rawCommentsList = Array.isArray(rp.comments)
+              ? rp.comments
+              : existing?.comments || [];
+            const nowCommentCheckMs = Date.now();
+            const hadExpiredRemoteComments =
+              Array.isArray(rp.comments) &&
+              rp.comments.some((cm) => isCommentExpired(cm, nowCommentCheckMs, postTimestampMs));
+
+            const syncedComments = rawCommentsList
+              .filter((cm) => !isCommentExpired(cm, nowCommentCheckMs, postTimestampMs))
+              .map((cm) => ({
+                ...cm,
+                createdAtMs: resolveCommentTimestampMs(cm, postTimestampMs),
+                authorAvatar:
+                  cm.authorRole !== 'admin'
+                    ? ''
+                    : latestAvatarByUserId.get(cm.authorId) || cm.authorAvatar || '',
+              }));
 
             const mergedPost: CoursePost = {
               ...existing,
@@ -4289,7 +4321,12 @@ export class ClassroomDB {
 
             postMap.set(rp.id, mergedPost);
 
-            if (wasAlreadyPublishedLocally || isRpScheduleDueNow || isLocalRecent) {
+            if (
+              wasAlreadyPublishedLocally ||
+              isRpScheduleDueNow ||
+              isLocalRecent ||
+              hadExpiredRemoteComments
+            ) {
               postsToPushToCloud.push(mergedPost);
             }
           });
@@ -4404,6 +4441,10 @@ export class ClassroomDB {
             this.setItem(STORAGE_KEYS.NOTIFICATIONS, mergedNotifs);
             updated = true;
           }
+        }
+
+        if (this.purgeExpiredComments()) {
+          updated = true;
         }
 
         if (this.purgeExpiredNotifications()) {
@@ -4778,8 +4819,9 @@ export class ClassroomDB {
       return [];
     }
 
-    // Always auto-publish any scheduled posts whose scheduled date/time has arrived
+    // Always auto-publish any scheduled posts whose scheduled date/time has arrived & silently purge comments >= 2 days old
     this.checkAndPublishDueScheduledPosts();
+    this.purgeExpiredComments();
 
     const allPosts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS);
     const now = Date.now();
@@ -4932,9 +4974,18 @@ export class ClassroomDB {
       if (p.id === postId) {
         const transitioningToPublished =
           p.status === 'scheduled' && updates.status === 'published';
+        const sanitizedUpdateAttachments = Array.isArray(updates.attachments)
+          ? updates.attachments.map((att) => ({
+              ...att,
+              url: /^(javascript|vbscript|data:text\/html)/i.test((att.url || '').trim())
+                ? '#'
+                : att.url,
+            }))
+          : undefined;
         updatedPost = {
           ...p,
           ...updates,
+          ...(sanitizedUpdateAttachments ? { attachments: sanitizedUpdateAttachments } : {}),
           ...(transitioningToPublished
             ? {
                 createdAt: this.formatPostTimestamp(nowMs),
@@ -5334,14 +5385,20 @@ export class ClassroomDB {
       authorAvatar: currentUser.role !== 'admin' ? '' : currentUser.avatar,
       content: cleanContent,
       createdAt: this.formatPostTimestamp(nowMs),
+      createdAtMs: nowMs,
     };
 
     let updatedPost: CoursePost | null = null;
     const updated = posts.map((post) => {
       if (post.id === postId) {
+        const postEffectiveMs =
+          post.createdAtMs || this.extractTimestampFromId(post.id) || undefined;
+        const activeExistingComments = (post.comments || []).filter(
+          (c) => !isCommentExpired(c, nowMs, postEffectiveMs)
+        );
         updatedPost = {
           ...post,
-          comments: [...post.comments, newComment],
+          comments: [...activeExistingComments, newComment],
         };
         return updatedPost;
       }
@@ -5357,6 +5414,82 @@ export class ClassroomDB {
       }
     }
     return { comment: newComment };
+  }
+
+  /**
+   * Silently auto-deletes all post comments that are >= 2 days (48 hours / COMMENT_TTL_MS) old
+   * from both local storage and Supabase without any UI alert, notification, or audit log.
+   */
+  static purgeExpiredComments(): boolean {
+    const allPosts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS);
+    if (!allPosts || allPosts.length === 0) return false;
+
+    const now = Date.now();
+    let mutated = false;
+    const postsWithPurgedComments: CoursePost[] = [];
+
+    const updatedPosts = allPosts.map((post) => {
+      if (!post || !Array.isArray(post.comments) || post.comments.length === 0) {
+        return post;
+      }
+      const postEffectiveMs =
+        post.createdAtMs ||
+        this.extractTimestampFromId(post.id) ||
+        (/^post-\d{3}$/.test(post.id || '') ? 1_704_067_200_000 : undefined);
+
+      let postCommentsChanged = false;
+      let commentExpiredRemoved = false;
+      const activeComments: PostComment[] = [];
+
+      for (const c of post.comments) {
+        const resolvedMs = resolveCommentTimestampMs(c, postEffectiveMs);
+        if (now - resolvedMs >= COMMENT_TTL_MS) {
+          commentExpiredRemoved = true;
+          postCommentsChanged = true;
+          mutated = true;
+        } else {
+          if (c.createdAtMs !== resolvedMs) {
+            postCommentsChanged = true;
+            mutated = true;
+            activeComments.push({ ...c, createdAtMs: resolvedMs });
+          } else {
+            activeComments.push(c);
+          }
+        }
+      }
+
+      if (!postCommentsChanged) {
+        return post;
+      }
+
+      const cleanedPost: CoursePost = {
+        ...post,
+        comments: activeComments,
+      };
+      if (commentExpiredRemoved) {
+        postsWithPurgedComments.push(cleanedPost);
+      }
+      return cleanedPost;
+    });
+
+    if (mutated) {
+      this.setItem(STORAGE_KEYS.POSTS, updatedPosts);
+    }
+
+    if (postsWithPurgedComments.length > 0) {
+      const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+      postsWithPurgedComments.forEach((cleanedPost) => {
+        this.markLocalWrite(cleanedPost.id);
+        const parentCourse = allCourses.find((c) => c.id === cleanedPost.courseId);
+        try {
+          SupabaseService.upsertPost(cleanedPost, parentCourse).catch(() => {});
+        } catch {
+          // ignore
+        }
+      });
+    }
+
+    return postsWithPurgedComments.length > 0;
   }
 
   static deleteComment(postId: string, commentId: string, currentUser: User): boolean {
@@ -5442,6 +5575,12 @@ export class ClassroomDB {
     fileName: string,
     currentUser: User
   ): AssignmentSubmission {
+    const access = this.getCourseById(courseId, currentUser);
+    if (!access.course) {
+      throw new Error(access.error || 'Access denied.');
+    }
+    const cleanText = (submissionText || '').trim().slice(0, 5000);
+    const cleanFileName = (fileName || '').replace(/[<>"'\\]/g, '').trim().slice(0, 200);
     const submissions = this.getItem<AssignmentSubmission[]>(STORAGE_KEYS.SUBMISSIONS, INITIAL_SUBMISSIONS);
     const existingIndex = submissions.findIndex(
       (s) => s.assignmentId === assignmentId && s.studentId === currentUser.id
@@ -5453,10 +5592,10 @@ export class ClassroomDB {
       courseId,
       studentId: currentUser.id,
       studentName: currentUser.name,
-      studentAvatar: currentUser.avatar,
-      submissionText,
+      studentAvatar: currentUser.role !== 'admin' ? '' : currentUser.avatar,
+      submissionText: cleanText,
       fileAttachment: {
-        name: fileName || `${currentUser.username}_assignment_submission.pdf`,
+        name: cleanFileName || `${currentUser.username}_assignment_submission.pdf`,
         size: '1.8 MB',
         uploadDate: 'Today',
         mockUrl: '#',
@@ -5663,6 +5802,10 @@ export class ClassroomDB {
     answers: Record<string, number>,
     currentUser: User
   ): { submission: QuizSubmission; passed: boolean; score: number } {
+    const access = this.getCourseById(quiz.courseId, currentUser);
+    if (!access.course) {
+      throw new Error(access.error || 'Access denied.');
+    }
     let correctCount = 0;
     const totalQuestions = quiz.questions?.length || 0;
     if (totalQuestions > 0) {

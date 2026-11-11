@@ -21,7 +21,46 @@ import {
 
 export const NOTIFICATION_TTL_MS = 30 * 60 * 1000; // 30 minutes auto-delete window
 export const AUDIT_LOG_TTL_MS = 2 * 24 * 60 * 60 * 1000; // 2 days (48 hours) security audit auto-delete window
+export const COMMENT_TTL_MS = 2 * 24 * 60 * 60 * 1000; // 2 days (48 hours) silent post comment auto-delete window
 const AUDIT_LOG_SYSTEM_USER_ID = 'SYSTEM_AUDIT_LOG';
+
+export function resolveCommentTimestampMs(
+  comment: { id?: unknown; createdAt?: unknown; createdAtMs?: unknown },
+  fallbackPostMs?: number
+): number {
+  const directMs = Number(comment?.createdAtMs);
+  if (Number.isFinite(directMs) && directMs > 1_600_000_000_000) {
+    return directMs;
+  }
+  const idStr = String(comment?.id || '');
+  const idMatch = idStr.match(/(\d{13})/);
+  if (idMatch) {
+    const parsedIdMs = Number(idMatch[1]);
+    if (Number.isFinite(parsedIdMs) && parsedIdMs > 1_600_000_000_000) {
+      return parsedIdMs;
+    }
+  }
+  const rawCreatedAt = String(comment?.createdAt || '').trim();
+  if (rawCreatedAt) {
+    const parsedDate = Date.parse(rawCreatedAt);
+    if (!isNaN(parsedDate) && parsedDate > 1_600_000_000_000) {
+      return parsedDate;
+    }
+  }
+  if (fallbackPostMs && Number.isFinite(fallbackPostMs) && fallbackPostMs > 1_600_000_000_000) {
+    return fallbackPostMs;
+  }
+  return Date.now();
+}
+
+export function isCommentExpired(
+  comment: { id?: unknown; createdAt?: unknown; createdAtMs?: unknown },
+  nowMs: number = Date.now(),
+  fallbackPostMs?: number
+): boolean {
+  const createdMs = resolveCommentTimestampMs(comment, fallbackPostMs);
+  return nowMs - createdMs >= COMMENT_TTL_MS;
+}
 
 const CUSTOM_SUPABASE_CONFIG_STORAGE_KEY = 'classroom_custom_supabase_config_v2';
 
@@ -1864,7 +1903,14 @@ export class SupabaseService {
             !row.avatar && (fetchedAvatars.has(uId) || mergedKnownAvatars.has(uId))
               ? { ...row, avatar: fetchedAvatars.get(uId) || mergedKnownAvatars.get(uId) || '' }
               : row;
-          const userObj = this.mapProfileRowToUser(resolvedRow);
+          const sanitizedRow =
+            isStudentLite && uId !== options?.currentUserId
+              ? { ...resolvedRow, password: '' }
+              : resolvedRow;
+          const userObj = this.mapProfileRowToUser(sanitizedRow);
+          if (isStudentLite && uId !== options?.currentUserId) {
+            userObj.password = undefined;
+          }
           if (
             userObj.role === 'admin' &&
             userObj.avatar &&
@@ -2207,6 +2253,7 @@ export class SupabaseService {
           const comments = rawCommentsSource.map((cm: Record<string, unknown>) => ({
             ...cm,
             authorAvatar: cm.authorRole !== 'admin' ? '' : String(cm.authorAvatar || ''),
+            createdAtMs: resolveCommentTimestampMs(cm, effectiveCreatedMs),
           }));
 
           const formattedCreatedAt =
@@ -3092,15 +3139,22 @@ export class SupabaseService {
     try {
       this.lastUpsertSignatures.delete(`profile:${userId}`);
       this.invalidateClientCache('profiles');
-      const cleanUName = (username || '').trim().replace(/^@+/, '').toLowerCase();
-      const cleanEmail = (email || '').trim().toLowerCase();
+      const cleanUName = (username || '')
+        .trim()
+        .replace(/^@+/, '')
+        .replace(/[,()"'\\]/g, '')
+        .toLowerCase();
+      const cleanEmail = (email || '')
+        .trim()
+        .replace(/[,()"'\\]/g, '')
+        .toLowerCase();
 
       // Lookup any duplicate profile IDs sharing the same username or email so their submissions/notifications are also deleted
       const allTargetIds = new Set<string>([userId]);
       if (cleanUName || cleanEmail) {
         try {
           const filters: string[] = [];
-          if (cleanUName) filters.push(`username.ilike.${cleanUName}`);
+          if (cleanUName && cleanUName !== 'user') filters.push(`username.ilike.${cleanUName}`);
           if (cleanEmail) filters.push(`email.ilike.${cleanEmail}`);
           if (filters.length > 0) {
             const { data: dupRows } = await supabase
@@ -3265,18 +3319,6 @@ export class SupabaseService {
             : att.url,
       }));
 
-    // Keep latest 50 comments max in Supabase row and omit inline avatars (resolved dynamically from profiles)
-    const safeComments = (post.comments || []).slice(-50).map((c) => ({
-      id: c.id,
-      postId: c.postId,
-      authorId: c.authorId,
-      authorName: c.authorName,
-      authorRole: c.authorRole,
-      authorAvatar: '',
-      content: (c.content || '').slice(0, 1000),
-      createdAt: c.createdAt,
-    }));
-
     const idTsMatch = post.id ? post.id.match(/(\d{13})/) : null;
     const idTs = idTsMatch ? Number(idTsMatch[1]) : undefined;
     const isInitialDemoPost = /^post-\d{3}$/.test(post.id || '');
@@ -3284,6 +3326,23 @@ export class SupabaseService {
       post.createdAtMs ||
       (idTs && idTs > 1_600_000_000_000 ? idTs : undefined) ||
       (isInitialDemoPost ? 1_704_067_200_000 : Date.now());
+
+    // Automatically filter out any comment >= 2 days (48 hours) old and keep latest 50 comments max in Supabase row
+    const nowForRow = Date.now();
+    const safeComments = (post.comments || [])
+      .filter((c) => !isCommentExpired(c, nowForRow, effectiveMs))
+      .slice(-50)
+      .map((c) => ({
+        id: c.id,
+        postId: c.postId,
+        authorId: c.authorId,
+        authorName: c.authorName,
+        authorRole: c.authorRole,
+        authorAvatar: '',
+        content: (c.content || '').slice(0, 1000),
+        createdAt: c.createdAt,
+        createdAtMs: resolveCommentTimestampMs(c, effectiveMs),
+      }));
 
     const postStatus = post.status || 'published';
     const postSig = this.computePostSignature(

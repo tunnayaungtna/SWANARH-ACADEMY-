@@ -144,6 +144,7 @@ export default function App() {
     // Allow first paint of LoginView or Dashboard to complete immediately before running network sync
     const initTimer = setTimeout(() => {
       ClassroomDB.init();
+      ClassroomDB.purgeExpiredComments();
       ClassroomDB.purgeExpiredAuditLogs(true);
       refreshData();
       const loggedUser = ClassroomDB.getCurrentUser();
@@ -208,6 +209,7 @@ export default function App() {
       if (document.visibilityState === 'visible') {
         const now = Date.now();
         lastUserInteractionAt = now;
+        ClassroomDB.purgeExpiredComments();
         ClassroomDB.purgeExpiredAuditLogs(false);
         ClassroomDB.checkAndPublishDueScheduledPosts();
         refreshData();
@@ -283,12 +285,13 @@ export default function App() {
       }
     }, 10000);
 
-    // 30-second local timer to auto-delete notifications (>30 mins) and Audit Logs (>2 days / 48 hours)
+    // 30-second local timer to silently auto-delete expired comments (>2 days), notifications (>30 mins), and Audit Logs (>2 days)
     const notifCleanupInterval = setInterval(() => {
       const publishedDue = ClassroomDB.checkAndPublishDueScheduledPosts();
+      const purgedComments = ClassroomDB.purgeExpiredComments();
       const purgedNotifs = ClassroomDB.purgeExpiredNotifications();
       const purgedAudit = ClassroomDB.purgeExpiredAuditLogs();
-      if (publishedDue || purgedNotifs || purgedAudit) {
+      if (publishedDue || purgedComments || purgedNotifs || purgedAudit) {
         refreshData();
       }
     }, 30000);

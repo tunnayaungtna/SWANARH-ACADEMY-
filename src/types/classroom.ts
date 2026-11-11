@@ -49,6 +49,7 @@ export interface PostComment {
   authorAvatar: string;
   content: string;
   createdAt: string;
+  createdAtMs?: number;
 }
 
 export interface ZoomMeetingDetails {

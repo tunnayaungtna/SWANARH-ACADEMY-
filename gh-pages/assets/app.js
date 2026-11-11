@@ -33225,28 +33225,31 @@ function decryptPassword(storedPassword, roleFallback) {
 	if (!raw) return getDefaultPasswordForRole(roleFallback);
 	if (!isEncryptedPassword(raw)) return raw;
 	const parts = raw.slice(7).split(":");
-	if (parts.length !== 3) return getDefaultPasswordForRole(roleFallback);
+	if (parts.length !== 3) return "";
 	const [saltHex, cipherHex, macHex] = parts;
+	if (!saltHex || !cipherHex || !macHex) return "";
 	const cipherBytes = hexToBytes(cipherHex);
-	if (cipherBytes.length === 0) return getDefaultPasswordForRole(roleFallback);
-	if (!constantTimeEqual(macHex, computeAuthTag(saltHex, cipherBytes))) return getDefaultPasswordForRole(roleFallback);
+	if (cipherBytes.length === 0) return "";
+	if (!constantTimeEqual(macHex, computeAuthTag(saltHex, cipherBytes))) return "";
 	const keyStream = deriveKeyStream(saltHex, cipherBytes.length);
 	const plainBytes = new Uint8Array(cipherBytes.length);
 	for (let i = 0; i < cipherBytes.length; i++) plainBytes[i] = cipherBytes[i] ^ keyStream[i];
 	try {
 		return bytesToUtf8(plainBytes);
 	} catch {
-		return getDefaultPasswordForRole(roleFallback);
+		return "";
 	}
 }
 /**
 * Verifies a user-supplied plaintext password against a stored (encrypted or legacy plaintext) password
-* in constant time.
+* in constant time. Never accepts empty or tampered ciphertexts.
 */
 function verifyPassword(inputPlain, storedPassword, roleFallback) {
 	const cleanInput = (inputPlain || "").trim();
 	if (!cleanInput) return false;
-	return constantTimeEqual(cleanInput, decryptPassword(storedPassword, roleFallback));
+	const actualPlain = decryptPassword(storedPassword, roleFallback);
+	if (!actualPlain) return false;
+	return constantTimeEqual(cleanInput, actualPlain);
 }
 /**
 * Returns a short display fingerprint of the encrypted password for Admin security inspection.
@@ -33393,7 +33396,27 @@ function getAvatarCloudStorageInfo(raw) {
 //#region src/services/supabase.ts
 var NOTIFICATION_TTL_MS = 18e5;
 var AUDIT_LOG_TTL_MS = 1728e5;
+var COMMENT_TTL_MS = 1728e5;
 var AUDIT_LOG_SYSTEM_USER_ID = "SYSTEM_AUDIT_LOG";
+function resolveCommentTimestampMs(comment, fallbackPostMs) {
+	const directMs = Number(comment?.createdAtMs);
+	if (Number.isFinite(directMs) && directMs > 16e11) return directMs;
+	const idMatch = String(comment?.id || "").match(/(\d{13})/);
+	if (idMatch) {
+		const parsedIdMs = Number(idMatch[1]);
+		if (Number.isFinite(parsedIdMs) && parsedIdMs > 16e11) return parsedIdMs;
+	}
+	const rawCreatedAt = String(comment?.createdAt || "").trim();
+	if (rawCreatedAt) {
+		const parsedDate = Date.parse(rawCreatedAt);
+		if (!isNaN(parsedDate) && parsedDate > 16e11) return parsedDate;
+	}
+	if (fallbackPostMs && Number.isFinite(fallbackPostMs) && fallbackPostMs > 16e11) return fallbackPostMs;
+	return Date.now();
+}
+function isCommentExpired(comment, nowMs = Date.now(), fallbackPostMs) {
+	return nowMs - resolveCommentTimestampMs(comment, fallbackPostMs) >= COMMENT_TTL_MS;
+}
 var CUSTOM_SUPABASE_CONFIG_STORAGE_KEY = "classroom_custom_supabase_config_v2";
 function normalizeSupabaseProjectUrl(rawUrl) {
 	const trimmed = (rawUrl || "").trim();
@@ -34684,7 +34707,12 @@ var SupabaseService = class {
 						...row,
 						avatar: fetchedAvatars.get(uId) || mergedKnownAvatars.get(uId) || ""
 					} : row;
-					const userObj = this.mapProfileRowToUser(resolvedRow);
+					const sanitizedRow = isStudentLite && uId !== options?.currentUserId ? {
+						...resolvedRow,
+						password: ""
+					} : resolvedRow;
+					const userObj = this.mapProfileRowToUser(sanitizedRow);
+					if (isStudentLite && uId !== options?.currentUserId) userObj.password = void 0;
 					if (userObj.role === "admin" && userObj.avatar && userObj.avatar !== DEFAULT_FALLBACK_AVATAR && this.cachedAdminAvatars.get(uId) !== userObj.avatar) {
 						this.cachedAdminAvatars.set(uId, userObj.avatar);
 						avatarCacheChanged = true;
@@ -34856,7 +34884,8 @@ var SupabaseService = class {
 					const resolvedContent = row.content !== void 0 ? String(row.content || "") : fetchedBody ? fetchedBody.content : localCachedPost?.content || "";
 					const comments = (Array.isArray(row.comments) ? row.comments : fetchedBody ? fetchedBody.comments : localCachedPost?.comments || []).map((cm) => ({
 						...cm,
-						authorAvatar: cm.authorRole !== "admin" ? "" : String(cm.authorAvatar || "")
+						authorAvatar: cm.authorRole !== "admin" ? "" : String(cm.authorAvatar || ""),
+						createdAtMs: resolveCommentTimestampMs(cm, effectiveCreatedMs)
 					}));
 					const formattedCreatedAt = status === "scheduled" ? `Scheduled for ${scheduledForDisplay || (scheduledFor ? new Date(scheduledFor).toLocaleString("en-US", {
 						month: "short",
@@ -35465,12 +35494,12 @@ var SupabaseService = class {
 		try {
 			this.lastUpsertSignatures.delete(`profile:${userId}`);
 			this.invalidateClientCache("profiles");
-			const cleanUName = (username || "").trim().replace(/^@+/, "").toLowerCase();
-			const cleanEmail = (email || "").trim().toLowerCase();
+			const cleanUName = (username || "").trim().replace(/^@+/, "").replace(/[,()"'\\]/g, "").toLowerCase();
+			const cleanEmail = (email || "").trim().replace(/[,()"'\\]/g, "").toLowerCase();
 			const allTargetIds = /* @__PURE__ */ new Set([userId]);
 			if (cleanUName || cleanEmail) try {
 				const filters = [];
-				if (cleanUName) filters.push(`username.ilike.${cleanUName}`);
+				if (cleanUName && cleanUName !== "user") filters.push(`username.ilike.${cleanUName}`);
 				if (cleanEmail) filters.push(`email.ilike.${cleanEmail}`);
 				if (filters.length > 0) {
 					const { data: dupRows } = await supabase.from("profiles").select("id").or(filters.join(","));
@@ -35578,7 +35607,12 @@ var SupabaseService = class {
 			type: att.type,
 			url: att.url && (att.url.startsWith("data:") || att.url.length > 2e3) ? "#attachment" : att.url
 		}));
-		const safeComments = (post.comments || []).slice(-50).map((c) => ({
+		const idTsMatch = post.id ? post.id.match(/(\d{13})/) : null;
+		const idTs = idTsMatch ? Number(idTsMatch[1]) : void 0;
+		const isInitialDemoPost = /^post-\d{3}$/.test(post.id || "");
+		const effectiveMs = post.createdAtMs || (idTs && idTs > 16e11 ? idTs : void 0) || (isInitialDemoPost ? 17040672e5 : Date.now());
+		const nowForRow = Date.now();
+		const safeComments = (post.comments || []).filter((c) => !isCommentExpired(c, nowForRow, effectiveMs)).slice(-50).map((c) => ({
 			id: c.id,
 			postId: c.postId,
 			authorId: c.authorId,
@@ -35586,12 +35620,9 @@ var SupabaseService = class {
 			authorRole: c.authorRole,
 			authorAvatar: "",
 			content: (c.content || "").slice(0, 1e3),
-			createdAt: c.createdAt
+			createdAt: c.createdAt,
+			createdAtMs: resolveCommentTimestampMs(c, effectiveMs)
 		}));
-		const idTsMatch = post.id ? post.id.match(/(\d{13})/) : null;
-		const idTs = idTsMatch ? Number(idTsMatch[1]) : void 0;
-		const isInitialDemoPost = /^post-\d{3}$/.test(post.id || "");
-		const effectiveMs = post.createdAtMs || (idTs && idTs > 16e11 ? idTs : void 0) || (isInitialDemoPost ? 17040672e5 : Date.now());
 		const postStatus = post.status || "published";
 		const postSig = this.computePostSignature(post.content || "", safeComments, post.isPinned, post.pinOrder);
 		const metaAttachment = {
@@ -37756,16 +37787,16 @@ var ClassroomDB = class {
 		}
 		try {
 			const storedSeal = localStorage.getItem(STORAGE_KEYS.SESSION_SEAL);
-			if (!storedSeal) {
-				const initialSeal = computeSessionIntegritySeal(freshUser.id, freshUser.role, freshUser.username);
-				localStorage.setItem(STORAGE_KEYS.SESSION_SEAL, initialSeal);
-			} else if (!verifySessionIntegritySeal(freshUser.id, freshUser.role, freshUser.username, storedSeal)) {
+			if (!storedSeal || !verifySessionIntegritySeal(freshUser.id, freshUser.role, freshUser.username, storedSeal)) {
 				this.memoryCache.delete(STORAGE_KEYS.CURRENT_USER);
 				localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
 				localStorage.removeItem(STORAGE_KEYS.SESSION_SEAL);
 				return null;
 			}
-		} catch {}
+		} catch {
+			this.memoryCache.delete(STORAGE_KEYS.CURRENT_USER);
+			return null;
+		}
 		const { password: _pwd, ...safeUser } = freshUser;
 		return safeUser;
 	}
@@ -39259,6 +39290,11 @@ var ClassroomDB = class {
 	* Restores Classroom data from a backup JSON file and pushes it to the active Supabase project
 	*/
 	static async importFullDatabaseBackup(jsonText) {
+		const currentLogged = this.getCurrentUser();
+		if (!currentLogged || currentLogged.role !== "admin" && currentLogged.role !== "co_admin") return {
+			success: false,
+			message: "ခွင့်ပြုချက် မရှိပါ: Admin နှင့် Co-Admin အကောင့်များသာ Database Backup ပြန်လည်ထည့်သွင်းခွင့်ရှိပါသည်။"
+		};
 		try {
 			const parsed = JSON.parse(jsonText);
 			if (!parsed?.data || !Array.isArray(parsed.data.users) || !Array.isArray(parsed.data.courses)) return {
@@ -39266,8 +39302,13 @@ var ClassroomDB = class {
 				message: "Backup JSON ဖိုင်ပုံစံ မမှန်ကန်ပါ။ swanarh-classroom-backup.json ဖိုင်ကိုသာ ရွေးချယ်ပေးပါ။"
 			};
 			const { users, courses, posts, assignments, submissions, quizzes, attendance } = parsed.data;
+			const sanitizedUsers = users.map((u) => ({
+				...u,
+				avatar: u.role !== "admin" ? "" : resolveAvatarUrl(u.avatar),
+				password: encryptPassword(u.password, u.role, u.id)
+			}));
 			this.setItem(STORAGE_KEYS.DELETED_IDS, []);
-			this.setItem(STORAGE_KEYS.USERS, users);
+			this.setItem(STORAGE_KEYS.USERS, sanitizedUsers);
 			this.setItem(STORAGE_KEYS.COURSES, courses);
 			if (Array.isArray(posts)) this.setItem(STORAGE_KEYS.POSTS, posts);
 			if (Array.isArray(assignments)) this.setItem(STORAGE_KEYS.ASSIGNMENTS, assignments);
@@ -39281,7 +39322,7 @@ var ClassroomDB = class {
 			};
 			return {
 				success: true,
-				message: `✅ Backup ဖိုင်မှ အကောင့် (${users.length}) ခု၊ သင်တန်း (${courses.length}) ခု၊ Post (${posts?.length || 0}) ခုနှင့် Attendance (${attendance?.length || 0}) ခုလုံးကို အောင်မြင်စွာ ပြန်လည်ထည့်သွင်းပြီး Supabase သို့ Sync လုပ်ပြီးပါပြီ!`
+				message: `✅ Backup ဖိုင်မှ အကောင့် (${sanitizedUsers.length}) ခု၊ သင်တန်း (${courses.length}) ခု၊ Post (${posts?.length || 0}) ခုနှင့် Attendance (${attendance?.length || 0}) ခုလုံးကို အောင်မြင်စွာ ပြန်လည်ထည့်သွင်းပြီး Supabase သို့ Sync လုပ်ပြီးပါပြီ!`
 			};
 		} catch (err) {
 			return {
@@ -39297,6 +39338,11 @@ var ClassroomDB = class {
 	* 3. Pushes 100% of Users, Courses, Posts, Comments, Assignments, Submissions, Quizzes & Attendance to the new Supabase project
 	*/
 	static async migrateToNewSupabaseProject(newUrl, newPublishableKey) {
+		const currentLogged = this.getCurrentUser();
+		if (!currentLogged || currentLogged.role !== "admin" && currentLogged.role !== "co_admin") return {
+			success: false,
+			message: "ခွင့်ပြုချက် မရှိပါ: Admin နှင့် Co-Admin အကောင့်များသာ Supabase Project ပြောင်းရွှေ့ခွင့်ရှိပါသည်။"
+		};
 		const switchRes = SupabaseService.setCustomProjectConfig(newUrl, newPublishableKey);
 		if (!switchRes.success) return {
 			success: false,
@@ -39425,7 +39471,7 @@ var ClassroomDB = class {
 	*/
 	static async pullFromSupabase(options) {
 		if (typeof navigator !== "undefined" && navigator.onLine === false) return false;
-		const purgedLocalNotifs = this.checkAndPublishDueScheduledPosts() || this.purgeExpiredNotifications() || this.purgeExpiredAuditLogs();
+		const purgedLocalNotifs = this.checkAndPublishDueScheduledPosts() || this.purgeExpiredComments() || this.purgeExpiredNotifications() || this.purgeExpiredAuditLogs();
 		this.loadPullTimestampsFromCache();
 		const force = Boolean(options?.force);
 		const onlyProfiles = Boolean(options?.onlyProfiles);
@@ -39751,8 +39797,12 @@ var ClassroomDB = class {
 						const resolvedScheduledForDisplay = resolvedStatus === "scheduled" ? isLocalRecent ? existing?.scheduledForDisplay || rp.scheduledForDisplay : rp.scheduledForDisplay || existing?.scheduledForDisplay : void 0;
 						const formattedTime = resolvedStatus === "scheduled" ? `Scheduled for ${resolvedScheduledForDisplay || resolvedScheduledFor || "upcoming"}` : postTimestampMs ? this.formatPostTimestamp(postTimestampMs) : rp.createdAt || existing?.createdAt || "Recently";
 						const liveAuthorAvatar = rp.authorRole !== "admin" ? "" : latestAvatarByUserId.get(rp.authorId) || rp.authorAvatar || existing?.authorAvatar || "";
-						const syncedComments = (Array.isArray(rp.comments) ? rp.comments : existing?.comments || []).map((cm) => ({
+						const rawCommentsList = Array.isArray(rp.comments) ? rp.comments : existing?.comments || [];
+						const nowCommentCheckMs = Date.now();
+						const hadExpiredRemoteComments = Array.isArray(rp.comments) && rp.comments.some((cm) => isCommentExpired(cm, nowCommentCheckMs, postTimestampMs));
+						const syncedComments = rawCommentsList.filter((cm) => !isCommentExpired(cm, nowCommentCheckMs, postTimestampMs)).map((cm) => ({
 							...cm,
+							createdAtMs: resolveCommentTimestampMs(cm, postTimestampMs),
 							authorAvatar: cm.authorRole !== "admin" ? "" : latestAvatarByUserId.get(cm.authorId) || cm.authorAvatar || ""
 						}));
 						const mergedPost = {
@@ -39778,7 +39828,7 @@ var ClassroomDB = class {
 							}) : existing?.attachments || []
 						};
 						postMap.set(rp.id, mergedPost);
-						if (wasAlreadyPublishedLocally || isRpScheduleDueNow || isLocalRecent) postsToPushToCloud.push(mergedPost);
+						if (wasAlreadyPublishedLocally || isRpScheduleDueNow || isLocalRecent || hadExpiredRemoteComments) postsToPushToCloud.push(mergedPost);
 					});
 					const merged = Array.from(postMap.values()).sort((a, b) => this.getPostSortTimestamp(b) - this.getPostSortTimestamp(a));
 					if (JSON.stringify(merged) !== prevJson) {
@@ -39869,6 +39919,7 @@ var ClassroomDB = class {
 						updated = true;
 					}
 				}
+				if (this.purgeExpiredComments()) updated = true;
 				if (this.purgeExpiredNotifications()) updated = true;
 				if (remoteAttendance !== null) {
 					if (this.reconcileRemoteAttendanceSessions(remoteAttendance, studentScopedCourseIds, cloudActive, deletedSet, newlyDiscoveredRemoteDeletions)) updated = true;
@@ -40089,6 +40140,7 @@ var ClassroomDB = class {
 	static getPostsForCourse(courseId, currentUser) {
 		if (!this.getCourseById(courseId, currentUser).course) return [];
 		this.checkAndPublishDueScheduledPosts();
+		this.purgeExpiredComments();
 		const allPosts = this.getItem(STORAGE_KEYS.POSTS, INITIAL_POSTS);
 		const now = Date.now();
 		const coursePosts = allPosts.filter((post) => post && post.courseId === courseId);
@@ -40179,9 +40231,14 @@ var ClassroomDB = class {
 		const newPosts = posts.map((p) => {
 			if (p.id === postId) {
 				const transitioningToPublished = p.status === "scheduled" && updates.status === "published";
+				const sanitizedUpdateAttachments = Array.isArray(updates.attachments) ? updates.attachments.map((att) => ({
+					...att,
+					url: /^(javascript|vbscript|data:text\/html)/i.test((att.url || "").trim()) ? "#" : att.url
+				})) : void 0;
 				updatedPost = {
 					...p,
 					...updates,
+					...sanitizedUpdateAttachments ? { attachments: sanitizedUpdateAttachments } : {},
 					...transitioningToPublished ? {
 						createdAt: this.formatPostTimestamp(nowMs),
 						createdAtMs: nowMs,
@@ -40490,14 +40547,17 @@ var ClassroomDB = class {
 			authorRole: currentUser.role,
 			authorAvatar: currentUser.role !== "admin" ? "" : currentUser.avatar,
 			content: cleanContent,
-			createdAt: this.formatPostTimestamp(nowMs)
+			createdAt: this.formatPostTimestamp(nowMs),
+			createdAtMs: nowMs
 		};
 		let updatedPost = null;
 		const updated = posts.map((post) => {
 			if (post.id === postId) {
+				const postEffectiveMs = post.createdAtMs || this.extractTimestampFromId(post.id) || void 0;
+				const activeExistingComments = (post.comments || []).filter((c) => !isCommentExpired(c, nowMs, postEffectiveMs));
 				updatedPost = {
 					...post,
-					comments: [...post.comments, newComment]
+					comments: [...activeExistingComments, newComment]
 				};
 				return updatedPost;
 			}
@@ -40508,6 +40568,58 @@ var ClassroomDB = class {
 			SupabaseService.upsertPost(updatedPost).catch(() => {});
 		} catch {}
 		return { comment: newComment };
+	}
+	/**
+	* Silently auto-deletes all post comments that are >= 2 days (48 hours / COMMENT_TTL_MS) old
+	* from both local storage and Supabase without any UI alert, notification, or audit log.
+	*/
+	static purgeExpiredComments() {
+		const allPosts = this.getItem(STORAGE_KEYS.POSTS, INITIAL_POSTS);
+		if (!allPosts || allPosts.length === 0) return false;
+		const now = Date.now();
+		let mutated = false;
+		const postsWithPurgedComments = [];
+		const updatedPosts = allPosts.map((post) => {
+			if (!post || !Array.isArray(post.comments) || post.comments.length === 0) return post;
+			const postEffectiveMs = post.createdAtMs || this.extractTimestampFromId(post.id) || (/^post-\d{3}$/.test(post.id || "") ? 17040672e5 : void 0);
+			let postCommentsChanged = false;
+			let commentExpiredRemoved = false;
+			const activeComments = [];
+			for (const c of post.comments) {
+				const resolvedMs = resolveCommentTimestampMs(c, postEffectiveMs);
+				if (now - resolvedMs >= 1728e5) {
+					commentExpiredRemoved = true;
+					postCommentsChanged = true;
+					mutated = true;
+				} else if (c.createdAtMs !== resolvedMs) {
+					postCommentsChanged = true;
+					mutated = true;
+					activeComments.push({
+						...c,
+						createdAtMs: resolvedMs
+					});
+				} else activeComments.push(c);
+			}
+			if (!postCommentsChanged) return post;
+			const cleanedPost = {
+				...post,
+				comments: activeComments
+			};
+			if (commentExpiredRemoved) postsWithPurgedComments.push(cleanedPost);
+			return cleanedPost;
+		});
+		if (mutated) this.setItem(STORAGE_KEYS.POSTS, updatedPosts);
+		if (postsWithPurgedComments.length > 0) {
+			const allCourses = this.getItem(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+			postsWithPurgedComments.forEach((cleanedPost) => {
+				this.markLocalWrite(cleanedPost.id);
+				const parentCourse = allCourses.find((c) => c.id === cleanedPost.courseId);
+				try {
+					SupabaseService.upsertPost(cleanedPost, parentCourse).catch(() => {});
+				} catch {}
+			});
+		}
+		return postsWithPurgedComments.length > 0;
 	}
 	static deleteComment(postId, commentId, currentUser) {
 		const posts = this.getItem(STORAGE_KEYS.POSTS, INITIAL_POSTS);
@@ -40563,6 +40675,10 @@ var ClassroomDB = class {
 		return submissions.filter((s) => s.assignmentId === assignmentId && s.studentId === currentUser.id);
 	}
 	static submitAssignment(assignmentId, courseId, submissionText, fileName, currentUser) {
+		const access = this.getCourseById(courseId, currentUser);
+		if (!access.course) throw new Error(access.error || "Access denied.");
+		const cleanText = (submissionText || "").trim().slice(0, 5e3);
+		const cleanFileName = (fileName || "").replace(/[<>"'\\]/g, "").trim().slice(0, 200);
 		const submissions = this.getItem(STORAGE_KEYS.SUBMISSIONS, INITIAL_SUBMISSIONS);
 		const existingIndex = submissions.findIndex((s) => s.assignmentId === assignmentId && s.studentId === currentUser.id);
 		const submission = {
@@ -40571,10 +40687,10 @@ var ClassroomDB = class {
 			courseId,
 			studentId: currentUser.id,
 			studentName: currentUser.name,
-			studentAvatar: currentUser.avatar,
-			submissionText,
+			studentAvatar: currentUser.role !== "admin" ? "" : currentUser.avatar,
+			submissionText: cleanText,
 			fileAttachment: {
-				name: fileName || `${currentUser.username}_assignment_submission.pdf`,
+				name: cleanFileName || `${currentUser.username}_assignment_submission.pdf`,
 				size: "1.8 MB",
 				uploadDate: "Today",
 				mockUrl: "#"
@@ -40718,6 +40834,8 @@ var ClassroomDB = class {
 		return this.getItem(STORAGE_KEYS.QUIZ_SUBMISSIONS, INITIAL_QUIZ_SUBMISSIONS).filter((qs) => qs.quizId === quizId && qs.studentId === studentId);
 	}
 	static submitQuiz(quiz, answers, currentUser) {
+		const access = this.getCourseById(quiz.courseId, currentUser);
+		if (!access.course) throw new Error(access.error || "Access denied.");
 		let correctCount = 0;
 		const totalQuestions = quiz.questions?.length || 0;
 		if (totalQuestions > 0) quiz.questions.forEach((q) => {
@@ -58464,6 +58582,7 @@ function App() {
 	(0, import_react.useEffect)(() => {
 		const initTimer = setTimeout(() => {
 			ClassroomDB.init();
+			ClassroomDB.purgeExpiredComments();
 			ClassroomDB.purgeExpiredAuditLogs(true);
 			refreshData();
 			if (ClassroomDB.getCurrentUser()) ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
@@ -58500,6 +58619,7 @@ function App() {
 			if (document.visibilityState === "visible") {
 				const now = Date.now();
 				lastUserInteractionAt = now;
+				ClassroomDB.purgeExpiredComments();
 				ClassroomDB.purgeExpiredAuditLogs(false);
 				ClassroomDB.checkAndPublishDueScheduledPosts();
 				refreshData();
@@ -58537,9 +58657,10 @@ function App() {
 		}, 1e4);
 		const notifCleanupInterval = setInterval(() => {
 			const publishedDue = ClassroomDB.checkAndPublishDueScheduledPosts();
+			const purgedComments = ClassroomDB.purgeExpiredComments();
 			const purgedNotifs = ClassroomDB.purgeExpiredNotifications();
 			const purgedAudit = ClassroomDB.purgeExpiredAuditLogs();
-			if (publishedDue || purgedNotifs || purgedAudit) refreshData();
+			if (publishedDue || purgedComments || purgedNotifs || purgedAudit) refreshData();
 		}, 3e4);
 		const handleOnline = () => {
 			lastUserInteractionAt = Date.now();

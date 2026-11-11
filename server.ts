@@ -39,13 +39,27 @@ function checkProxyRateLimit(ip: string): boolean {
 
 function isAllowedSupabaseSubPath(subPath: string): boolean {
   if (!subPath.startsWith('/')) return false;
-  if (subPath.startsWith('//') || subPath.includes('..') || subPath.includes('\\')) {
+  let decoded = subPath;
+  try {
+    decoded = decodeURIComponent(subPath);
+  } catch {
+    return false;
+  }
+  if (
+    subPath.startsWith('//') ||
+    decoded.startsWith('//') ||
+    subPath.includes('..') ||
+    decoded.includes('..') ||
+    subPath.includes('\\') ||
+    decoded.includes('\\') ||
+    decoded.includes('\0')
+  ) {
     return false;
   }
   return (
-    subPath.startsWith('/rest/v1/') ||
-    subPath.startsWith('/auth/v1/') ||
-    subPath.startsWith('/storage/v1/')
+    decoded.startsWith('/rest/v1/') ||
+    decoded.startsWith('/auth/v1/') ||
+    decoded.startsWith('/storage/v1/')
   );
 }
 
@@ -59,6 +73,7 @@ async function startServer() {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader(
       'Access-Control-Allow-Methods',
@@ -126,9 +141,12 @@ async function startServer() {
         }
 
         const targetUrl = new URL(normalizedSub, activeTargetOrigin);
-        if (targetUrl.origin !== activeTargetOrigin) {
+        if (
+          targetUrl.origin !== activeTargetOrigin ||
+          !isAllowedSupabaseSubPath(targetUrl.pathname)
+        ) {
           res.status(403).json({
-            message: 'Invalid target origin.',
+            message: 'Invalid target origin or path.',
           });
           return;
         }
@@ -154,11 +172,14 @@ async function startServer() {
           }
         }
 
-        if (!forwardHeaders.has('apikey')) {
-          forwardHeaders.set('apikey', SUPABASE_DEFAULT_KEY);
-        }
-        if (!forwardHeaders.has('authorization')) {
-          forwardHeaders.set('authorization', `Bearer ${SUPABASE_DEFAULT_KEY}`);
+        // Only attach default server key if proxying to the default project origin
+        if (activeTargetOrigin === parsedTargetOrigin) {
+          if (!forwardHeaders.has('apikey')) {
+            forwardHeaders.set('apikey', SUPABASE_DEFAULT_KEY);
+          }
+          if (!forwardHeaders.has('authorization')) {
+            forwardHeaders.set('authorization', `Bearer ${SUPABASE_DEFAULT_KEY}`);
+          }
         }
 
         const hasBody =

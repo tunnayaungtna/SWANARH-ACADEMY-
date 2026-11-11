@@ -258,18 +258,21 @@ export function decryptPassword(
   const payload = raw.slice(ENCRYPTION_PREFIX.length);
   const parts = payload.split(':');
   if (parts.length !== 3) {
-    return getDefaultPasswordForRole(roleFallback);
+    return '';
   }
 
   const [saltHex, cipherHex, macHex] = parts;
+  if (!saltHex || !cipherHex || !macHex) {
+    return '';
+  }
   const cipherBytes = hexToBytes(cipherHex);
   if (cipherBytes.length === 0) {
-    return getDefaultPasswordForRole(roleFallback);
+    return '';
   }
 
   const expectedMac = computeAuthTag(saltHex, cipherBytes);
   if (!constantTimeEqual(macHex, expectedMac)) {
-    return getDefaultPasswordForRole(roleFallback);
+    return '';
   }
 
   const keyStream = deriveKeyStream(saltHex, cipherBytes.length);
@@ -281,13 +284,13 @@ export function decryptPassword(
   try {
     return bytesToUtf8(plainBytes);
   } catch {
-    return getDefaultPasswordForRole(roleFallback);
+    return '';
   }
 }
 
 /**
  * Verifies a user-supplied plaintext password against a stored (encrypted or legacy plaintext) password
- * in constant time.
+ * in constant time. Never accepts empty or tampered ciphertexts.
  */
 export function verifyPassword(
   inputPlain: string,
@@ -297,6 +300,7 @@ export function verifyPassword(
   const cleanInput = (inputPlain || '').trim();
   if (!cleanInput) return false;
   const actualPlain = decryptPassword(storedPassword, roleFallback);
+  if (!actualPlain) return false;
   return constantTimeEqual(cleanInput, actualPlain);
 }
 
