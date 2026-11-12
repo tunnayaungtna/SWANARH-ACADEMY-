@@ -971,6 +971,7 @@ export class SupabaseService {
   private static pendingDeletedEmails = new Set<string>();
   private static pendingKinds = new Set<string>();
   private static pendingTargetUserIds = new Set<string>();
+  private static ignoredRealtimeDeleteIds = new Set<string>();
 
   private static loadCloudCleanupTimestamps(): void {
     if (typeof window === 'undefined' || (this.lastExpiredCleanupAt > 0 && this.lastAuditLogCleanupAt > 0)) {
@@ -1072,13 +1073,15 @@ export class SupabaseService {
           if (payload?.eventType === 'DELETE' && payload?.old && typeof payload.old === 'object') {
             const oldRec = payload.old as Record<string, unknown>;
             const delId = oldRec.id ? String(oldRec.id) : '';
-            const delUName = oldRec.username ? String(oldRec.username).toLowerCase() : '';
-            const delEmail = oldRec.email ? String(oldRec.email).toLowerCase() : '';
+            if (delId && this.ignoredRealtimeDeleteIds.has(delId)) {
+              this.ignoredRealtimeDeleteIds.delete(delId);
+              return;
+            }
+            // Note: Explicit user deletions already broadcast `deletedUsernames` and `deletedEmails` via `deleteProfile`.
+            // Do not extract `deletedUsernames`/`deletedEmails` from raw postgres_changes DELETE events so that duplicate ID cleanup during account creation never blacklists a newly created username/email.
             this.triggerRealtimeListeners({
               kind: 'delete',
               deletedIds: delId ? [delId] : undefined,
-              deletedUsernames: delUName ? [delUName] : undefined,
-              deletedEmails: delEmail ? [delEmail] : undefined,
             });
             return;
           }
@@ -1124,6 +1127,10 @@ export class SupabaseService {
   }): void {
     const incomingKind = meta?.kind || 'all';
     this.pendingKinds.add(incomingKind);
+    if (incomingKind === 'profile' || incomingKind === 'delete' || incomingKind === 'all') {
+      this.invalidateClientCache('profiles');
+      this.invalidateClientCache('profile_candidates');
+    }
     if (incomingKind === 'course' || incomingKind === 'all') {
       this.invalidateClientCache('courses');
     }
@@ -1699,14 +1706,17 @@ export class SupabaseService {
         const filterSet = new Set<string>();
         filterSet.add(`username.ilike.${compactId}`);
         filterSet.add(`email.ilike.${compactId}`);
+        filterSet.add(`title.ilike.%||USR:${compactId}%`);
         if (idLocalPart) {
           filterSet.add(`username.ilike.${idLocalPart}`);
           filterSet.add(`email.ilike.${idLocalPart}@%`);
+          filterSet.add(`title.ilike.%||USR:${idLocalPart}%`);
         }
 
         const profileFullCols =
-          'id,name,username,email,role,phone,avatar,title,gender,address,password,rules_accepted,rules_accepted_at';
+          'id,name,username,email,role,phone,avatar,title,gender,address,password';
         const profileCoreCols = 'id,name,username,email,role,phone,avatar,title';
+        const profileNoUsernameCols = 'id,name,email,role,phone,avatar,title';
 
         const { data, error } = await supabase
           .from('profiles')
@@ -1718,19 +1728,36 @@ export class SupabaseService {
           return data.map((r) => this.mapProfileRowToUser(r as unknown as Record<string, unknown>));
         }
 
-        // Fallback if optional columns (`username`, `password`, `gender`, `address`, `rules_accepted`) are missing in an older Supabase table schema
+        // Fallback 1: core columns with username column intact (if password/gender/address are missing)
         if (error) {
-          const fallbackFilters = [
+          const { data: coreData, error: coreErr } = await supabase
+            .from('profiles')
+            .select(profileCoreCols)
+            .or(Array.from(filterSet).join(','))
+            .limit(15);
+          if (!coreErr && Array.isArray(coreData) && coreData.length > 0) {
+            return coreData.map((r) =>
+              this.mapProfileRowToUser(r as unknown as Record<string, unknown>)
+            );
+          }
+
+          // Fallback 2: if `username` column itself is missing in an older table schema
+          const noUserFilters = [
             `email.ilike.${compactId}`,
-            ...(idLocalPart ? [`email.ilike.${idLocalPart}@%`, `title.ilike.%||USR:${idLocalPart}%`] : []),
+            `title.ilike.%||USR:${compactId}%`,
+            ...(idLocalPart
+              ? [`email.ilike.${idLocalPart}@%`, `title.ilike.%||USR:${idLocalPart}%`]
+              : []),
           ];
           const { data: fbData, error: fbErr } = await supabase
             .from('profiles')
-            .select(profileCoreCols)
-            .or(Array.from(new Set(fallbackFilters)).join(','))
+            .select(profileNoUsernameCols)
+            .or(Array.from(new Set(noUserFilters)).join(','))
             .limit(15);
           if (!fbErr && Array.isArray(fbData) && fbData.length > 0) {
-            return fbData.map((r) => this.mapProfileRowToUser(r as unknown as Record<string, unknown>));
+            return fbData.map((r) =>
+              this.mapProfileRowToUser(r as unknown as Record<string, unknown>)
+            );
           }
         }
         return [];
@@ -1749,7 +1776,6 @@ export class SupabaseService {
    * Authoritative Cloud Login Existence Check:
    * - Queries Supabase `profiles` for matching username/email (costs < 0.5 KB egress).
    * - Distinguishes between a network/query error vs. an account that was genuinely deleted in Supabase (`users.length === 0 && dbSeeded === true`).
-   * - Prevents deleted student accounts from ever logging in via local `INITIAL_USERS` or stale `localStorage`!
    */
   static async checkRemoteLoginCandidates(identifier: string): Promise<{
     networkOk: boolean;
@@ -1774,14 +1800,17 @@ export class SupabaseService {
       const filterSet = new Set<string>();
       filterSet.add(`username.ilike.${compactId}`);
       filterSet.add(`email.ilike.${compactId}`);
+      filterSet.add(`title.ilike.%||USR:${compactId}%`);
       if (idLocalPart) {
         filterSet.add(`username.ilike.${idLocalPart}`);
         filterSet.add(`email.ilike.${idLocalPart}@%`);
+        filterSet.add(`title.ilike.%||USR:${idLocalPart}%`);
       }
 
       const profileFullCols =
-        'id,name,username,email,role,phone,avatar,title,gender,address,password,rules_accepted,rules_accepted_at';
+        'id,name,username,email,role,phone,avatar,title,gender,address,password';
       const profileCoreCols = 'id,name,username,email,role,phone,avatar,title';
+      const profileNoUsernameCols = 'id,name,email,role,phone,avatar,title';
 
       const { data, error } = await supabase
         .from('profiles')
@@ -1812,13 +1841,46 @@ export class SupabaseService {
       }
 
       if (error) {
+        // Fallback 1: core columns WITH username filter intact
+        const { data: coreData, error: coreErr } = await supabase
+          .from('profiles')
+          .select(profileCoreCols)
+          .or(Array.from(filterSet).join(','))
+          .limit(15);
+        if (!coreErr && Array.isArray(coreData)) {
+          if (coreData.length > 0) {
+            return {
+              networkOk: true,
+              dbSeeded: true,
+              users: coreData.map((r) =>
+                this.mapProfileRowToUser(r as unknown as Record<string, unknown>)
+              ),
+            };
+          }
+          const { count, error: countErr } = await supabase
+            .from('profiles')
+            .select('id', { count: 'exact', head: true });
+          if (!countErr) {
+            return {
+              networkOk: true,
+              dbSeeded: (count ?? 0) > 0,
+              users: [],
+            };
+          }
+          return { networkOk: false, dbSeeded: false, users: [] };
+        }
+
+        // Fallback 2: if `username` column itself is missing
         const fallbackFilters = [
           `email.ilike.${compactId}`,
-          ...(idLocalPart ? [`email.ilike.${idLocalPart}@%`, `title.ilike.%||USR:${idLocalPart}%`] : []),
+          `title.ilike.%||USR:${compactId}%`,
+          ...(idLocalPart
+            ? [`email.ilike.${idLocalPart}@%`, `title.ilike.%||USR:${idLocalPart}%`]
+            : []),
         ];
         const { data: fbData, error: fbErr } = await supabase
           .from('profiles')
-          .select(profileCoreCols)
+          .select(profileNoUsernameCols)
           .or(Array.from(new Set(fallbackFilters)).join(','))
           .limit(15);
         if (!fbErr && Array.isArray(fbData)) {
@@ -3074,11 +3136,21 @@ export class SupabaseService {
 
   private static buildProfilePayload(
     user: User,
-    mode: 'full' | 'no_password' | 'core'
+    mode: 'full' | 'no_password' | 'core' | 'minimal'
   ): Record<string, unknown> {
     const safeAvatar = compactAvatarForCloud(user.avatar, user.role);
-    const nowIso = new Date().toISOString();
     const encodedTitle = encodeTitleWithRules(user);
+
+    if (mode === 'minimal') {
+      return {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        avatar: safeAvatar,
+        title: encodedTitle,
+      };
+    }
 
     if (mode === 'core') {
       return {
@@ -3090,7 +3162,6 @@ export class SupabaseService {
         phone: user.phone || '+95 9 000 000000',
         avatar: safeAvatar,
         title: encodedTitle,
-        updated_at: nowIso,
       };
     }
 
@@ -3106,7 +3177,6 @@ export class SupabaseService {
         title: encodedTitle,
         gender: user.gender || 'male',
         address: user.address || null,
-        updated_at: nowIso,
       };
     }
 
@@ -3122,13 +3192,11 @@ export class SupabaseService {
       title: encodedTitle,
       gender: user.gender || 'male',
       address: user.address || null,
-      updated_at: nowIso,
     };
   }
 
   /**
    * Create or update a profile in Supabase with cached schema mode & signature deduplication
-   * so Free Plan never wastes extra HTTP calls.
    */
   static async upsertProfile(
     user: User,
@@ -3146,10 +3214,17 @@ export class SupabaseService {
       };
       const payload = this.buildProfilePayload(normalizedUser, this.profileSchemaMode);
       const sigKey = `profile:${normalizedUser.id}`;
-      // Compare without updated_at timestamp so identical profiles aren't re-uploaded
-      const { updated_at: _ignoreTs, ...comparablePayload } = payload;
-      if (!forceUpload && !this.hasChangedSignature(sigKey, comparablePayload)) {
+      if (!forceUpload && !this.hasChangedSignature(sigKey, payload)) {
         return { success: true };
+      }
+
+      // Immediately invalidate client-side and in-flight profile caches so subsequent reads/logins see the updated user
+      this.invalidateClientCache('profiles');
+      this.invalidateClientCache('profile_candidates');
+      for (const k of Array.from(this.inflightGetRequests.keys())) {
+        if (k.startsWith('profiles') || k.startsWith('profile_candidates')) {
+          this.inflightGetRequests.delete(k);
+        }
       }
 
       const emitProfilePeerUpdate = () => {
@@ -3164,7 +3239,7 @@ export class SupabaseService {
       const { error } = await supabase.from('profiles').upsert(payload, { onConflict: 'id' });
 
       if (!error) {
-        this.recordSignature(sigKey, comparablePayload);
+        this.recordSignature(sigKey, payload);
         emitProfilePeerUpdate();
         return { success: true };
       }
@@ -3175,6 +3250,21 @@ export class SupabaseService {
         (error.message && error.message.toLowerCase().includes('duplicate key'))
       ) {
         try {
+          const dupFilters: string[] = [];
+          if (normalizedUser.username) dupFilters.push(`username.ilike.${normalizedUser.username}`);
+          if (normalizedUser.email) dupFilters.push(`email.ilike.${normalizedUser.email}`);
+          if (dupFilters.length > 0) {
+            const { data: oldDups } = await supabase
+              .from('profiles')
+              .select('id')
+              .or(dupFilters.join(','))
+              .neq('id', normalizedUser.id);
+            if (Array.isArray(oldDups)) {
+              oldDups.forEach((d) => {
+                if (d?.id) this.ignoredRealtimeDeleteIds.add(String(d.id));
+              });
+            }
+          }
           if (normalizedUser.username) {
             await supabase
               .from('profiles')
@@ -3193,7 +3283,7 @@ export class SupabaseService {
             .from('profiles')
             .upsert(payload, { onConflict: 'id' });
           if (!retryErr) {
-            this.recordSignature(sigKey, comparablePayload);
+            this.recordSignature(sigKey, payload);
             emitProfilePeerUpdate();
             return { success: true };
           }
@@ -3207,15 +3297,17 @@ export class SupabaseService {
         error.code === 'PGRST204' ||
         (error.message && error.message.toLowerCase().includes('column'));
 
-      // Fallback 1: without password column (only downgrade schema mode if column is genuinely missing)
-      if (this.profileSchemaMode === 'full' && isMissingColumnError) {
+      // Fallback 1: without password column
+      if (this.profileSchemaMode === 'full') {
         const noPwdPayload = this.buildProfilePayload(normalizedUser, 'no_password');
         const { error: errNoPwd } = await supabase
           .from('profiles')
           .upsert(noPwdPayload, { onConflict: 'id' });
         if (!errNoPwd) {
-          this.profileSchemaMode = 'no_password';
-          this.recordSignature(sigKey, comparablePayload);
+          if (isMissingColumnError) {
+            this.profileSchemaMode = 'no_password';
+          }
+          this.recordSignature(sigKey, payload);
           emitProfilePeerUpdate();
           return { success: true };
         }
@@ -3231,12 +3323,24 @@ export class SupabaseService {
         if (isMissingColumnError) {
           this.profileSchemaMode = 'core';
         }
-        this.recordSignature(sigKey, comparablePayload);
+        this.recordSignature(sigKey, payload);
         emitProfilePeerUpdate();
         return { success: true };
       }
 
-      return { success: false, error: fallbackError.message || error.message };
+      // Fallback 3: minimal columns (if username or phone column is missing on an older table)
+      const minimalPayload = this.buildProfilePayload(normalizedUser, 'minimal');
+      const { error: minError } = await supabase
+        .from('profiles')
+        .upsert(minimalPayload, { onConflict: 'id' });
+
+      if (!minError) {
+        this.recordSignature(sigKey, payload);
+        emitProfilePeerUpdate();
+        return { success: true };
+      }
+
+      return { success: false, error: minError.message || fallbackError.message || error.message };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return { success: false, error: msg };
@@ -4465,6 +4569,7 @@ export class SupabaseService {
           }
 
           if (staleRemoteIdsToReplace.length > 0) {
+            staleRemoteIdsToReplace.forEach((id) => this.ignoredRealtimeDeleteIds.add(id));
             for (const delChunk of this.chunkArray(staleRemoteIdsToReplace, 150)) {
               await supabase.from('profiles').delete().in('id', delChunk);
             }
@@ -4474,16 +4579,16 @@ export class SupabaseService {
         // Ignore pre-reconciliation errors and proceed with batch upsert
       }
 
-      // 1c. Helper to batch upsert a chunk of users across schema modes ('full' -> 'no_password' -> 'core')
+      // 1c. Helper to batch upsert a chunk of users across schema modes ('full' -> 'no_password' -> 'core' -> 'minimal')
       const upsertUserBatchWithSchemaFallback = async (
         batchUsers: User[]
       ): Promise<{ ok: boolean; err?: string }> => {
-        const modesToTry: Array<'full' | 'no_password' | 'core'> =
+        const modesToTry: Array<'full' | 'no_password' | 'core' | 'minimal'> =
           this.profileSchemaMode === 'full'
-            ? ['full', 'no_password', 'core']
+            ? ['full', 'no_password', 'core', 'minimal']
             : this.profileSchemaMode === 'no_password'
-            ? ['no_password', 'core']
-            : ['core'];
+            ? ['no_password', 'core', 'minimal']
+            : ['core', 'minimal'];
 
         let lastBatchErr = '';
         for (const mode of modesToTry) {
@@ -4493,7 +4598,9 @@ export class SupabaseService {
             .upsert(payloads, { onConflict: 'id' });
 
           if (!batchErr) {
-            this.profileSchemaMode = mode;
+            if (mode !== 'minimal') {
+              this.profileSchemaMode = mode;
+            }
             for (let i = 0; i < batchUsers.length; i++) {
               const { updated_at: _ignoreTs, ...comparable } = payloads[i];
               this.recordSignature(`profile:${batchUsers[i].id}`, comparable);

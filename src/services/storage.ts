@@ -81,7 +81,8 @@ const STORAGE_KEYS = {
   SESSION_SEAL: 'classroom_os_session_seal_v1',
   CLOUD_CONFIRMED_POSTS: 'classroom_os_cloud_confirmed_posts_v1',
   CLOUD_CONFIRMED_ATTENDANCE: 'classroom_os_cloud_confirmed_attendance_v1',
-  DELETED_USERS_META: 'classroom_deleted_users_meta_v1',
+  CLOUD_CONFIRMED_USERS: 'classroom_os_cloud_confirmed_users_v1',
+  DELETED_USERS_META: 'classroom_deleted_users_meta_v2',
 };
 
 // Rate limiting in-memory / storage tracker
@@ -476,13 +477,34 @@ export class ClassroomDB {
     }
   }
 
+  private static getCloudConfirmedUserIds(): Set<string> {
+    return new Set(this.getItem<string[]>(STORAGE_KEYS.CLOUD_CONFIRMED_USERS, []));
+  }
+
+  private static markUserCloudConfirmed(ids: string | string[]): void {
+    const list = Array.isArray(ids) ? ids : [ids];
+    if (!list.length) return;
+    const current = this.getCloudConfirmedUserIds();
+    let changed = false;
+    list.forEach((id) => {
+      if (id && !current.has(id)) {
+        current.add(id);
+        changed = true;
+      }
+    });
+    if (changed) {
+      const bounded = Array.from(current).slice(-3000);
+      this.setItem(STORAGE_KEYS.CLOUD_CONFIRMED_USERS, bounded);
+    }
+  }
+
   private static markLocalWrite(id: string): void {
     if (!id) return;
     const now = Date.now();
     const map = this.getItem<Record<string, number>>(STORAGE_KEYS.RECENT_WRITES, {});
     const next: Record<string, number> = {};
     for (const [k, ts] of Object.entries(map)) {
-      if (k !== id && now - ts < 30_000) {
+      if (k !== id && now - ts < 300_000) {
         next[k] = ts;
       }
     }
@@ -500,7 +522,7 @@ export class ClassroomDB {
     }
   }
 
-  private static isRecentLocalWrite(id: string, maxAgeMs: number = 12_000): boolean {
+  private static isRecentLocalWrite(id: string, maxAgeMs: number = 60_000): boolean {
     if (!id) return false;
     const map = this.getItem<Record<string, number>>(STORAGE_KEYS.RECENT_WRITES, {});
     const ts = map[id];
@@ -508,8 +530,148 @@ export class ClassroomDB {
     return Date.now() - ts < maxAgeMs;
   }
 
+  private static isInitialDemoUserId(id: string): boolean {
+    return INITIAL_USERS.some((iu) => iu.id === id);
+  }
+
+  /**
+   * One-time self-healing recovery for any newly created accounts that were falsely marked as deleted
+   * by earlier login/sync false positives, cross-checking against the Audit Log (`USER_CREATED` vs `USER_DELETED`).
+   */
+  private static selfHealFalselyDeletedNewAccounts(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      if (localStorage.getItem('classroom_self_heal_new_accounts_v2') === 'true') {
+        return;
+      }
+      localStorage.setItem('classroom_self_heal_new_accounts_v2', 'true');
+      localStorage.removeItem('classroom_deleted_users_meta_v1');
+
+      const auditLogs = this.getItem<AuditLogEntry[]>(STORAGE_KEYS.AUDIT_LOGS, []);
+      const explicitDeletedUserIds = new Set<string>();
+      const explicitDeletedUsernames: string[] = [];
+      const explicitDeletedEmails: string[] = [];
+
+      // Collect genuinely deleted user IDs/usernames/emails from USER_DELETED audit logs (sorted oldest -> newest)
+      const chronologicalLogs = [...auditLogs].sort(
+        (a, b) => (a.createdAtMs || 0) - (b.createdAtMs || 0)
+      );
+      const createdUserLogs = new Map<string, AuditLogEntry>();
+
+      for (const log of chronologicalLogs) {
+        if (log.actionCode === 'USER_CREATED' && log.targetId) {
+          createdUserLogs.set(log.targetId, log);
+          explicitDeletedUserIds.delete(log.targetId);
+        } else if (log.actionCode === 'USER_DELETED') {
+          if (log.targetId) {
+            explicitDeletedUserIds.add(log.targetId);
+            createdUserLogs.delete(log.targetId);
+          }
+          const uMatch = (log.targetName || '').match(/\(@([^)]+)\)/);
+          if (uMatch && uMatch[1]) {
+            explicitDeletedUsernames.push(uMatch[1].trim().toLowerCase());
+          }
+          const eMatch = (log.details || '').match(/Deleted Email:\s*([^\s|]+)/i);
+          if (eMatch && eMatch[1]) {
+            explicitDeletedEmails.push(eMatch[1].trim().toLowerCase());
+          }
+        }
+      }
+
+      // Clean false-positive user-* IDs from DELETED_IDS if they were never explicitly deleted via USER_DELETED
+      const rawDeletedIds = this.getDeletedIds();
+      const cleanedDeletedIds = rawDeletedIds.filter((id) => {
+        if (id.startsWith('user-') && !this.isInitialDemoUserId(id)) {
+          return explicitDeletedUserIds.has(id);
+        }
+        return true;
+      });
+      if (cleanedDeletedIds.length !== rawDeletedIds.length) {
+        this.setItem(STORAGE_KEYS.DELETED_IDS, cleanedDeletedIds);
+      }
+
+      if (explicitDeletedUsernames.length > 0 || explicitDeletedEmails.length > 0) {
+        this.recordDeletedUserMeta(explicitDeletedUsernames, explicitDeletedEmails);
+      }
+
+      // Restore any newly created user from USER_CREATED audit log if it was mistakenly purged from STORAGE_KEYS.USERS
+      if (createdUserLogs.size > 0) {
+        const currentUsers = this.getItem<User[]>(STORAGE_KEYS.USERS, []);
+        const currentIds = new Set(currentUsers.map((u) => u.id));
+        const currentUsernames = new Set(
+          currentUsers.map((u) => (u.username || '').trim().toLowerCase())
+        );
+        let restoredAny = false;
+
+        createdUserLogs.forEach((log, targetId) => {
+          if (currentIds.has(targetId) || explicitDeletedUserIds.has(targetId)) return;
+          const nameAndUser = log.targetName || '';
+          const uMatch = nameAndUser.match(/^(.*?)\s*\(@([^)]+)\)\s*$/);
+          const parsedName = uMatch ? uMatch[1].trim() : nameAndUser.trim();
+          const parsedUsername = uMatch ? uMatch[2].trim().toLowerCase() : '';
+          if (!parsedName || !parsedUsername || currentUsernames.has(parsedUsername)) return;
+
+          const detailsStr = log.details || '';
+          const emailMatch = detailsStr.match(/Email:\s*([^|]+)/i);
+          const phoneMatch = detailsStr.match(/Phone:\s*([^|]+)/i);
+          const titleMatch = detailsStr.match(/အလုပ်အကိုင်\/ပညာအရည်အချင်း:\s*([^|]+)/i);
+          const parsedEmail = emailMatch
+            ? emailMatch[1].trim().toLowerCase()
+            : `${parsedUsername}@swanarh.edu`;
+          const parsedPhone = phoneMatch ? phoneMatch[1].trim() : '+95 9 000 000000';
+          const parsedTitle = titleMatch ? titleMatch[1].trim() : undefined;
+          const parsedRole: UserRole = targetId.startsWith('user-admin-')
+            ? 'admin'
+            : targetId.startsWith('user-co_admin-')
+            ? 'co_admin'
+            : 'student';
+          const defaultPwd =
+            parsedRole === 'admin'
+              ? 'admin123'
+              : parsedRole === 'co_admin'
+              ? 'coadmin123'
+              : 'student123';
+
+          const restoredUser: User = {
+            id: targetId,
+            name: parsedName,
+            username: parsedUsername,
+            email: parsedEmail,
+            password: encryptPassword(defaultPwd, parsedRole, targetId),
+            phone: parsedPhone,
+            role: parsedRole,
+            avatar: parsedRole === 'admin' ? DEFAULT_AVATAR_SVG : '',
+            title: parsedTitle,
+            gender: 'male',
+          };
+
+          currentUsers.push(restoredUser);
+          currentIds.add(targetId);
+          currentUsernames.add(parsedUsername);
+          this.unmarkDeletedId(targetId);
+          this.unmarkDeletedUserMeta(parsedUsername, parsedEmail);
+          this.markLocalWrite(targetId);
+          restoredAny = true;
+
+          try {
+            SupabaseService.upsertProfile(restoredUser, true).catch(() => {});
+          } catch {
+            // ignore
+          }
+        });
+
+        if (restoredAny) {
+          this.setItem(STORAGE_KEYS.USERS, currentUsers);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   // Init default storage (Non-destructive: preserves live user data across all future AI Studio updates)
   static init(): void {
+    this.selfHealFalselyDeletedNewAccounts();
     const isCloudSynced = localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) === 'true';
     const deletedSet = new Set(this.getDeletedIds());
     const deletedMeta = this.getDeletedUsersMeta();
@@ -1505,6 +1667,7 @@ export class ClassroomDB {
     expectedRole?: UserRole,
     forceTakeover: boolean = false
   ): Promise<{ user: User | null; deviceLocked?: boolean; error?: string }> {
+    this.init();
     const { cleanId, compactId, idLocalPart } = this.normalizeLoginIdentifier(identifier);
     const cleanPwd = this.normalizeLoginPassword(password);
     if (!cleanId || !cleanPwd) {
@@ -1524,6 +1687,7 @@ export class ClassroomDB {
 
     const deletedSet = new Set(this.getDeletedIds());
     const deletedMeta = this.getDeletedUsersMeta();
+    const cloudConfirmedUsers = this.getCloudConfirmedUserIds();
 
     if (typeof navigator === 'undefined' || navigator.onLine !== false) {
       const remoteCheck = await Promise.race([
@@ -1534,70 +1698,78 @@ export class ClassroomDB {
       ]);
 
       if (remoteCheck.networkOk && remoteCheck.dbSeeded) {
-        const validRemoteUsers = remoteCheck.users.filter(
-          (ru) => !this.isUserDeleted(ru, deletedSet, deletedMeta)
-        );
+        // 1. If the account exists in Supabase `profiles` (and wasn't explicitly deleted by ID on this device),
+        // Supabase is authoritative — unmark any stale deleted metadata, merge into local, and verify password!
+        const activeRemoteUsers = remoteCheck.users.filter((ru) => !deletedSet.has(ru.id));
 
-        if (validRemoteUsers.length > 0) {
-          validRemoteUsers.forEach((ru) => this.mergeRemoteUserIntoLocal(ru, deletedSet));
+        if (activeRemoteUsers.length > 0) {
+          activeRemoteUsers.forEach((ru) => {
+            this.unmarkDeletedId(ru.id);
+            this.unmarkDeletedUserMeta(ru.username, ru.email);
+            deletedSet.delete(ru.id);
+            this.markUserCloudConfirmed(ru.id);
+            this.mergeRemoteUserIntoLocal(ru, deletedSet);
+          });
           return this.login(identifier, cleanPwd, expectedRole, forceTakeover);
         }
 
-        // 0 matching profiles in Supabase! Check if this user was just created locally on this device within the last 15s
+        // 2. 0 matching profiles in Supabase yet: check if this account exists locally
         const localUsersNow = this.getAllUsers();
-        const recentlyCreatedLocal = localUsersNow.find((u) => {
+        const matchingLocalUser = localUsersNow.find((u) => {
           const uName = (u.username || '').trim().replace(/^@+/, '').toLowerCase();
           const uEmail = (u.email || '').trim().toLowerCase();
           const uEmailLocal = uEmail.includes('@') ? uEmail.split('@')[0].trim() : uEmail;
-          const matchesIdentifier =
+          return (
             uName === cleanId ||
             uName === compactId ||
             uName === idLocalPart ||
             uEmail === cleanId ||
             uEmail === compactId ||
-            uEmailLocal === idLocalPart;
-          return matchesIdentifier && this.isRecentLocalWrite(u.id, 15_000);
+            uEmailLocal === idLocalPart
+          );
         });
 
-        if (!recentlyCreatedLocal) {
-          // Account does NOT exist in Supabase (or was deleted by Admin/Co-Admin)!
-          // Purge any stale local or INITIAL_USERS entry matching this identifier so it can never log in offline or resurrect
-          const rawUsers = this.getItem<User[]>(STORAGE_KEYS.USERS, INITIAL_USERS);
-          const staleIds: string[] = [];
-          const staleUsernames: string[] = [];
-          const staleEmails: string[] = [];
-          const remainingUsers = rawUsers.filter((u) => {
-            const uName = (u.username || '').trim().replace(/^@+/, '').toLowerCase();
-            const uEmail = (u.email || '').trim().toLowerCase();
-            const uEmailLocal = uEmail.includes('@') ? uEmail.split('@')[0].trim() : uEmail;
-            const isStaleMatch =
-              uName === cleanId ||
-              uName === compactId ||
-              uName === idLocalPart ||
-              uEmail === cleanId ||
-              uEmail === compactId ||
-              uEmailLocal === idLocalPart;
-            if (isStaleMatch) {
-              staleIds.push(u.id);
-              if (uName) staleUsernames.push(uName);
-              if (uEmail) staleEmails.push(uEmail);
-              return false;
-            }
-            return true;
-          });
+        if (matchingLocalUser) {
+          // If this is a newly created / real local user (not an already-confirmed & remotely-deleted initial demo user),
+          // push it to Supabase immediately and allow login!
+          const isDeletedInitialDemo =
+            this.isInitialDemoUserId(matchingLocalUser.id) &&
+            cloudConfirmedUsers.has(matchingLocalUser.id) &&
+            !this.isRecentLocalWrite(matchingLocalUser.id, 300_000);
 
-          if (staleIds.length > 0) {
-            this.recordDeletedIds(staleIds);
-            this.recordDeletedUserMeta(staleUsernames, staleEmails);
-            this.setItem(STORAGE_KEYS.USERS, remainingUsers);
+          if (!isDeletedInitialDemo) {
+            try {
+              SupabaseService.upsertProfile(matchingLocalUser, true).catch(() => {});
+            } catch {
+              // ignore
+            }
+            return this.login(identifier, cleanPwd, expectedRole, forceTakeover);
           }
 
+          // Only if a seeded initial demo user was confirmed in cloud and later deleted from Supabase, remove it locally
+          const rawUsers = this.getItem<User[]>(STORAGE_KEYS.USERS, INITIAL_USERS);
+          this.setItem(
+            STORAGE_KEYS.USERS,
+            rawUsers.filter((u) => u.id !== matchingLocalUser.id)
+          );
           return {
             user: null,
-            error:
-              'ဤအကောင့်သည် စနစ်မှ ဖျက်သိမ်းထားပြီးဖြစ်ပါသည် သို့မဟုတ် Username/Password မှားယွင်းနေပါသည်။',
+            error: 'ဤအကောင့်သည် စနစ်မှ ဖျက်သိမ်းထားပြီးဖြစ်ပါသည်။',
           };
         }
+
+        // No local user and no remote user matched: check if this identifier was explicitly deleted by Admin
+        const wasExplicitlyDeleted =
+          deletedMeta.usernames.includes(compactId) ||
+          deletedMeta.usernames.includes(idLocalPart) ||
+          deletedMeta.emails.includes(compactId);
+
+        return {
+          user: null,
+          error: wasExplicitlyDeleted
+            ? 'ဤအကောင့်သည် စနစ်မှ ဖျက်သိမ်းထားပြီးဖြစ်ပါသည်။'
+            : 'Username သို့မဟုတ် Email နှင့် Password မှားယွင်းနေပါသည်။ ကျေးဇူးပြု၍ ပြန်လည်စစ်ဆေးပြီး ဝင်ရောက်ပါ။',
+        };
       }
     }
 
@@ -3724,18 +3896,32 @@ export class ClassroomDB {
             // ignore
           }
           const remoteProfileIds = new Set(remoteProfiles.map((ru) => ru.id));
+          this.markUserCloudConfirmed(
+            remoteProfiles.filter((ru) => !deletedSet.has(ru.id)).map((ru) => ru.id)
+          );
+          const cloudConfirmedUsers = this.getCloudConfirmedUserIds();
           const localUsers = this.getAllUsers().filter(
             (u) => !this.isUserDeleted(u, deletedSet, deletedMeta)
           );
           const prevJson = JSON.stringify(localUsers);
           const userMap = new Map<string, User>();
           localUsers.forEach((u) => {
+            const isUnconfirmedNewUser =
+              !this.isInitialDemoUserId(u.id) && !cloudConfirmedUsers.has(u.id);
             if (
               remoteProfileIds.has(u.id) ||
               this.isRecentLocalWrite(u.id) ||
+              isUnconfirmedNewUser ||
               (isStudentLightweight && u.role === 'student' && u.id !== loggedUser?.id)
             ) {
               userMap.set(u.id, u);
+              if (isUnconfirmedNewUser && !remoteProfileIds.has(u.id)) {
+                try {
+                  SupabaseService.upsertProfile(u, true).catch(() => {});
+                } catch {
+                  // ignore
+                }
+              }
             } else {
               newlyDiscoveredRemoteDeletions.push(u.id);
               deletedSet.add(u.id);
@@ -4022,6 +4208,10 @@ export class ClassroomDB {
         const latestAvatarByUserId = new Map<string, string>();
         if (remoteProfiles && remoteProfiles.length > 0) {
           const remoteProfileIds = new Set(remoteProfiles.map((ru) => ru.id));
+          this.markUserCloudConfirmed(
+            remoteProfiles.filter((ru) => !deletedSet.has(ru.id)).map((ru) => ru.id)
+          );
+          const cloudConfirmedUsers = this.getCloudConfirmedUserIds();
           const localUsers = this.getAllUsers().filter(
             (u) => !this.isUserDeleted(u, deletedSet, deletedMeta)
           );
@@ -4029,14 +4219,24 @@ export class ClassroomDB {
           const userMap = new Map<string, User>();
 
           localUsers.forEach((u) => {
+            const isUnconfirmedNewUser =
+              !this.isInitialDemoUserId(u.id) && !cloudConfirmedUsers.has(u.id);
             if (
               !cloudActive ||
               isFreshUnseededRemoteDb ||
               remoteProfileIds.has(u.id) ||
               this.isRecentLocalWrite(u.id) ||
+              isUnconfirmedNewUser ||
               (isStudentLightweight && u.role === 'student' && u.id !== loggedUser?.id)
             ) {
               userMap.set(u.id, u);
+              if (cloudActive && isUnconfirmedNewUser && !remoteProfileIds.has(u.id)) {
+                try {
+                  SupabaseService.upsertProfile(u, true).catch(() => {});
+                } catch {
+                  // ignore
+                }
+              }
             } else {
               newlyDiscoveredRemoteDeletions.push(u.id);
               deletedSet.add(u.id);
@@ -4046,11 +4246,14 @@ export class ClassroomDB {
           });
 
           remoteProfiles.forEach((ru) => {
-            if (this.isUserDeleted(ru, deletedSet, deletedMeta)) {
+            if (deletedSet.has(ru.id)) {
               if (!this.purgedRemoteIds.has(ru.id)) {
                 this.purgedRemoteIds.add(ru.id);
                 SupabaseService.deleteProfile(ru.id, ru.username, ru.email).catch(() => {});
               }
+              return;
+            }
+            if (this.isUserDeleted(ru, deletedSet, deletedMeta)) {
               return;
             }
             const existing = userMap.get(ru.id);

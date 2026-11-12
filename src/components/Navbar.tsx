@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, NotificationItem } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
 import { ProfilePictureModal } from './ProfilePictureModal';
@@ -13,15 +13,11 @@ import {
   Check,
   LogOut,
   ChevronDown,
-  Menu,
   X,
   BookOpen,
   Users,
-  Layers,
   Shield,
   RotateCcw,
-  Sparkles,
-  Lock,
   Key,
   Eye,
   EyeOff,
@@ -57,7 +53,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   allUsers: _allUsers,
   onSelectUser: _onSelectUser,
   onLogout,
-  onOpenArchitecture,
+  onOpenArchitecture: _onOpenArchitecture,
   onOpenStudentDirectory,
   onOpenAuditLog,
   onOpenRules,
@@ -72,6 +68,9 @@ export const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const [showUserDropdown, setShowUserDropdown] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+
+  const userMenuRef = useRef<HTMLDivElement>(null);
+  const notifMenuRef = useRef<HTMLDivElement>(null);
 
   // Profile Picture state (Primary Admin only)
   const [showProfilePictureModal, setShowProfilePictureModal] = useState(false);
@@ -88,6 +87,50 @@ export const Navbar: React.FC<NavbarProps> = ({
   useBackHandler(showProfilePictureModal, () => setShowProfilePictureModal(false));
   useBackHandler(showEditMyAccountModal, () => setShowEditMyAccountModal(false));
   useBackHandler(showPasswordModal, () => setShowPasswordModal(false));
+
+  // Close Account Profile Menu & Notifications on outside click/tap or Escape key
+  useEffect(() => {
+    if (!showUserDropdown && !showNotifications) return;
+
+    const handlePointerDownOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+
+      if (
+        showUserDropdown &&
+        userMenuRef.current &&
+        !userMenuRef.current.contains(target)
+      ) {
+        setShowUserDropdown(false);
+      }
+
+      if (
+        showNotifications &&
+        notifMenuRef.current &&
+        !notifMenuRef.current.contains(target)
+      ) {
+        setShowNotifications(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShowUserDropdown(false);
+        setShowNotifications(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDownOutside);
+    document.addEventListener('touchstart', handlePointerDownOutside, { passive: true });
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDownOutside);
+      document.removeEventListener('touchstart', handlePointerDownOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showUserDropdown, showNotifications]);
+
   const [currentPwd, setCurrentPwd] = useState('');
   const [newPwd, setNewPwd] = useState('');
   const [confirmPwd, setConfirmPwd] = useState('');
@@ -135,13 +178,27 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header className="sticky top-0 z-40 w-full max-w-full px-2 sm:px-6 pt-2 sm:pt-3">
-      <div className="max-w-7xl mx-auto neu-raised rounded-2xl px-2.5 sm:px-5 h-14 sm:h-16 flex items-center justify-between gap-1.5 sm:gap-4 min-w-0 w-full">
+      {/* Click-outside backdrop overlay for mobile & desktop when dropdown/notification is open */}
+      {(showUserDropdown || showNotifications) && (
+        <div
+          className="fixed inset-0 z-40 bg-slate-950/20 dark:bg-slate-950/45 sm:bg-transparent backdrop-blur-[1px] sm:backdrop-blur-none"
+          onClick={() => {
+            setShowUserDropdown(false);
+            setShowNotifications(false);
+          }}
+          aria-hidden="true"
+        />
+      )}
+
+      <div className="relative z-50 max-w-7xl mx-auto neu-raised rounded-2xl px-2.5 sm:px-5 h-14 sm:h-16 flex items-center justify-between gap-1.5 sm:gap-4 min-w-0 w-full">
         {/* Zone 1: Brand Wordmark & Role Indicator */}
         <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1 sm:flex-initial sm:shrink-0">
           <button
+            type="button"
             onClick={() => {
               onNavigateHome();
               setShowUserDropdown(false);
+              setShowNotifications(false);
             }}
             className="text-sm sm:text-base lg:text-lg font-extrabold tracking-tight text-slate-900 dark:text-slate-100 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer text-left flex items-center gap-2 min-w-0 max-w-full"
           >
@@ -159,14 +216,24 @@ export const Navbar: React.FC<NavbarProps> = ({
         {/* Zone 2: Desktop Navigation Links (hidden on mobile/tablet, visible on lg+) */}
         <nav className="hidden lg:flex items-center gap-4 xl:gap-6 text-xs sm:text-sm font-semibold text-slate-600 dark:text-slate-300 shrink-0">
           <button
-            onClick={onNavigateHome}
+            type="button"
+            onClick={() => {
+              setShowUserDropdown(false);
+              setShowNotifications(false);
+              onNavigateHome();
+            }}
             className="hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             My Classes
           </button>
           {onOpenRules && (
             <button
-              onClick={onOpenRules}
+              type="button"
+              onClick={() => {
+                setShowUserDropdown(false);
+                setShowNotifications(false);
+                onOpenRules();
+              }}
               className="text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5"
             >
               <ScrollText className="w-3.5 h-3.5" />
@@ -177,7 +244,12 @@ export const Navbar: React.FC<NavbarProps> = ({
             <>
               {onOpenStudentDirectory && (
                 <button
-                  onClick={onOpenStudentDirectory}
+                  type="button"
+                  onClick={() => {
+                    setShowUserDropdown(false);
+                    setShowNotifications(false);
+                    onOpenStudentDirectory();
+                  }}
                   className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5"
                 >
                   <Users className="w-3.5 h-3.5" />
@@ -186,7 +258,12 @@ export const Navbar: React.FC<NavbarProps> = ({
               )}
               {currentUser.role === 'admin' && onOpenAuditLog && (
                 <button
-                  onClick={onOpenAuditLog}
+                  type="button"
+                  onClick={() => {
+                    setShowUserDropdown(false);
+                    setShowNotifications(false);
+                    onOpenAuditLog();
+                  }}
                   className="text-amber-700 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5"
                 >
                   <Shield className="w-3.5 h-3.5" />
@@ -220,14 +297,16 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
 
           {/* Notifications Bell */}
-          <div className="relative shrink-0">
+          <div ref={notifMenuRef} className="sm:relative shrink-0">
             <button
+              type="button"
               onClick={() => {
-                setShowNotifications(!showNotifications);
+                setShowNotifications((prev) => !prev);
                 setShowUserDropdown(false);
               }}
               className="neu-btn p-2 sm:p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl relative cursor-pointer"
               aria-label="View notifications"
+              aria-expanded={showNotifications}
               title="အတန်းတွင်း အသိပေးချက်များ (Classroom Notifications)"
             >
               <Bell className={`w-4 h-4 sm:w-4.5 sm:h-4.5 ${unreadCount > 0 ? 'text-indigo-600 dark:text-indigo-400' : ''}`} />
@@ -238,9 +317,9 @@ export const Navbar: React.FC<NavbarProps> = ({
               )}
             </button>
 
-            {/* Notifications Popover (Responsive on Mobile, Tablet & Desktop) */}
+            {/* Notifications Popover (Always opens below Navbar, never covers trigger) */}
             {showNotifications && (
-              <div className="neu-card fixed left-2.5 right-2.5 top-16 sm:absolute sm:left-auto sm:right-0 sm:top-full sm:mt-2.5 sm:w-96 max-w-[calc(100vw-1.25rem)] max-h-[calc(100dvh-4.75rem)] overflow-y-auto overflow-x-hidden rounded-2xl p-3.5 sm:p-4 z-50">
+              <div className="neu-card absolute right-0 top-full mt-2 w-[calc(100vw-1rem)] max-w-96 sm:w-96 max-h-[calc(100dvh-5.5rem)] overflow-y-auto overflow-x-hidden rounded-2xl p-3.5 sm:p-4 z-50 shadow-2xl border border-slate-200/70 dark:border-slate-700/70 animate-in fade-in zoom-in-95 duration-150">
                 <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-200/60 dark:border-slate-800">
                   <div className="flex items-center gap-2 min-w-0">
                     <Bell className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
@@ -248,7 +327,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       အသိပေးချက်များ ({unreadCount} အသစ်)
                     </span>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-1.5 shrink-0">
                     {typeof window !== 'undefined' &&
                       'Notification' in window &&
                       Notification.permission === 'default' && (
@@ -265,12 +344,22 @@ export const Navbar: React.FC<NavbarProps> = ({
                       )}
                     {unreadCount > 0 && (
                       <button
+                        type="button"
                         onClick={handleMarkNotificationsRead}
                         className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
                       >
                         အားလုံးဖတ်ပြီး
                       </button>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => setShowNotifications(false)}
+                      className="neu-btn px-2 py-1 rounded-lg text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                      title="ပိတ်မည် (Close)"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                      <span>ပိတ်မည်</span>
+                    </button>
                   </div>
                 </div>
 
@@ -342,12 +431,14 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           {/* Unified Account Profile & Navigation Menu Trigger (Combines Profile + Menu into One Clean Button) */}
-          <div className="relative min-w-0 shrink">
+          <div ref={userMenuRef} className="sm:relative min-w-0 shrink">
             <button
+              type="button"
               onClick={() => {
-                setShowUserDropdown(!showUserDropdown);
+                setShowUserDropdown((prev) => !prev);
                 setShowNotifications(false);
               }}
+              aria-expanded={showUserDropdown}
               className="neu-btn flex items-center gap-1.5 sm:gap-2 px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-xl cursor-pointer min-w-0 max-w-[160px] sm:max-w-[200px] md:max-w-[230px]"
               title={`${currentUser.name} (@${currentUser.username}) — Menu & Account Settings`}
             >
@@ -392,17 +483,17 @@ export const Navbar: React.FC<NavbarProps> = ({
                 )}
               </div>
               {showUserDropdown ? (
-                <X className="w-3.5 h-3.5 text-slate-500 dark:text-slate-300 shrink-0" />
+                <X className="w-3.5 h-3.5 text-rose-500 dark:text-rose-400 shrink-0" />
               ) : (
                 <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
               )}
             </button>
 
-            {/* Unified Account Profile & Navigation Dropdown (Mobile, Tablet & Web) */}
+            {/* Unified Account Profile & Navigation Dropdown (Always opens cleanly below Navbar on Mobile, Tablet & Web) */}
             {showUserDropdown && (
-              <div className="neu-card fixed left-2.5 right-2.5 top-16 sm:absolute sm:left-auto sm:right-0 sm:top-full sm:mt-2.5 sm:w-88 max-w-[calc(100vw-1.25rem)] max-h-[calc(100dvh-4.75rem)] overflow-y-auto overflow-x-hidden rounded-2xl p-3 z-50 space-y-2 animate-in fade-in zoom-in-95 duration-150">
-                {/* User Identity Summary Header */}
-                <div className="neu-inset-sm p-3 rounded-xl flex items-center justify-between gap-2.5 min-w-0">
+              <div className="neu-card absolute right-0 top-full mt-2 w-[calc(100vw-1rem)] max-w-88 sm:w-88 max-h-[calc(100dvh-5.5rem)] overflow-y-auto overflow-x-hidden rounded-2xl p-3 z-50 space-y-2 shadow-2xl border border-slate-200/70 dark:border-slate-700/70 animate-in fade-in zoom-in-95 duration-150">
+                {/* User Identity Summary Header + Explicit Close Button */}
+                <div className="neu-inset-sm p-2.5 sm:p-3 rounded-xl flex items-start justify-between gap-2 min-w-0">
                   <div className="flex items-center gap-2.5 min-w-0 flex-1">
                     {currentUser.role === 'admin' ? (
                       <img
@@ -412,11 +503,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                         onError={(e) => {
                           (e.target as HTMLImageElement).src = DEFAULT_AVATAR_SVG;
                         }}
-                        className="w-11 h-11 rounded-full object-contain bg-white p-0.5 shrink-0 ring-2 ring-indigo-500/30 dark:ring-indigo-400/40 shadow-xs"
+                        className="w-10 h-10 sm:w-11 sm:h-11 rounded-full object-contain bg-white p-0.5 shrink-0 ring-2 ring-indigo-500/30 dark:ring-indigo-400/40 shadow-xs"
                       />
                     ) : (
                       <div
-                        className={`w-11 h-11 rounded-2xl flex items-center justify-center text-base font-extrabold shrink-0 border ${
+                        className={`w-10 h-10 sm:w-11 sm:h-11 rounded-2xl flex items-center justify-center text-base font-extrabold shrink-0 border ${
                           currentUser.role === 'co_admin'
                             ? 'bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800'
                             : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
@@ -451,6 +542,21 @@ export const Navbar: React.FC<NavbarProps> = ({
                       </div>
                     </div>
                   </div>
+
+                  {/* Top-Right Close Button */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowUserDropdown(false);
+                    }}
+                    className="neu-btn px-2 py-1 rounded-lg text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 text-[11px] font-bold flex items-center gap-1 shrink-0 cursor-pointer"
+                    title="Menu ပိတ်မည် (Close Menu)"
+                    aria-label="Close Account Menu"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span>ပိတ်မည်</span>
+                  </button>
                 </div>
 
                 {/* Unified Menu Items (Navigation + Account + System Actions) */}
@@ -461,7 +567,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                   {/* Theme Mode Switcher */}
                   <button
                     type="button"
-                    onClick={onToggleTheme}
+                    onClick={() => {
+                      onToggleTheme();
+                    }}
                     className="w-full flex items-center justify-between gap-2 p-2.5 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-white/60 dark:hover:bg-slate-800/70 transition-colors cursor-pointer min-w-0"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
@@ -596,8 +704,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <span className="truncate">Update App & Sync (ဗားရှင်းအသစ် ရယူရန်)</span>
                   </button>
 
-                  {/* Sign Out */}
-                  <div className="pt-1 border-t border-slate-200/60 dark:border-slate-800">
+                  {/* Sign Out & Close Menu Footer */}
+                  <div className="pt-1.5 border-t border-slate-200/60 dark:border-slate-800 space-y-1">
                     <button
                       type="button"
                       onClick={() => {
@@ -608,6 +716,15 @@ export const Navbar: React.FC<NavbarProps> = ({
                     >
                       <LogOut className="w-3.5 h-3.5 shrink-0" />
                       <span className="truncate">Sign Out (အကောင့်မှ ထွက်ရန်)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowUserDropdown(false)}
+                      className="w-full flex items-center justify-center gap-1.5 p-2 rounded-xl text-xs text-slate-600 dark:text-slate-300 bg-slate-200/60 dark:bg-slate-800/70 hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer font-bold"
+                    >
+                      <X className="w-3.5 h-3.5 shrink-0" />
+                      <span>Menu ပိတ်မည် (Close)</span>
                     </button>
                   </div>
                 </div>

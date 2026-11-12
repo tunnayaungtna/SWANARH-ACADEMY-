@@ -34099,6 +34099,9 @@ var SupabaseService = class {
 	static {
 		this.pendingTargetUserIds = /* @__PURE__ */ new Set();
 	}
+	static {
+		this.ignoredRealtimeDeleteIds = /* @__PURE__ */ new Set();
+	}
 	static loadCloudCleanupTimestamps() {
 		if (typeof window === "undefined" || this.lastExpiredCleanupAt > 0 && this.lastAuditLogCleanupAt > 0) return;
 		try {
@@ -34155,13 +34158,13 @@ var SupabaseService = class {
 				if (payload?.eventType === "DELETE" && payload?.old && typeof payload.old === "object") {
 					const oldRec = payload.old;
 					const delId = oldRec.id ? String(oldRec.id) : "";
-					const delUName = oldRec.username ? String(oldRec.username).toLowerCase() : "";
-					const delEmail = oldRec.email ? String(oldRec.email).toLowerCase() : "";
+					if (delId && this.ignoredRealtimeDeleteIds.has(delId)) {
+						this.ignoredRealtimeDeleteIds.delete(delId);
+						return;
+					}
 					this.triggerRealtimeListeners({
 						kind: "delete",
-						deletedIds: delId ? [delId] : void 0,
-						deletedUsernames: delUName ? [delUName] : void 0,
-						deletedEmails: delEmail ? [delEmail] : void 0
+						deletedIds: delId ? [delId] : void 0
 					});
 					return;
 				}
@@ -34195,6 +34198,10 @@ var SupabaseService = class {
 	static triggerRealtimeListeners(meta) {
 		const incomingKind = meta?.kind || "all";
 		this.pendingKinds.add(incomingKind);
+		if (incomingKind === "profile" || incomingKind === "delete" || incomingKind === "all") {
+			this.invalidateClientCache("profiles");
+			this.invalidateClientCache("profile_candidates");
+		}
 		if (incomingKind === "course" || incomingKind === "all") this.invalidateClientCache("courses");
 		if (incomingKind === "assignment" || incomingKind === "all") this.invalidateClientCache("assignments");
 		if (incomingKind === "submission" || incomingKind === "all") this.invalidateClientCache("submissions");
@@ -34585,17 +34592,26 @@ var SupabaseService = class {
 				const filterSet = /* @__PURE__ */ new Set();
 				filterSet.add(`username.ilike.${compactId}`);
 				filterSet.add(`email.ilike.${compactId}`);
+				filterSet.add(`title.ilike.%||USR:${compactId}%`);
 				if (idLocalPart) {
 					filterSet.add(`username.ilike.${idLocalPart}`);
 					filterSet.add(`email.ilike.${idLocalPart}@%`);
+					filterSet.add(`title.ilike.%||USR:${idLocalPart}%`);
 				}
-				const profileFullCols = "id,name,username,email,role,phone,avatar,title,gender,address,password,rules_accepted,rules_accepted_at";
+				const profileFullCols = "id,name,username,email,role,phone,avatar,title,gender,address,password";
 				const profileCoreCols = "id,name,username,email,role,phone,avatar,title";
+				const profileNoUsernameCols = "id,name,email,role,phone,avatar,title";
 				const { data, error } = await supabase.from("profiles").select(profileFullCols).or(Array.from(filterSet).join(",")).limit(15);
 				if (!error && Array.isArray(data) && data.length > 0) return data.map((r) => this.mapProfileRowToUser(r));
 				if (error) {
-					const fallbackFilters = [`email.ilike.${compactId}`, ...idLocalPart ? [`email.ilike.${idLocalPart}@%`, `title.ilike.%||USR:${idLocalPart}%`] : []];
-					const { data: fbData, error: fbErr } = await supabase.from("profiles").select(profileCoreCols).or(Array.from(new Set(fallbackFilters)).join(",")).limit(15);
+					const { data: coreData, error: coreErr } = await supabase.from("profiles").select(profileCoreCols).or(Array.from(filterSet).join(",")).limit(15);
+					if (!coreErr && Array.isArray(coreData) && coreData.length > 0) return coreData.map((r) => this.mapProfileRowToUser(r));
+					const noUserFilters = [
+						`email.ilike.${compactId}`,
+						`title.ilike.%||USR:${compactId}%`,
+						...idLocalPart ? [`email.ilike.${idLocalPart}@%`, `title.ilike.%||USR:${idLocalPart}%`] : []
+					];
+					const { data: fbData, error: fbErr } = await supabase.from("profiles").select(profileNoUsernameCols).or(Array.from(new Set(noUserFilters)).join(",")).limit(15);
 					if (!fbErr && Array.isArray(fbData) && fbData.length > 0) return fbData.map((r) => this.mapProfileRowToUser(r));
 				}
 				return [];
@@ -34610,7 +34626,6 @@ var SupabaseService = class {
 	* Authoritative Cloud Login Existence Check:
 	* - Queries Supabase `profiles` for matching username/email (costs < 0.5 KB egress).
 	* - Distinguishes between a network/query error vs. an account that was genuinely deleted in Supabase (`users.length === 0 && dbSeeded === true`).
-	* - Prevents deleted student accounts from ever logging in via local `INITIAL_USERS` or stale `localStorage`!
 	*/
 	static async checkRemoteLoginCandidates(identifier) {
 		const rawClean = (identifier || "").replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/^(🔑\s*|📧\s*|👤\s*)?(username|email|e-mail|mail|id)\s*[:：=\-]\s*/i, "").trim().replace(/^@+/, "").toLowerCase();
@@ -34630,12 +34645,15 @@ var SupabaseService = class {
 			const filterSet = /* @__PURE__ */ new Set();
 			filterSet.add(`username.ilike.${compactId}`);
 			filterSet.add(`email.ilike.${compactId}`);
+			filterSet.add(`title.ilike.%||USR:${compactId}%`);
 			if (idLocalPart) {
 				filterSet.add(`username.ilike.${idLocalPart}`);
 				filterSet.add(`email.ilike.${idLocalPart}@%`);
+				filterSet.add(`title.ilike.%||USR:${idLocalPart}%`);
 			}
-			const profileFullCols = "id,name,username,email,role,phone,avatar,title,gender,address,password,rules_accepted,rules_accepted_at";
+			const profileFullCols = "id,name,username,email,role,phone,avatar,title,gender,address,password";
 			const profileCoreCols = "id,name,username,email,role,phone,avatar,title";
+			const profileNoUsernameCols = "id,name,email,role,phone,avatar,title";
 			const { data, error } = await supabase.from("profiles").select(profileFullCols).or(Array.from(filterSet).join(",")).limit(15);
 			if (!error && Array.isArray(data)) {
 				if (data.length > 0) return {
@@ -34659,8 +34677,34 @@ var SupabaseService = class {
 				};
 			}
 			if (error) {
-				const fallbackFilters = [`email.ilike.${compactId}`, ...idLocalPart ? [`email.ilike.${idLocalPart}@%`, `title.ilike.%||USR:${idLocalPart}%`] : []];
-				const { data: fbData, error: fbErr } = await supabase.from("profiles").select(profileCoreCols).or(Array.from(new Set(fallbackFilters)).join(",")).limit(15);
+				const { data: coreData, error: coreErr } = await supabase.from("profiles").select(profileCoreCols).or(Array.from(filterSet).join(",")).limit(15);
+				if (!coreErr && Array.isArray(coreData)) {
+					if (coreData.length > 0) return {
+						networkOk: true,
+						dbSeeded: true,
+						users: coreData.map((r) => this.mapProfileRowToUser(r))
+					};
+					const { count, error: countErr } = await supabase.from("profiles").select("id", {
+						count: "exact",
+						head: true
+					});
+					if (!countErr) return {
+						networkOk: true,
+						dbSeeded: (count ?? 0) > 0,
+						users: []
+					};
+					return {
+						networkOk: false,
+						dbSeeded: false,
+						users: []
+					};
+				}
+				const fallbackFilters = [
+					`email.ilike.${compactId}`,
+					`title.ilike.%||USR:${compactId}%`,
+					...idLocalPart ? [`email.ilike.${idLocalPart}@%`, `title.ilike.%||USR:${idLocalPart}%`] : []
+				];
+				const { data: fbData, error: fbErr } = await supabase.from("profiles").select(profileNoUsernameCols).or(Array.from(new Set(fallbackFilters)).join(",")).limit(15);
 				if (!fbErr && Array.isArray(fbData)) {
 					if (fbData.length > 0) return {
 						networkOk: true,
@@ -35455,8 +35499,15 @@ var SupabaseService = class {
 	}
 	static buildProfilePayload(user, mode) {
 		const safeAvatar = compactAvatarForCloud(user.avatar, user.role);
-		const nowIso = (/* @__PURE__ */ new Date()).toISOString();
 		const encodedTitle = encodeTitleWithRules(user);
+		if (mode === "minimal") return {
+			id: user.id,
+			name: user.name,
+			email: user.email,
+			role: user.role,
+			avatar: safeAvatar,
+			title: encodedTitle
+		};
 		if (mode === "core") return {
 			id: user.id,
 			name: user.name,
@@ -35465,8 +35516,7 @@ var SupabaseService = class {
 			role: user.role,
 			phone: user.phone || "+95 9 000 000000",
 			avatar: safeAvatar,
-			title: encodedTitle,
-			updated_at: nowIso
+			title: encodedTitle
 		};
 		if (mode === "no_password") return {
 			id: user.id,
@@ -35478,8 +35528,7 @@ var SupabaseService = class {
 			avatar: safeAvatar,
 			title: encodedTitle,
 			gender: user.gender || "male",
-			address: user.address || null,
-			updated_at: nowIso
+			address: user.address || null
 		};
 		return {
 			id: user.id,
@@ -35492,13 +35541,11 @@ var SupabaseService = class {
 			avatar: safeAvatar,
 			title: encodedTitle,
 			gender: user.gender || "male",
-			address: user.address || null,
-			updated_at: nowIso
+			address: user.address || null
 		};
 	}
 	/**
 	* Create or update a profile in Supabase with cached schema mode & signature deduplication
-	* so Free Plan never wastes extra HTTP calls.
 	*/
 	static async upsertProfile(user, forceUpload = false, options) {
 		try {
@@ -35509,8 +35556,10 @@ var SupabaseService = class {
 			};
 			const payload = this.buildProfilePayload(normalizedUser, this.profileSchemaMode);
 			const sigKey = `profile:${normalizedUser.id}`;
-			const { updated_at: _ignoreTs, ...comparablePayload } = payload;
-			if (!forceUpload && !this.hasChangedSignature(sigKey, comparablePayload)) return { success: true };
+			if (!forceUpload && !this.hasChangedSignature(sigKey, payload)) return { success: true };
+			this.invalidateClientCache("profiles");
+			this.invalidateClientCache("profile_candidates");
+			for (const k of Array.from(this.inflightGetRequests.keys())) if (k.startsWith("profiles") || k.startsWith("profile_candidates")) this.inflightGetRequests.delete(k);
 			const emitProfilePeerUpdate = () => {
 				if (options?.silentRealtime) return;
 				if (options?.sessionLockOnly || normalizedUser.role === "student") this.notifyRealtimePeers("profile", { targetUserIds: [normalizedUser.id] });
@@ -35518,27 +35567,36 @@ var SupabaseService = class {
 			};
 			const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
 			if (!error) {
-				this.recordSignature(sigKey, comparablePayload);
+				this.recordSignature(sigKey, payload);
 				emitProfilePeerUpdate();
 				return { success: true };
 			}
 			if (error.code === "23505" || error.message && error.message.toLowerCase().includes("duplicate key")) try {
+				const dupFilters = [];
+				if (normalizedUser.username) dupFilters.push(`username.ilike.${normalizedUser.username}`);
+				if (normalizedUser.email) dupFilters.push(`email.ilike.${normalizedUser.email}`);
+				if (dupFilters.length > 0) {
+					const { data: oldDups } = await supabase.from("profiles").select("id").or(dupFilters.join(",")).neq("id", normalizedUser.id);
+					if (Array.isArray(oldDups)) oldDups.forEach((d) => {
+						if (d?.id) this.ignoredRealtimeDeleteIds.add(String(d.id));
+					});
+				}
 				if (normalizedUser.username) await supabase.from("profiles").delete().ilike("username", normalizedUser.username).neq("id", normalizedUser.id);
 				if (normalizedUser.email) await supabase.from("profiles").delete().ilike("email", normalizedUser.email).neq("id", normalizedUser.id);
 				const { error: retryErr } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
 				if (!retryErr) {
-					this.recordSignature(sigKey, comparablePayload);
+					this.recordSignature(sigKey, payload);
 					emitProfilePeerUpdate();
 					return { success: true };
 				}
 			} catch {}
 			const isMissingColumnError = error.code === "42703" || error.code === "PGRST204" || error.message && error.message.toLowerCase().includes("column");
-			if (this.profileSchemaMode === "full" && isMissingColumnError) {
+			if (this.profileSchemaMode === "full") {
 				const noPwdPayload = this.buildProfilePayload(normalizedUser, "no_password");
 				const { error: errNoPwd } = await supabase.from("profiles").upsert(noPwdPayload, { onConflict: "id" });
 				if (!errNoPwd) {
-					this.profileSchemaMode = "no_password";
-					this.recordSignature(sigKey, comparablePayload);
+					if (isMissingColumnError) this.profileSchemaMode = "no_password";
+					this.recordSignature(sigKey, payload);
 					emitProfilePeerUpdate();
 					return { success: true };
 				}
@@ -35547,13 +35605,20 @@ var SupabaseService = class {
 			const { error: fallbackError } = await supabase.from("profiles").upsert(corePayload, { onConflict: "id" });
 			if (!fallbackError) {
 				if (isMissingColumnError) this.profileSchemaMode = "core";
-				this.recordSignature(sigKey, comparablePayload);
+				this.recordSignature(sigKey, payload);
+				emitProfilePeerUpdate();
+				return { success: true };
+			}
+			const minimalPayload = this.buildProfilePayload(normalizedUser, "minimal");
+			const { error: minError } = await supabase.from("profiles").upsert(minimalPayload, { onConflict: "id" });
+			if (!minError) {
+				this.recordSignature(sigKey, payload);
 				emitProfilePeerUpdate();
 				return { success: true };
 			}
 			return {
 				success: false,
-				error: fallbackError.message || error.message
+				error: minError.message || fallbackError.message || error.message
 			};
 		} catch (err) {
 			return {
@@ -36350,21 +36415,29 @@ var SupabaseService = class {
 						const matchedLocalIdByEmail = rEmail ? localByEmail.get(rEmail) : void 0;
 						if (matchedLocalIdByUser && matchedLocalIdByUser !== rId || matchedLocalIdByEmail && matchedLocalIdByEmail !== rId) staleRemoteIdsToReplace.push(rId);
 					}
-					if (staleRemoteIdsToReplace.length > 0) for (const delChunk of this.chunkArray(staleRemoteIdsToReplace, 150)) await supabase.from("profiles").delete().in("id", delChunk);
+					if (staleRemoteIdsToReplace.length > 0) {
+						staleRemoteIdsToReplace.forEach((id) => this.ignoredRealtimeDeleteIds.add(id));
+						for (const delChunk of this.chunkArray(staleRemoteIdsToReplace, 150)) await supabase.from("profiles").delete().in("id", delChunk);
+					}
 				}
 			} catch {}
 			const upsertUserBatchWithSchemaFallback = async (batchUsers) => {
 				const modesToTry = this.profileSchemaMode === "full" ? [
 					"full",
 					"no_password",
-					"core"
-				] : this.profileSchemaMode === "no_password" ? ["no_password", "core"] : ["core"];
+					"core",
+					"minimal"
+				] : this.profileSchemaMode === "no_password" ? [
+					"no_password",
+					"core",
+					"minimal"
+				] : ["core", "minimal"];
 				let lastBatchErr = "";
 				for (const mode of modesToTry) {
 					const payloads = batchUsers.map((u) => this.buildProfilePayload(u, mode));
 					const { error: batchErr } = await supabase.from("profiles").upsert(payloads, { onConflict: "id" });
 					if (!batchErr) {
-						this.profileSchemaMode = mode;
+						if (mode !== "minimal") this.profileSchemaMode = mode;
 						for (let i = 0; i < batchUsers.length; i++) {
 							const { updated_at: _ignoreTs, ...comparable } = payloads[i];
 							this.recordSignature(`profile:${batchUsers[i].id}`, comparable);
@@ -37206,7 +37279,8 @@ var STORAGE_KEYS = {
 	SESSION_SEAL: "classroom_os_session_seal_v1",
 	CLOUD_CONFIRMED_POSTS: "classroom_os_cloud_confirmed_posts_v1",
 	CLOUD_CONFIRMED_ATTENDANCE: "classroom_os_cloud_confirmed_attendance_v1",
-	DELETED_USERS_META: "classroom_deleted_users_meta_v1"
+	CLOUD_CONFIRMED_USERS: "classroom_os_cloud_confirmed_users_v1",
+	DELETED_USERS_META: "classroom_deleted_users_meta_v2"
 };
 var ClassroomDB = class {
 	static {
@@ -37497,12 +37571,31 @@ var ClassroomDB = class {
 			return null;
 		}
 	}
+	static getCloudConfirmedUserIds() {
+		return new Set(this.getItem(STORAGE_KEYS.CLOUD_CONFIRMED_USERS, []));
+	}
+	static markUserCloudConfirmed(ids) {
+		const list = Array.isArray(ids) ? ids : [ids];
+		if (!list.length) return;
+		const current = this.getCloudConfirmedUserIds();
+		let changed = false;
+		list.forEach((id) => {
+			if (id && !current.has(id)) {
+				current.add(id);
+				changed = true;
+			}
+		});
+		if (changed) {
+			const bounded = Array.from(current).slice(-3e3);
+			this.setItem(STORAGE_KEYS.CLOUD_CONFIRMED_USERS, bounded);
+		}
+	}
 	static markLocalWrite(id) {
 		if (!id) return;
 		const now = Date.now();
 		const map = this.getItem(STORAGE_KEYS.RECENT_WRITES, {});
 		const next = {};
-		for (const [k, ts] of Object.entries(map)) if (k !== id && now - ts < 3e4) next[k] = ts;
+		for (const [k, ts] of Object.entries(map)) if (k !== id && now - ts < 3e5) next[k] = ts;
 		next[id] = now;
 		this.setItem(STORAGE_KEYS.RECENT_WRITES, next);
 	}
@@ -37515,13 +37608,100 @@ var ClassroomDB = class {
 			this.setItem(STORAGE_KEYS.RECENT_WRITES, next);
 		}
 	}
-	static isRecentLocalWrite(id, maxAgeMs = 12e3) {
+	static isRecentLocalWrite(id, maxAgeMs = 6e4) {
 		if (!id) return false;
 		const ts = this.getItem(STORAGE_KEYS.RECENT_WRITES, {})[id];
 		if (!ts) return false;
 		return Date.now() - ts < maxAgeMs;
 	}
+	static isInitialDemoUserId(id) {
+		return INITIAL_USERS.some((iu) => iu.id === id);
+	}
+	/**
+	* One-time self-healing recovery for any newly created accounts that were falsely marked as deleted
+	* by earlier login/sync false positives, cross-checking against the Audit Log (`USER_CREATED` vs `USER_DELETED`).
+	*/
+	static selfHealFalselyDeletedNewAccounts() {
+		if (typeof window === "undefined") return;
+		try {
+			if (localStorage.getItem("classroom_self_heal_new_accounts_v2") === "true") return;
+			localStorage.setItem("classroom_self_heal_new_accounts_v2", "true");
+			localStorage.removeItem("classroom_deleted_users_meta_v1");
+			const auditLogs = this.getItem(STORAGE_KEYS.AUDIT_LOGS, []);
+			const explicitDeletedUserIds = /* @__PURE__ */ new Set();
+			const explicitDeletedUsernames = [];
+			const explicitDeletedEmails = [];
+			const chronologicalLogs = [...auditLogs].sort((a, b) => (a.createdAtMs || 0) - (b.createdAtMs || 0));
+			const createdUserLogs = /* @__PURE__ */ new Map();
+			for (const log of chronologicalLogs) if (log.actionCode === "USER_CREATED" && log.targetId) {
+				createdUserLogs.set(log.targetId, log);
+				explicitDeletedUserIds.delete(log.targetId);
+			} else if (log.actionCode === "USER_DELETED") {
+				if (log.targetId) {
+					explicitDeletedUserIds.add(log.targetId);
+					createdUserLogs.delete(log.targetId);
+				}
+				const uMatch = (log.targetName || "").match(/\(@([^)]+)\)/);
+				if (uMatch && uMatch[1]) explicitDeletedUsernames.push(uMatch[1].trim().toLowerCase());
+				const eMatch = (log.details || "").match(/Deleted Email:\s*([^\s|]+)/i);
+				if (eMatch && eMatch[1]) explicitDeletedEmails.push(eMatch[1].trim().toLowerCase());
+			}
+			const rawDeletedIds = this.getDeletedIds();
+			const cleanedDeletedIds = rawDeletedIds.filter((id) => {
+				if (id.startsWith("user-") && !this.isInitialDemoUserId(id)) return explicitDeletedUserIds.has(id);
+				return true;
+			});
+			if (cleanedDeletedIds.length !== rawDeletedIds.length) this.setItem(STORAGE_KEYS.DELETED_IDS, cleanedDeletedIds);
+			if (explicitDeletedUsernames.length > 0 || explicitDeletedEmails.length > 0) this.recordDeletedUserMeta(explicitDeletedUsernames, explicitDeletedEmails);
+			if (createdUserLogs.size > 0) {
+				const currentUsers = this.getItem(STORAGE_KEYS.USERS, []);
+				const currentIds = new Set(currentUsers.map((u) => u.id));
+				const currentUsernames = new Set(currentUsers.map((u) => (u.username || "").trim().toLowerCase()));
+				let restoredAny = false;
+				createdUserLogs.forEach((log, targetId) => {
+					if (currentIds.has(targetId) || explicitDeletedUserIds.has(targetId)) return;
+					const nameAndUser = log.targetName || "";
+					const uMatch = nameAndUser.match(/^(.*?)\s*\(@([^)]+)\)\s*$/);
+					const parsedName = uMatch ? uMatch[1].trim() : nameAndUser.trim();
+					const parsedUsername = uMatch ? uMatch[2].trim().toLowerCase() : "";
+					if (!parsedName || !parsedUsername || currentUsernames.has(parsedUsername)) return;
+					const detailsStr = log.details || "";
+					const emailMatch = detailsStr.match(/Email:\s*([^|]+)/i);
+					const phoneMatch = detailsStr.match(/Phone:\s*([^|]+)/i);
+					const titleMatch = detailsStr.match(/အလုပ်အကိုင်\/ပညာအရည်အချင်း:\s*([^|]+)/i);
+					const parsedEmail = emailMatch ? emailMatch[1].trim().toLowerCase() : `${parsedUsername}@swanarh.edu`;
+					const parsedPhone = phoneMatch ? phoneMatch[1].trim() : "+95 9 000 000000";
+					const parsedTitle = titleMatch ? titleMatch[1].trim() : void 0;
+					const parsedRole = targetId.startsWith("user-admin-") ? "admin" : targetId.startsWith("user-co_admin-") ? "co_admin" : "student";
+					const restoredUser = {
+						id: targetId,
+						name: parsedName,
+						username: parsedUsername,
+						email: parsedEmail,
+						password: encryptPassword(parsedRole === "admin" ? "admin123" : parsedRole === "co_admin" ? "coadmin123" : "student123", parsedRole, targetId),
+						phone: parsedPhone,
+						role: parsedRole,
+						avatar: parsedRole === "admin" ? DEFAULT_AVATAR_SVG : "",
+						title: parsedTitle,
+						gender: "male"
+					};
+					currentUsers.push(restoredUser);
+					currentIds.add(targetId);
+					currentUsernames.add(parsedUsername);
+					this.unmarkDeletedId(targetId);
+					this.unmarkDeletedUserMeta(parsedUsername, parsedEmail);
+					this.markLocalWrite(targetId);
+					restoredAny = true;
+					try {
+						SupabaseService.upsertProfile(restoredUser, true).catch(() => {});
+					} catch {}
+				});
+				if (restoredAny) this.setItem(STORAGE_KEYS.USERS, currentUsers);
+			}
+		} catch {}
+	}
 	static init() {
+		this.selfHealFalselyDeletedNewAccounts();
 		const isCloudSynced = localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) === "true";
 		const deletedSet = new Set(this.getDeletedIds());
 		const deletedMeta = this.getDeletedUsersMeta();
@@ -38144,6 +38324,7 @@ var ClassroomDB = class {
 	*    purges any stale local/initial copy immediately and blocks login so deleted students can NEVER log in or re-upload themselves!
 	*/
 	static async loginWithRemoteFallback(identifier, password, expectedRole, forceTakeover = false) {
+		this.init();
 		const { cleanId, compactId, idLocalPart } = this.normalizeLoginIdentifier(identifier);
 		const cleanPwd = this.normalizeLoginPassword(password);
 		if (!cleanId || !cleanPwd) return {
@@ -38157,6 +38338,7 @@ var ClassroomDB = class {
 		};
 		const deletedSet = new Set(this.getDeletedIds());
 		const deletedMeta = this.getDeletedUsersMeta();
+		const cloudConfirmedUsers = this.getCloudConfirmedUserIds();
 		if (typeof navigator === "undefined" || navigator.onLine !== false) {
 			const remoteCheck = await Promise.race([SupabaseService.checkRemoteLoginCandidates(identifier), new Promise((resolve) => setTimeout(() => resolve({
 				networkOk: false,
@@ -38164,43 +38346,41 @@ var ClassroomDB = class {
 				users: []
 			}), 2500))]);
 			if (remoteCheck.networkOk && remoteCheck.dbSeeded) {
-				const validRemoteUsers = remoteCheck.users.filter((ru) => !this.isUserDeleted(ru, deletedSet, deletedMeta));
-				if (validRemoteUsers.length > 0) {
-					validRemoteUsers.forEach((ru) => this.mergeRemoteUserIntoLocal(ru, deletedSet));
+				const activeRemoteUsers = remoteCheck.users.filter((ru) => !deletedSet.has(ru.id));
+				if (activeRemoteUsers.length > 0) {
+					activeRemoteUsers.forEach((ru) => {
+						this.unmarkDeletedId(ru.id);
+						this.unmarkDeletedUserMeta(ru.username, ru.email);
+						deletedSet.delete(ru.id);
+						this.markUserCloudConfirmed(ru.id);
+						this.mergeRemoteUserIntoLocal(ru, deletedSet);
+					});
 					return this.login(identifier, cleanPwd, expectedRole, forceTakeover);
 				}
-				if (!this.getAllUsers().find((u) => {
+				const matchingLocalUser = this.getAllUsers().find((u) => {
 					const uName = (u.username || "").trim().replace(/^@+/, "").toLowerCase();
 					const uEmail = (u.email || "").trim().toLowerCase();
 					const uEmailLocal = uEmail.includes("@") ? uEmail.split("@")[0].trim() : uEmail;
-					return (uName === cleanId || uName === compactId || uName === idLocalPart || uEmail === cleanId || uEmail === compactId || uEmailLocal === idLocalPart) && this.isRecentLocalWrite(u.id, 15e3);
-				})) {
-					const rawUsers = this.getItem(STORAGE_KEYS.USERS, INITIAL_USERS);
-					const staleIds = [];
-					const staleUsernames = [];
-					const staleEmails = [];
-					const remainingUsers = rawUsers.filter((u) => {
-						const uName = (u.username || "").trim().replace(/^@+/, "").toLowerCase();
-						const uEmail = (u.email || "").trim().toLowerCase();
-						const uEmailLocal = uEmail.includes("@") ? uEmail.split("@")[0].trim() : uEmail;
-						if (uName === cleanId || uName === compactId || uName === idLocalPart || uEmail === cleanId || uEmail === compactId || uEmailLocal === idLocalPart) {
-							staleIds.push(u.id);
-							if (uName) staleUsernames.push(uName);
-							if (uEmail) staleEmails.push(uEmail);
-							return false;
-						}
-						return true;
-					});
-					if (staleIds.length > 0) {
-						this.recordDeletedIds(staleIds);
-						this.recordDeletedUserMeta(staleUsernames, staleEmails);
-						this.setItem(STORAGE_KEYS.USERS, remainingUsers);
+					return uName === cleanId || uName === compactId || uName === idLocalPart || uEmail === cleanId || uEmail === compactId || uEmailLocal === idLocalPart;
+				});
+				if (matchingLocalUser) {
+					if (!(this.isInitialDemoUserId(matchingLocalUser.id) && cloudConfirmedUsers.has(matchingLocalUser.id) && !this.isRecentLocalWrite(matchingLocalUser.id, 3e5))) {
+						try {
+							SupabaseService.upsertProfile(matchingLocalUser, true).catch(() => {});
+						} catch {}
+						return this.login(identifier, cleanPwd, expectedRole, forceTakeover);
 					}
+					const rawUsers = this.getItem(STORAGE_KEYS.USERS, INITIAL_USERS);
+					this.setItem(STORAGE_KEYS.USERS, rawUsers.filter((u) => u.id !== matchingLocalUser.id));
 					return {
 						user: null,
-						error: "ဤအကောင့်သည် စနစ်မှ ဖျက်သိမ်းထားပြီးဖြစ်ပါသည် သို့မဟုတ် Username/Password မှားယွင်းနေပါသည်။"
+						error: "ဤအကောင့်သည် စနစ်မှ ဖျက်သိမ်းထားပြီးဖြစ်ပါသည်။"
 					};
 				}
+				return {
+					user: null,
+					error: deletedMeta.usernames.includes(compactId) || deletedMeta.usernames.includes(idLocalPart) || deletedMeta.emails.includes(compactId) ? "ဤအကောင့်သည် စနစ်မှ ဖျက်သိမ်းထားပြီးဖြစ်ပါသည်။" : "Username သို့မဟုတ် Email နှင့် Password မှားယွင်းနေပါသည်။ ကျေးဇူးပြု၍ ပြန်လည်စစ်ဆေးပြီး ဝင်ရောက်ပါ။"
+				};
 			}
 		}
 		if (deletedMeta.usernames.includes(compactId) || deletedMeta.usernames.includes(idLocalPart) || deletedMeta.emails.includes(compactId)) return {
@@ -39614,12 +39794,19 @@ var ClassroomDB = class {
 						localStorage.setItem(STORAGE_KEYS.CLOUD_SYNCED, "true");
 					} catch {}
 					const remoteProfileIds = new Set(remoteProfiles.map((ru) => ru.id));
+					this.markUserCloudConfirmed(remoteProfiles.filter((ru) => !deletedSet.has(ru.id)).map((ru) => ru.id));
+					const cloudConfirmedUsers = this.getCloudConfirmedUserIds();
 					const localUsers = this.getAllUsers().filter((u) => !this.isUserDeleted(u, deletedSet, deletedMeta));
 					const prevJson = JSON.stringify(localUsers);
 					const userMap = /* @__PURE__ */ new Map();
 					localUsers.forEach((u) => {
-						if (remoteProfileIds.has(u.id) || this.isRecentLocalWrite(u.id) || isStudentLightweight && u.role === "student" && u.id !== loggedUser?.id) userMap.set(u.id, u);
-						else {
+						const isUnconfirmedNewUser = !this.isInitialDemoUserId(u.id) && !cloudConfirmedUsers.has(u.id);
+						if (remoteProfileIds.has(u.id) || this.isRecentLocalWrite(u.id) || isUnconfirmedNewUser || isStudentLightweight && u.role === "student" && u.id !== loggedUser?.id) {
+							userMap.set(u.id, u);
+							if (isUnconfirmedNewUser && !remoteProfileIds.has(u.id)) try {
+								SupabaseService.upsertProfile(u, true).catch(() => {});
+							} catch {}
+						} else {
 							newlyDiscoveredRemoteDeletions.push(u.id);
 							deletedSet.add(u.id);
 							if (u.username) newlyDeletedUsernames.push(u.username);
@@ -39751,12 +39938,19 @@ var ClassroomDB = class {
 				const latestAvatarByUserId = /* @__PURE__ */ new Map();
 				if (remoteProfiles && remoteProfiles.length > 0) {
 					const remoteProfileIds = new Set(remoteProfiles.map((ru) => ru.id));
+					this.markUserCloudConfirmed(remoteProfiles.filter((ru) => !deletedSet.has(ru.id)).map((ru) => ru.id));
+					const cloudConfirmedUsers = this.getCloudConfirmedUserIds();
 					const localUsers = this.getAllUsers().filter((u) => !this.isUserDeleted(u, deletedSet, deletedMeta));
 					const prevJson = JSON.stringify(localUsers);
 					const userMap = /* @__PURE__ */ new Map();
 					localUsers.forEach((u) => {
-						if (!cloudActive || isFreshUnseededRemoteDb || remoteProfileIds.has(u.id) || this.isRecentLocalWrite(u.id) || isStudentLightweight && u.role === "student" && u.id !== loggedUser?.id) userMap.set(u.id, u);
-						else {
+						const isUnconfirmedNewUser = !this.isInitialDemoUserId(u.id) && !cloudConfirmedUsers.has(u.id);
+						if (!cloudActive || isFreshUnseededRemoteDb || remoteProfileIds.has(u.id) || this.isRecentLocalWrite(u.id) || isUnconfirmedNewUser || isStudentLightweight && u.role === "student" && u.id !== loggedUser?.id) {
+							userMap.set(u.id, u);
+							if (cloudActive && isUnconfirmedNewUser && !remoteProfileIds.has(u.id)) try {
+								SupabaseService.upsertProfile(u, true).catch(() => {});
+							} catch {}
+						} else {
 							newlyDiscoveredRemoteDeletions.push(u.id);
 							deletedSet.add(u.id);
 							if (u.username) newlyDeletedUsernames.push(u.username);
@@ -39764,13 +39958,14 @@ var ClassroomDB = class {
 						}
 					});
 					remoteProfiles.forEach((ru) => {
-						if (this.isUserDeleted(ru, deletedSet, deletedMeta)) {
+						if (deletedSet.has(ru.id)) {
 							if (!this.purgedRemoteIds.has(ru.id)) {
 								this.purgedRemoteIds.add(ru.id);
 								SupabaseService.deleteProfile(ru.id, ru.username, ru.email).catch(() => {});
 							}
 							return;
 						}
+						if (this.isUserDeleted(ru, deletedSet, deletedMeta)) return;
 						const existing = userMap.get(ru.id);
 						const resolvedAvatar = ru.role !== "admin" ? "" : this.isRecentLocalWrite(ru.id) ? existing?.avatar || ru.avatar || "" : ru.avatar || existing?.avatar || "";
 						const mergedProfile = {
@@ -45083,7 +45278,7 @@ var PWAInstallButton = ({ variant = "navbar" }) => {
 };
 //#endregion
 //#region src/utils/appUpdater.ts
-var APP_VERSION_LABEL = "v20.5";
+var APP_VERSION_LABEL = "v20.7";
 /**
 * Performs a fast, non-destructive live update of both Classroom Cloud Data (Supabase)
 * and checks for any new Service Worker / Application Bundle updates.
@@ -46255,9 +46450,11 @@ var EditUserAccountModal = ({ user, isOpen, onClose, onSuccess, courses }) => {
 };
 //#endregion
 //#region src/components/Navbar.tsx
-var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, onLogout, onOpenArchitecture, onOpenStudentDirectory, onOpenAuditLog, onOpenRules, onResetData: _onResetData, onNavigateHome, notifications, onRefreshNotifications, onSelectNotificationCourse, theme, onToggleTheme, onUpdateCurrentUser }) => {
+var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, onLogout, onOpenArchitecture: _onOpenArchitecture, onOpenStudentDirectory, onOpenAuditLog, onOpenRules, onResetData: _onResetData, onNavigateHome, notifications, onRefreshNotifications, onSelectNotificationCourse, theme, onToggleTheme, onUpdateCurrentUser }) => {
 	const [showUserDropdown, setShowUserDropdown] = (0, import_react.useState)(false);
 	const [showNotifications, setShowNotifications] = (0, import_react.useState)(false);
+	const userMenuRef = (0, import_react.useRef)(null);
+	const notifMenuRef = (0, import_react.useRef)(null);
 	const [showProfilePictureModal, setShowProfilePictureModal] = (0, import_react.useState)(false);
 	const [showEditMyAccountModal, setShowEditMyAccountModal] = (0, import_react.useState)(false);
 	const [showPasswordModal, setShowPasswordModal] = (0, import_react.useState)(false);
@@ -46266,6 +46463,29 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 	useBackHandler(showProfilePictureModal, () => setShowProfilePictureModal(false));
 	useBackHandler(showEditMyAccountModal, () => setShowEditMyAccountModal(false));
 	useBackHandler(showPasswordModal, () => setShowPasswordModal(false));
+	(0, import_react.useEffect)(() => {
+		if (!showUserDropdown && !showNotifications) return;
+		const handlePointerDownOutside = (event) => {
+			const target = event.target;
+			if (!target) return;
+			if (showUserDropdown && userMenuRef.current && !userMenuRef.current.contains(target)) setShowUserDropdown(false);
+			if (showNotifications && notifMenuRef.current && !notifMenuRef.current.contains(target)) setShowNotifications(false);
+		};
+		const handleKeyDown = (event) => {
+			if (event.key === "Escape") {
+				setShowUserDropdown(false);
+				setShowNotifications(false);
+			}
+		};
+		document.addEventListener("mousedown", handlePointerDownOutside);
+		document.addEventListener("touchstart", handlePointerDownOutside, { passive: true });
+		document.addEventListener("keydown", handleKeyDown);
+		return () => {
+			document.removeEventListener("mousedown", handlePointerDownOutside);
+			document.removeEventListener("touchstart", handlePointerDownOutside);
+			document.removeEventListener("keydown", handleKeyDown);
+		};
+	}, [showUserDropdown, showNotifications]);
 	const [currentPwd, setCurrentPwd] = (0, import_react.useState)("");
 	const [newPwd, setNewPwd] = (0, import_react.useState)("");
 	const [confirmPwd, setConfirmPwd] = (0, import_react.useState)("");
@@ -46307,15 +46527,25 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
 		className: "sticky top-0 z-40 w-full max-w-full px-2 sm:px-6 pt-2 sm:pt-3",
 		children: [
+			(showUserDropdown || showNotifications) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "fixed inset-0 z-40 bg-slate-950/20 dark:bg-slate-950/45 sm:bg-transparent backdrop-blur-[1px] sm:backdrop-blur-none",
+				onClick: () => {
+					setShowUserDropdown(false);
+					setShowNotifications(false);
+				},
+				"aria-hidden": "true"
+			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "max-w-7xl mx-auto neu-raised rounded-2xl px-2.5 sm:px-5 h-14 sm:h-16 flex items-center justify-between gap-1.5 sm:gap-4 min-w-0 w-full",
+				className: "relative z-50 max-w-7xl mx-auto neu-raised rounded-2xl px-2.5 sm:px-5 h-14 sm:h-16 flex items-center justify-between gap-1.5 sm:gap-4 min-w-0 w-full",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "flex items-center gap-2 sm:gap-3 min-w-0 flex-1 sm:flex-initial sm:shrink-0",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							type: "button",
 							onClick: () => {
 								onNavigateHome();
 								setShowUserDropdown(false);
+								setShowNotifications(false);
 							},
 							className: "text-sm sm:text-base lg:text-lg font-extrabold tracking-tight text-slate-900 dark:text-slate-100 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer text-left flex items-center gap-2 min-w-0 max-w-full",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -46334,21 +46564,41 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 						className: "hidden lg:flex items-center gap-4 xl:gap-6 text-xs sm:text-sm font-semibold text-slate-600 dark:text-slate-300 shrink-0",
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								onClick: onNavigateHome,
+								type: "button",
+								onClick: () => {
+									setShowUserDropdown(false);
+									setShowNotifications(false);
+									onNavigateHome();
+								},
 								className: "hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer",
 								children: "My Classes"
 							}),
 							onOpenRules && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								onClick: onOpenRules,
+								type: "button",
+								onClick: () => {
+									setShowUserDropdown(false);
+									setShowNotifications(false);
+									onOpenRules();
+								},
 								className: "text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollText, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "စည်းကမ်းချက်များ" })]
 							}),
 							(currentUser.role === "admin" || currentUser.role === "co_admin") && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [onOpenStudentDirectory && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								onClick: onOpenStudentDirectory,
+								type: "button",
+								onClick: () => {
+									setShowUserDropdown(false);
+									setShowNotifications(false);
+									onOpenStudentDirectory();
+								},
 								className: "text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Users, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Manage Users" })]
 							}), currentUser.role === "admin" && onOpenAuditLog && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								onClick: onOpenAuditLog,
+								type: "button",
+								onClick: () => {
+									setShowUserDropdown(false);
+									setShowNotifications(false);
+									onOpenAuditLog();
+								},
 								className: "text-amber-700 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Shield, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Audit Log" })]
 							})] })
@@ -46370,21 +46620,24 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 								children: theme === "dark" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sun, { className: "w-4 h-4 sm:w-4.5 sm:h-4.5 text-amber-400 animate-in spin-in-90 duration-200" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Moon, { className: "w-4 h-4 sm:w-4.5 sm:h-4.5 text-slate-600 animate-in spin-in-90 duration-200" })
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "relative shrink-0",
+								ref: notifMenuRef,
+								className: "sm:relative shrink-0",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
 									onClick: () => {
-										setShowNotifications(!showNotifications);
+										setShowNotifications((prev) => !prev);
 										setShowUserDropdown(false);
 									},
 									className: "neu-btn p-2 sm:p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl relative cursor-pointer",
 									"aria-label": "View notifications",
+									"aria-expanded": showNotifications,
 									title: "အတန်းတွင်း အသိပေးချက်များ (Classroom Notifications)",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bell, { className: `w-4 h-4 sm:w-4.5 sm:h-4.5 ${unreadCount > 0 ? "text-indigo-600 dark:text-indigo-400" : ""}` }), unreadCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 										className: "absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-600 text-white text-[10px] font-extrabold flex items-center justify-center shadow-xs animate-pulse",
 										children: unreadCount > 9 ? "9+" : unreadCount
 									})]
 								}), showNotifications && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "neu-card fixed left-2.5 right-2.5 top-16 sm:absolute sm:left-auto sm:right-0 sm:top-full sm:mt-2.5 sm:w-96 max-w-[calc(100vw-1.25rem)] max-h-[calc(100dvh-4.75rem)] overflow-y-auto overflow-x-hidden rounded-2xl p-3.5 sm:p-4 z-50",
+									className: "neu-card absolute right-0 top-full mt-2 w-[calc(100vw-1rem)] max-w-96 sm:w-96 max-h-[calc(100dvh-5.5rem)] overflow-y-auto overflow-x-hidden rounded-2xl p-3.5 sm:p-4 z-50 shadow-2xl border border-slate-200/70 dark:border-slate-700/70 animate-in fade-in zoom-in-95 duration-150",
 									children: [
 										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 											className: "flex items-center justify-between gap-2 pb-3 border-b border-slate-200/60 dark:border-slate-800",
@@ -46399,20 +46652,31 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 													]
 												})]
 											}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-												className: "flex items-center gap-2 shrink-0",
-												children: [typeof window !== "undefined" && "Notification" in window && Notification.permission === "default" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-													type: "button",
-													onClick: () => {
-														Notification.requestPermission().catch(() => {});
-													},
-													className: "text-[10px] font-semibold px-2 py-0.5 rounded-lg bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 cursor-pointer",
-													title: "Browser Push Notification ဖွင့်ရန်",
-													children: "🔔 Alert ဖွင့်မည်"
-												}), unreadCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-													onClick: handleMarkNotificationsRead,
-													className: "text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer",
-													children: "အားလုံးဖတ်ပြီး"
-												})]
+												className: "flex items-center gap-1.5 shrink-0",
+												children: [
+													typeof window !== "undefined" && "Notification" in window && Notification.permission === "default" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+														type: "button",
+														onClick: () => {
+															Notification.requestPermission().catch(() => {});
+														},
+														className: "text-[10px] font-semibold px-2 py-0.5 rounded-lg bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 cursor-pointer",
+														title: "Browser Push Notification ဖွင့်ရန်",
+														children: "🔔 Alert ဖွင့်မည်"
+													}),
+													unreadCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+														type: "button",
+														onClick: handleMarkNotificationsRead,
+														className: "text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer",
+														children: "အားလုံးဖတ်ပြီး"
+													}),
+													/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+														type: "button",
+														onClick: () => setShowNotifications(false),
+														className: "neu-btn px-2 py-1 rounded-lg text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 text-[11px] font-bold flex items-center gap-1 cursor-pointer",
+														title: "ပိတ်မည် (Close)",
+														children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(X, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "ပိတ်မည်" })]
+													})
+												]
 											})]
 										}),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -46479,12 +46743,15 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 								})]
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "relative min-w-0 shrink",
+								ref: userMenuRef,
+								className: "sm:relative min-w-0 shrink",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
 									onClick: () => {
-										setShowUserDropdown(!showUserDropdown);
+										setShowUserDropdown((prev) => !prev);
 										setShowNotifications(false);
 									},
+									"aria-expanded": showUserDropdown,
 									className: "neu-btn flex items-center gap-1.5 sm:gap-2 px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-xl cursor-pointer min-w-0 max-w-[160px] sm:max-w-[200px] md:max-w-[230px]",
 									title: `${currentUser.name} (@${currentUser.username}) — Menu & Account Settings`,
 									children: [
@@ -46516,13 +46783,13 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 												children: currentUser.role === "admin" ? "Lead Mentor (Admin)" : currentUser.role === "co_admin" ? "Co-Admin" : "Student"
 											})]
 										}),
-										showUserDropdown ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(X, { className: "w-3.5 h-3.5 text-slate-500 dark:text-slate-300 shrink-0" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChevronDown, { className: "w-3.5 h-3.5 text-slate-400 shrink-0" })
+										showUserDropdown ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(X, { className: "w-3.5 h-3.5 text-rose-500 dark:text-rose-400 shrink-0" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChevronDown, { className: "w-3.5 h-3.5 text-slate-400 shrink-0" })
 									]
 								}), showUserDropdown && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "neu-card fixed left-2.5 right-2.5 top-16 sm:absolute sm:left-auto sm:right-0 sm:top-full sm:mt-2.5 sm:w-88 max-w-[calc(100vw-1.25rem)] max-h-[calc(100dvh-4.75rem)] overflow-y-auto overflow-x-hidden rounded-2xl p-3 z-50 space-y-2 animate-in fade-in zoom-in-95 duration-150",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-										className: "neu-inset-sm p-3 rounded-xl flex items-center justify-between gap-2.5 min-w-0",
-										children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "neu-card absolute right-0 top-full mt-2 w-[calc(100vw-1rem)] max-w-88 sm:w-88 max-h-[calc(100dvh-5.5rem)] overflow-y-auto overflow-x-hidden rounded-2xl p-3 z-50 space-y-2 shadow-2xl border border-slate-200/70 dark:border-slate-700/70 animate-in fade-in zoom-in-95 duration-150",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "neu-inset-sm p-2.5 sm:p-3 rounded-xl flex items-start justify-between gap-2 min-w-0",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 											className: "flex items-center gap-2.5 min-w-0 flex-1",
 											children: [currentUser.role === "admin" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
 												src: resolveAvatarUrl(currentUser.avatar),
@@ -46531,9 +46798,9 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 												onError: (e) => {
 													e.target.src = DEFAULT_AVATAR_SVG;
 												},
-												className: "w-11 h-11 rounded-full object-contain bg-white p-0.5 shrink-0 ring-2 ring-indigo-500/30 dark:ring-indigo-400/40 shadow-xs"
+												className: "w-10 h-10 sm:w-11 sm:h-11 rounded-full object-contain bg-white p-0.5 shrink-0 ring-2 ring-indigo-500/30 dark:ring-indigo-400/40 shadow-xs"
 											}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-												className: `w-11 h-11 rounded-2xl flex items-center justify-center text-base font-extrabold shrink-0 border ${currentUser.role === "co_admin" ? "bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800" : "bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800"}`,
+												className: `w-10 h-10 sm:w-11 sm:h-11 rounded-2xl flex items-center justify-center text-base font-extrabold shrink-0 border ${currentUser.role === "co_admin" ? "bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800" : "bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800"}`,
 												children: currentUser.role === "co_admin" ? "👥" : "🎓"
 											}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 												className: "min-w-0 flex-1 overflow-hidden",
@@ -46559,14 +46826,26 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 													})
 												]
 											})]
-										})
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+											type: "button",
+											onClick: (e) => {
+												e.stopPropagation();
+												setShowUserDropdown(false);
+											},
+											className: "neu-btn px-2 py-1 rounded-lg text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 text-[11px] font-bold flex items-center gap-1 shrink-0 cursor-pointer",
+											title: "Menu ပိတ်မည် (Close Menu)",
+											"aria-label": "Close Account Menu",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(X, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "ပိတ်မည်" })]
+										})]
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 										className: "space-y-1",
 										children: [
 											/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PWAInstallButton, { variant: "mobile-drawer" }),
 											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 												type: "button",
-												onClick: onToggleTheme,
+												onClick: () => {
+													onToggleTheme();
+												},
 												className: "w-full flex items-center justify-between gap-2 p-2.5 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-white/60 dark:hover:bg-slate-800/70 transition-colors cursor-pointer min-w-0",
 												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 													className: "flex items-center gap-2.5 min-w-0",
@@ -46677,9 +46956,9 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 													children: "Update App & Sync (ဗားရှင်းအသစ် ရယူရန်)"
 												})]
 											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-												className: "pt-1 border-t border-slate-200/60 dark:border-slate-800",
-												children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+												className: "pt-1.5 border-t border-slate-200/60 dark:border-slate-800 space-y-1",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 													type: "button",
 													onClick: () => {
 														setShowUserDropdown(false);
@@ -46690,7 +46969,12 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 														className: "truncate",
 														children: "Sign Out (အကောင့်မှ ထွက်ရန်)"
 													})]
-												})
+												}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+													type: "button",
+													onClick: () => setShowUserDropdown(false),
+													className: "w-full flex items-center justify-center gap-1.5 p-2 rounded-xl text-xs text-slate-600 dark:text-slate-300 bg-slate-200/60 dark:bg-slate-800/70 hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors cursor-pointer font-bold",
+													children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(X, { className: "w-3.5 h-3.5 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Menu ပိတ်မည် (Close)" })]
+												})]
 											})
 										]
 									})]
@@ -50538,17 +50822,6 @@ Email:
 			setFormError(result.error);
 			return;
 		}
-		if (result.student) SupabaseService.signUpWithSupabase(cleanEmail, newPassword.trim(), {
-			id: result.student.id,
-			name: result.student.name,
-			username: result.student.username,
-			role: "student",
-			phone: result.student.phone,
-			avatar: result.student.avatar,
-			title: result.student.title,
-			gender: newGender,
-			address: result.student.address
-		}).catch(() => {});
 		const finalCoursesLabel = availableCourses.filter((c) => targetCourses.includes(c.id)).map((c) => c.code).join(", ") || course.code;
 		setCreatedDetails({
 			name: cleanName,

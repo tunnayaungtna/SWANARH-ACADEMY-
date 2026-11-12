@@ -665,20 +665,6 @@ Email:
       return;
     }
 
-    if (result.student) {
-      SupabaseService.signUpWithSupabase(cleanEmail, newPassword.trim(), {
-        id: result.student.id,
-        name: result.student.name,
-        username: result.student.username,
-        role: 'student',
-        phone: result.student.phone,
-        avatar: result.student.avatar,
-        title: result.student.title,
-        gender: newGender,
-        address: result.student.address,
-      }).catch(() => {});
-    }
-
     const enrolledCourseCodes = availableCourses
       .filter((c) => targetCourses.includes(c.id))
       .map((c) => c.code)
