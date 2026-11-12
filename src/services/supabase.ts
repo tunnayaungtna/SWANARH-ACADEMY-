@@ -992,15 +992,19 @@ export class SupabaseService {
   private static ignoredRealtimeDeleteIds = new Set<string>();
 
   private static loadCloudCleanupTimestamps(): void {
-    if (typeof window === 'undefined' || (this.lastExpiredCleanupAt > 0 && this.lastAuditLogCleanupAt > 0)) {
+    if (
+      typeof window === 'undefined' ||
+      (this.lastExpiredCleanupAt > 0 && this.lastAuditLogCleanupAt > 0 && this.lastOrphanCleanupAt > 0)
+    ) {
       return;
     }
     try {
       const raw = localStorage.getItem('classroom_os_cloud_cleanup_ts_v1');
       if (raw) {
-        const parsed = JSON.parse(raw) as { expired?: number; audit?: number };
+        const parsed = JSON.parse(raw) as { expired?: number; audit?: number; orphan?: number };
         if (typeof parsed.expired === 'number') this.lastExpiredCleanupAt = parsed.expired;
         if (typeof parsed.audit === 'number') this.lastAuditLogCleanupAt = parsed.audit;
+        if (typeof parsed.orphan === 'number') this.lastOrphanCleanupAt = parsed.orphan;
       }
     } catch {
       // ignore
@@ -1015,6 +1019,7 @@ export class SupabaseService {
         JSON.stringify({
           expired: this.lastExpiredCleanupAt,
           audit: this.lastAuditLogCleanupAt,
+          orphan: this.lastOrphanCleanupAt,
         })
       );
     } catch {
@@ -1157,16 +1162,29 @@ export class SupabaseService {
       this.invalidateClientCache('profiles');
       this.invalidateClientCache('profile_candidates');
     }
-    if (incomingKind === 'course' || incomingKind === 'all') {
+    if (incomingKind === 'course' || incomingKind === 'delete' || incomingKind === 'all') {
       this.invalidateClientCache('courses');
     }
-    if (incomingKind === 'assignment' || incomingKind === 'all') {
+    if (incomingKind === 'post' || incomingKind === 'delete' || incomingKind === 'all') {
+      this.invalidateClientCache('posts');
+      this.invalidateClientCache('notifs');
+    }
+    if (incomingKind === 'attendance' || incomingKind === 'delete' || incomingKind === 'all') {
+      this.invalidateClientCache('attendance');
+    }
+    if (incomingKind === 'notification' || incomingKind === 'delete' || incomingKind === 'all') {
+      this.invalidateClientCache('notifs');
+    }
+    if (incomingKind === 'private_note' || incomingKind === 'delete' || incomingKind === 'all') {
+      this.invalidateClientCache('private_notes');
+    }
+    if (incomingKind === 'assignment' || incomingKind === 'delete' || incomingKind === 'all') {
       this.invalidateClientCache('assignments');
     }
-    if (incomingKind === 'submission' || incomingKind === 'all') {
+    if (incomingKind === 'submission' || incomingKind === 'delete' || incomingKind === 'all') {
       this.invalidateClientCache('submissions');
     }
-    if (incomingKind === 'quiz' || incomingKind === 'all') {
+    if (incomingKind === 'quiz' || incomingKind === 'delete' || incomingKind === 'all') {
       this.invalidateClientCache('quizzes');
     }
 
@@ -1226,7 +1244,7 @@ export class SupabaseService {
           // ignore
         }
       });
-    }, 150);
+    }, 320);
   }
 
   static subscribeToRealtimeChanges(
@@ -1844,6 +1862,10 @@ export class SupabaseService {
       const profileCoreCols = 'id,name,username,email,role,phone,avatar,title';
       const profileNoUsernameCols = 'id,name,email,role,phone,avatar,title';
 
+      const isAlreadyKnownSeeded =
+        typeof window !== 'undefined' &&
+        localStorage.getItem('classroom_cloud_synced') === 'true';
+
       const { data, error } = await supabase
         .from('profiles')
         .select(profileFullCols)
@@ -1861,7 +1883,14 @@ export class SupabaseService {
             users: matchedUsers,
           };
         }
-        // 0 rows matched: verify via lightweight HEAD count (0 bytes row payload) that `profiles` table is seeded
+        if (isAlreadyKnownSeeded) {
+          return {
+            networkOk: true,
+            dbSeeded: true,
+            users: [],
+          };
+        }
+        // 0 rows matched on first unverified check: verify via lightweight HEAD count (0 bytes row payload) that `profiles` table is seeded
         const { count, error: countErr } = await supabase
           .from('profiles')
           .select('id', { count: 'exact', head: true });
@@ -1891,6 +1920,13 @@ export class SupabaseService {
               networkOk: true,
               dbSeeded: true,
               users: matchedCoreUsers,
+            };
+          }
+          if (isAlreadyKnownSeeded) {
+            return {
+              networkOk: true,
+              dbSeeded: true,
+              users: [],
             };
           }
           const { count, error: countErr } = await supabase
@@ -1924,6 +1960,13 @@ export class SupabaseService {
               networkOk: true,
               dbSeeded: true,
               users: matchedFbUsers,
+            };
+          }
+          if (isAlreadyKnownSeeded) {
+            return {
+              networkOk: true,
+              dbSeeded: true,
+              users: [],
             };
           }
           const { count, error: countErr } = await supabase
@@ -2123,7 +2166,7 @@ export class SupabaseService {
         if (avatarCacheChanged) {
           this.persistAssetCache();
         }
-        this.setCachedQuery(cacheKey, mapped, isStudentLite ? 25_000 : 15_000);
+        this.setCachedQuery(cacheKey, mapped, isStudentLite ? 60_000 : 45_000);
         return mapped;
       } catch {
         return null;
@@ -2256,7 +2299,7 @@ export class SupabaseService {
         if (bannerCacheChanged) {
           this.persistAssetCache();
         }
-        this.setCachedQuery(cacheKey, mappedCourses, 15_000);
+        this.setCachedQuery(cacheKey, mappedCourses, 45_000);
         return mappedCourses;
       } catch {
         return null;
@@ -2292,8 +2335,11 @@ export class SupabaseService {
     const scopeKey = `${
       courseIds && courseIds.length > 0 ? courseIds.slice().sort().join(',') : 'all'
     }:${useDeltaPosts ? 'delta' : 'full'}`;
+    const cacheKey = `posts:${scopeKey}`;
+    const cached = this.getCachedQuery<CoursePost[]>(cacheKey);
+    if (cached) return cached;
 
-    return this.dedupeGet(`posts:${scopeKey}`, async () => {
+    return this.dedupeGet(cacheKey, async () => {
       try {
         const liteCols =
           'id,course_id,author_id,author_name,title,post_type,attachments,likes,created_at';
@@ -2386,7 +2432,7 @@ export class SupabaseService {
           }
         }
 
-        return rows.map((row) => {
+        const mappedPosts = rows.map((row) => {
           const pId = String(row.id || '');
           const rawAttachments = Array.isArray(row.attachments) ? row.attachments : [];
           let metaObj: Record<string, unknown> = {};
@@ -2508,6 +2554,8 @@ export class SupabaseService {
             comments: comments as CoursePost['comments'],
           };
         });
+        this.setCachedQuery(cacheKey, mappedPosts, 25_000);
+        return mappedPosts;
       } catch {
         return null;
       }
@@ -2643,7 +2691,8 @@ export class SupabaseService {
     knownSessions?: Map<
       string,
       { isOpen: boolean; statusUpdatedAtMs?: number; records: Record<string, AttendanceRecord> }
-    >
+    >,
+    forceRefresh: boolean = false
   ): Promise<AttendanceSession[] | null> {
     if (courseIds && courseIds.length === 0) {
       return [];
@@ -2652,8 +2701,13 @@ export class SupabaseService {
     const scopeKey = `${
       courseIds && courseIds.length > 0 ? courseIds.slice().sort().join(',') : 'all'
     }:${useDeltaRecords ? 'delta' : 'full'}`;
+    const cacheKey = `attendance:${scopeKey}`;
+    if (!forceRefresh) {
+      const cached = this.getCachedQuery<AttendanceSession[]>(cacheKey);
+      if (cached) return cached;
+    }
 
-    return this.dedupeGet(`attendance:${scopeKey}`, async () => {
+    return this.dedupeGet(cacheKey, async () => {
       try {
         const selectCols = useDeltaRecords
           ? 'id,course_id,date,display_date,title,is_open,opened_by,created_at'
@@ -2733,7 +2787,7 @@ export class SupabaseService {
           }
         }
 
-        return rows.map((row) => {
+        const mappedSessions = rows.map((row) => {
           const sId = String(row.id || '');
           const decodedState = decodeAttendanceOpenedBy(
             row.opened_by as string | null,
@@ -2768,6 +2822,8 @@ export class SupabaseService {
             records: cleanRecords,
           };
         });
+        this.setCachedQuery(cacheKey, mappedSessions, 12_000);
+        return mappedSessions;
       } catch {
         return null;
       }
@@ -2782,6 +2838,9 @@ export class SupabaseService {
       return null;
     }
     const cacheKey = `notifs:${userId || 'all'}`;
+    const cached = this.getCachedQuery<NotificationItem[]>(cacheKey);
+    if (cached) return cached;
+
     return this.dedupeGet(cacheKey, async () => {
       try {
         const cutoffIso = new Date(Date.now() - NOTIFICATION_TTL_MS).toISOString();
@@ -2795,7 +2854,7 @@ export class SupabaseService {
           .limit(40);
 
         if (userId) {
-          query = query.eq('user_id', userId);
+          query = query.in('user_id', [userId, 'COURSE_BROADCAST']);
         } else {
           query = query
             .neq('user_id', AUDIT_LOG_SYSTEM_USER_ID)
@@ -2812,7 +2871,7 @@ export class SupabaseService {
         this.notificationsTableStatus = 'available';
         if (!data) return [];
 
-        return data.map((row) => {
+        const mappedNotifs = data.map((row) => {
           const createdMs = row.created_at ? new Date(row.created_at).getTime() : Date.now();
           const expiresMs = row.expires_at
             ? new Date(row.expires_at).getTime()
@@ -2842,6 +2901,8 @@ export class SupabaseService {
             expiresAtMs: expiresMs,
           };
         });
+        this.setCachedQuery(cacheKey, mappedNotifs, 45_000);
+        return mappedNotifs;
       } catch {
         return null;
       }
@@ -2863,6 +2924,7 @@ export class SupabaseService {
       });
       if (validNotifs.length === 0) return true;
 
+      this.invalidateClientCache('notifs');
       const rows = validNotifs.map((n) => {
         const createdMs = n.createdAtMs || now;
         const expiresMs = n.expiresAtMs || createdMs + NOTIFICATION_TTL_MS;
@@ -3032,7 +3094,11 @@ export class SupabaseService {
     if (this.notificationsTableStatus === 'missing') {
       return null;
     }
-    return this.dedupeGet(`audit_logs:${limit}`, async () => {
+    const cacheKey = `audit_logs:${limit}`;
+    const cached = this.getCachedQuery<AuditLogEntry[]>(cacheKey);
+    if (cached) return cached;
+
+    return this.dedupeGet(cacheKey, async () => {
       try {
         const now = Date.now();
         const cutoffIso = new Date(now - AUDIT_LOG_TTL_MS).toISOString();
@@ -3111,6 +3177,7 @@ export class SupabaseService {
           this.purgeExpiredAuditLogs(expiredCloudIds, true).catch(() => {});
         }
 
+        this.setCachedQuery(cacheKey, logs, 45_000);
         return logs;
       } catch {
         return null;
@@ -3126,6 +3193,7 @@ export class SupabaseService {
       return false;
     }
     try {
+      this.invalidateClientCache('audit_logs');
       const rows = entries.map((e) => {
         const createdMs = e.createdAtMs || Date.now();
         const expiresMs = createdMs + AUDIT_LOG_TTL_MS;
@@ -3170,6 +3238,7 @@ export class SupabaseService {
   static async clearRemoteAuditLogs(): Promise<boolean> {
     if (this.notificationsTableStatus === 'missing') return false;
     try {
+      this.invalidateClientCache('audit_logs');
       const { error } = await supabase
         .from('notifications')
         .delete()
@@ -3189,6 +3258,7 @@ export class SupabaseService {
     studentId?: string;
     courseIds?: string[];
     limit?: number;
+    forceRefresh?: boolean;
   }): Promise<PrivateNote[] | null> {
     if (this.notificationsTableStatus === 'missing') {
       return null;
@@ -3199,8 +3269,14 @@ export class SupabaseService {
         ? options.courseIds.slice().sort().join(',')
         : 'all';
     const limit = options?.limit || 300;
+    const cacheKey = `private_notes:${studentKey}:${courseKey}:${limit}`;
 
-    return this.dedupeGet(`private_notes:${studentKey}:${courseKey}:${limit}`, async () => {
+    if (!options?.forceRefresh) {
+      const cached = this.getCachedQuery<PrivateNote[]>(cacheKey);
+      if (cached) return cached;
+    }
+
+    return this.dedupeGet(cacheKey, async () => {
       try {
         let query = supabase
           .from('notifications')
@@ -3240,6 +3316,7 @@ export class SupabaseService {
             // ignore malformed JSON
           }
         }
+        this.setCachedQuery(cacheKey, notes, 30_000);
         return notes;
       } catch {
         return null;
@@ -3256,6 +3333,7 @@ export class SupabaseService {
       return false;
     }
     try {
+      this.invalidateClientCache('private_notes');
       const createdMs = note.createdAtMs || Date.now();
       const expiresMs = createdMs + PRIVATE_NOTE_TTL_MS;
       const row = {
@@ -3298,6 +3376,7 @@ export class SupabaseService {
   static async deleteRemotePrivateNote(noteId: string, studentId?: string): Promise<boolean> {
     if (this.notificationsTableStatus === 'missing') return false;
     try {
+      this.invalidateClientCache('private_notes');
       this.ignoredRealtimeDeleteIds.add(noteId);
       const { error } = await supabase
         .from('notifications')
@@ -3845,6 +3924,7 @@ export class SupabaseService {
       if (!this.hasChangedSignature(sigKey, row)) {
         return true;
       }
+      this.invalidateClientCache('posts');
       const { error } = await supabase.from('posts').upsert(row, { onConflict: 'id' });
       if (!error) {
         this.recordSignature(sigKey, row);
@@ -3888,6 +3968,8 @@ export class SupabaseService {
   static async deletePost(postId: string): Promise<boolean> {
     try {
       this.lastUpsertSignatures.delete(`post:${postId}`);
+      this.invalidateClientCache('posts');
+      this.invalidateClientCache('notifs');
       await this.deleteNotificationsByPostId(postId);
       const { error } = await supabase.from('posts').delete().eq('id', postId);
       if (!error) {
@@ -4192,7 +4274,8 @@ export class SupabaseService {
         records: mergedRecords,
       };
 
-      // Clear any in-flight attendance GET deduplication so subsequent reads immediately fetch the new state
+      // Clear any cached or in-flight attendance GET deduplication so subsequent reads immediately fetch the new state
+      this.invalidateClientCache('attendance');
       for (const k of Array.from(this.inflightGetRequests.keys())) {
         if (k.startsWith('attendance:')) {
           this.inflightGetRequests.delete(k);
@@ -4335,6 +4418,7 @@ export class SupabaseService {
           .eq('is_open', true);
 
         if (!updateErr) {
+          this.invalidateClientCache('attendance');
           this.notifyRealtimePeers('attendance');
         }
 
@@ -4368,6 +4452,7 @@ export class SupabaseService {
   static async deleteAttendanceSession(sessionId: string): Promise<boolean> {
     try {
       this.lastUpsertSignatures.delete(`att:${sessionId}`);
+      this.invalidateClientCache('attendance');
       const { error } = await supabase.from('attendance_sessions').delete().eq('id', sessionId);
       if (!error) {
         this.notifyRealtimePeers('delete', { deletedIds: [sessionId] });
@@ -4389,12 +4474,14 @@ export class SupabaseService {
     deletedIds: string[] = [],
     force: boolean = false
   ): Promise<{ success: boolean; totalCleaned: number; details: string }> {
+    this.loadCloudCleanupTimestamps();
     const now = Date.now();
-    // Throttle automatic cloud orphan sweeps to once every 5 minutes unless forced
-    if (!force && now - this.lastOrphanCleanupAt < 300_000) {
-      return { success: true, totalCleaned: 0, details: 'Skipped (within 5m throttle window)' };
+    // Throttle automatic cloud orphan sweeps to once every 6 hours unless forced
+    if (!force && now - this.lastOrphanCleanupAt < 21_600_000) {
+      return { success: true, totalCleaned: 0, details: 'Skipped (within 6h throttle window)' };
     }
     this.lastOrphanCleanupAt = now;
+    this.saveCloudCleanupTimestamps();
 
     let totalCleaned = 0;
     const deletedSet = new Set(deletedIds);

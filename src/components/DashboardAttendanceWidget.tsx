@@ -55,7 +55,7 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
       }
     };
     syncNow();
-    const timer = setInterval(syncNow, 30000);
+    const timer = setInterval(syncNow, 60_000);
     return () => {
       mounted = false;
       clearInterval(timer);

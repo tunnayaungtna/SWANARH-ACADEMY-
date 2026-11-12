@@ -93,7 +93,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       onRefresh();
     };
     syncNow();
-    const timer = setInterval(syncNow, 8000);
+    const timer = setInterval(syncNow, 25_000);
     window.addEventListener('attendance-closed-remotely', handleRemoteClosed);
     return () => {
       mounted = false;

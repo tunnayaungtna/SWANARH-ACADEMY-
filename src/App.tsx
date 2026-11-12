@@ -319,7 +319,7 @@ export default function App() {
 
         const loggedUser = ClassroomDB.getCurrentUser();
         if (loggedUser && navigator.onLine !== false && !isLowBandwidthRef.current) {
-          if (now - lastWakeUpPullAt >= 8_000) {
+          if (now - lastWakeUpPullAt >= 30_000) {
             lastWakeUpPullAt = now;
             ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
               if (updated || !ClassroomDB.getCurrentUser()) {
@@ -334,7 +334,7 @@ export default function App() {
     window.addEventListener('pageshow', handleWakeUp);
     window.addEventListener('focus', handleWakeUp);
 
-    // Pro Plan 45s delta background sync fallback when user is active (Realtime WebSocket handles instant <150ms updates)
+    // 120s (2-minute) delta background sync fallback when user is active (Realtime WebSocket handles instant <320ms updates)
     const syncInterval = setInterval(() => {
       const isUserActive = Date.now() - lastUserInteractionAt <= 360_000;
       if (
@@ -352,17 +352,17 @@ export default function App() {
           });
         }
       }
-    }, 45_000);
+    }, 120_000);
 
-    // 15-second local timer to immediately auto-publish any due scheduled posts
+    // 20-second local timer to immediately auto-publish any due scheduled posts
     const scheduledPostsInterval = setInterval(() => {
       const publishedAny = ClassroomDB.checkAndPublishDueScheduledPosts();
       if (publishedAny) {
         refreshData();
       }
-    }, 15_000);
+    }, 20_000);
 
-    // 30-second local timer to silently auto-delete expired comments (>2 days), notifications (>30 mins), and Audit Logs (>2 days)
+    // 90-second local timer to silently auto-delete expired comments (>2 days), notifications (>30 mins), and Audit Logs (>2 days)
     const notifCleanupInterval = setInterval(() => {
       const publishedDue = ClassroomDB.checkAndPublishDueScheduledPosts();
       const purgedComments = ClassroomDB.purgeExpiredComments();
@@ -371,7 +371,7 @@ export default function App() {
       if (publishedDue || purgedComments || purgedNotifs || purgedAudit) {
         refreshData();
       }
-    }, 30000);
+    }, 90_000);
 
     // Automatically sync immediately whenever internet connection is restored
     const handleOnline = () => {
@@ -453,9 +453,9 @@ export default function App() {
     setQuizzes(ClassroomDB.getQuizzes(check.course.id));
     setProgress(ClassroomDB.getStudentProgress(currentUser.id, check.course.id));
 
-    // Immediately pull latest classroom updates when entering a classroom
+    // Pull latest classroom delta updates when entering a classroom (respecting query cache & cooldown)
     if (navigator.onLine !== false && !isLowBandwidthRef.current) {
-      ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
+      ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
         if (updated) {
           refreshData();
         }

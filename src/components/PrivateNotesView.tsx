@@ -61,7 +61,7 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
   useEffect(() => {
     ClassroomDB.markPrivateNotesReadForCourse(course.id, currentUser);
     onRefresh();
-    ClassroomDB.syncPrivateNotesFromCloud(true).then((changed) => {
+    ClassroomDB.syncPrivateNotesFromCloud().then((changed) => {
       if (changed) {
         ClassroomDB.markPrivateNotesReadForCourse(course.id, currentUser);
         onRefresh();
@@ -69,7 +69,7 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
     });
   }, [course.id, currentUser.id]);
 
-  // Background poll every 10 seconds while inside the Private Notes tab
+  // Quiet fallback poll every 35 seconds while inside the Private Notes tab (Realtime WebSocket handles live updates)
   useEffect(() => {
     let mounted = true;
     const interval = setInterval(() => {
@@ -80,7 +80,7 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
           }
         });
       }
-    }, 10_000);
+    }, 35_000);
     return () => {
       mounted = false;
       clearInterval(interval);

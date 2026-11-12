@@ -1,6 +1,6 @@
 import { ClassroomDB } from '../services/storage';
 
-export const APP_VERSION_LABEL = 'v21.0';
+export const APP_VERSION_LABEL = 'v21.1';
 export const ACTIVE_SW_CACHE_NAME = 'swanarh-classroom-v21';
 
 /**
@@ -35,13 +35,12 @@ export async function performQuickUpdateAndSync(
     })();
 
     // 2. Pull latest authoritative data from Supabase (Courses, Posts, Attendance, Profiles, Notifications)
-    const [pulled, attChanged] = await Promise.all([
+    const [pulled] = await Promise.all([
       ClassroomDB.pullFromSupabase({ force: true }),
-      ClassroomDB.syncAttendanceFromCloud(true),
       swCheckPromise,
     ]);
 
-    dataUpdated = Boolean(pulled || attChanged);
+    dataUpdated = Boolean(pulled);
     if (onDataRefreshed) {
       onDataRefreshed();
     }

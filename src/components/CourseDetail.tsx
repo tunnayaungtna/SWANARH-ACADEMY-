@@ -38,8 +38,8 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
     }
   }, [initialTab, course.id]);
 
-  // Live lightweight 0.3KB delta attendance & private notes sync while inside any classroom tab
-  // Guarantees that when Admin/Co-Admin opens/closes Attendance or replies to a Private Note, all screens update within seconds!
+  // Lightweight delta attendance & private notes sync while inside stream/people tabs
+  // (Realtime WebSocket handles instant <320ms live updates; this 35s timer is a quiet fallback)
   useEffect(() => {
     let mounted = true;
     const syncCourseLiveState = () => {
@@ -57,7 +57,7 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
       }
     };
     syncCourseLiveState();
-    const timer = setInterval(syncCourseLiveState, 8_000);
+    const timer = setInterval(syncCourseLiveState, 35_000);
     return () => {
       mounted = false;
       clearInterval(timer);
@@ -69,11 +69,11 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
     setTabHistory((prev) => [...prev, nextTab]);
     if (typeof navigator === 'undefined' || navigator.onLine !== false) {
       if (nextTab === 'attendance') {
-        ClassroomDB.syncAttendanceFromCloud(true).then((updated) => {
+        ClassroomDB.syncAttendanceFromCloud().then((updated) => {
           if (updated) onRefresh();
         });
       } else if (nextTab === 'private_notes') {
-        ClassroomDB.syncPrivateNotesFromCloud(true).then((updated) => {
+        ClassroomDB.syncPrivateNotesFromCloud().then((updated) => {
           if (updated) onRefresh();
         });
       } else {
