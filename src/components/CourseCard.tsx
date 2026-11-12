@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Course, User, StudentProgress } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
-import { ArrowRight, Trash2, AlertTriangle, ArrowUp, ArrowDown } from 'lucide-react';
+import { ArrowRight, Trash2, AlertTriangle, ArrowUp, ArrowDown, Lock } from 'lucide-react';
 
 interface CourseCardProps {
   course: Course;
@@ -9,7 +9,10 @@ interface CourseCardProps {
   progress?: StudentProgress;
   courseIndex?: number;
   totalCourses?: number;
-  onSelectCourse: (course: Course) => void;
+  onSelectCourse: (
+    course: Course,
+    initialTab?: 'stream' | 'attendance' | 'private_notes' | 'people'
+  ) => void;
   onRefresh?: () => void;
 }
 
@@ -30,6 +33,8 @@ export const CourseCard: React.FC<CourseCardProps> = ({
     currentUser.role === 'student'
       ? ClassroomDB.calculateTotalAttendancePercentage(course.id, currentUser.id)
       : 100;
+
+  const unreadPrivateNotesCount = ClassroomDB.getUnreadPrivateNotesCount(course.id, currentUser);
 
   const handleConfirmDeleteCourse = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -177,10 +182,35 @@ export const CourseCard: React.FC<CourseCardProps> = ({
             </p>
 
             {/* Clean Unboxed Metadata Line */}
-            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 pt-1 truncate">
-              <span className="truncate">{course.instructorName}</span>
-              <span aria-hidden="true" className="shrink-0">·</span>
-              <span className="shrink-0">{course.totalLessons} Lessons</span>
+            <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400 pt-1">
+              <div className="flex items-center gap-2 truncate min-w-0">
+                <span className="truncate">{course.instructorName}</span>
+                <span aria-hidden="true" className="shrink-0">·</span>
+                <span className="shrink-0">{course.totalLessons} Lessons</span>
+              </div>
+
+              {unreadPrivateNotesCount > 0 && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectCourse(course, 'private_notes');
+                  }}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-extrabold shadow-xs animate-pulse cursor-pointer shrink-0"
+                  title={
+                    isInstructor
+                      ? 'ကျောင်းသား ပေးပို့ထားသော သီးသန့်စာ/ခွင့်တိုင်စာ ဖတ်ရှုရန်'
+                      : 'ဆရာ ပြန်လည်ဖြေကြားထားသော သီးသန့်အဖြေ ဖတ်ရှုရန်'
+                  }
+                >
+                  <Lock className="w-3 h-3 shrink-0" />
+                  <span>
+                    {isInstructor
+                      ? `${unreadPrivateNotesCount} သီးသန့်စာ`
+                      : `${unreadPrivateNotesCount} ဆရာ့အဖြေသစ်`}
+                  </span>
+                </button>
+              )}
             </div>
 
             {/* Carved Attendance Rate Track for enrolled students */}

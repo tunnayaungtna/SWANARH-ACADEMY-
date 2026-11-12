@@ -215,6 +215,36 @@ export interface StudentProgress {
   certificate?: CertificateData;
 }
 
+export type PrivateNoteCategory = 'question' | 'leave_request' | 'feedback';
+
+export type PrivateNoteStatus = 'pending' | 'replied' | 'approved' | 'rejected';
+
+export interface PrivateNote {
+  id: string;
+  courseId: string;
+  courseCode: string;
+  courseTitle: string;
+  studentId: string;
+  studentName: string;
+  studentUsername: string;
+  category: PrivateNoteCategory;
+  subject: string;
+  leaveDate?: string;
+  content: string;
+  status: PrivateNoteStatus;
+  replyContent?: string;
+  repliedById?: string;
+  repliedByName?: string;
+  repliedByRole?: UserRole;
+  repliedAt?: string;
+  repliedAtMs?: number;
+  isReadByInstructor: boolean;
+  isReadByStudent: boolean;
+  createdAt: string;
+  createdAtMs: number;
+  updatedAtMs?: number;
+}
+
 export interface NotificationItem {
   id: string;
   userId: string;
@@ -226,7 +256,9 @@ export interface NotificationItem {
   authorRole?: UserRole;
   title: string;
   message: string;
-  type: 'post' | 'grade' | 'quiz' | 'certificate';
+  type: 'post' | 'grade' | 'quiz' | 'certificate' | 'private_note';
+  targetTab?: 'stream' | 'attendance' | 'people' | 'private_notes';
+  privateNoteId?: string;
   isRead: boolean;
   createdAt: string;
   createdAtMs?: number; // Epoch ms when notification was created

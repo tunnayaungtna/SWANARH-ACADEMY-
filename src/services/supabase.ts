@@ -11,6 +11,7 @@ import {
   AttendanceRecord,
   NotificationItem,
   AuditLogEntry,
+  PrivateNote,
 } from '../types/classroom';
 import { encryptPassword } from '../utils/passwordCrypto';
 import {
@@ -22,7 +23,9 @@ import {
 export const NOTIFICATION_TTL_MS = 30 * 60 * 1000; // 30 minutes auto-delete window
 export const AUDIT_LOG_TTL_MS = 2 * 24 * 60 * 60 * 1000; // 2 days (48 hours) security audit auto-delete window
 export const COMMENT_TTL_MS = 2 * 24 * 60 * 60 * 1000; // 2 days (48 hours) silent post comment auto-delete window
+export const PRIVATE_NOTE_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days (6 months) retention for Private Notes
 const AUDIT_LOG_SYSTEM_USER_ID = 'SYSTEM_AUDIT_LOG';
+const PRIVATE_NOTE_SYSTEM_USER_ID = 'SYSTEM_PRIVATE_NOTE';
 
 export function resolveCommentTimestampMs(
   comment: { id?: unknown; createdAt?: unknown; createdAtMs?: unknown },
@@ -696,7 +699,7 @@ DELETE FROM public.assignment_submissions WHERE assignment_id NOT IN (SELECT id 
 DELETE FROM public.quizzes WHERE course_id NOT IN (SELECT id FROM public.courses);
 DELETE FROM public.quiz_submissions WHERE quiz_id NOT IN (SELECT id FROM public.quizzes) OR student_id NOT IN (SELECT id FROM public.profiles);
 DELETE FROM public.attendance_sessions WHERE course_id NOT IN (SELECT id FROM public.courses);
-DELETE FROM public.notifications WHERE course_id NOT IN (SELECT id FROM public.courses) OR user_id NOT IN (SELECT id FROM public.profiles) OR expires_at <= now();
+DELETE FROM public.notifications WHERE course_id NOT IN (SELECT id FROM public.courses) OR (user_id NOT IN ('SYSTEM_AUDIT_LOG', 'SYSTEM_PRIVATE_NOTE') AND (user_id NOT IN (SELECT id FROM public.profiles) OR expires_at <= now()));
 
 -- Strip redundant Base64 avatars from posts, profiles, and submissions to cut Egress by 96%
 UPDATE public.posts SET author_avatar = '' WHERE author_avatar IS NOT NULL AND author_avatar <> '';
@@ -1079,6 +1082,14 @@ export class SupabaseService {
             }
             const newNotif = (payload?.new || {}) as Record<string, unknown>;
             if (newNotif.user_id === AUDIT_LOG_SYSTEM_USER_ID || newNotif.type === 'audit_log') {
+              return;
+            }
+            if (newNotif.user_id === PRIVATE_NOTE_SYSTEM_USER_ID || newNotif.type === 'private_note') {
+              const targetStudentId = newNotif.post_id ? String(newNotif.post_id) : undefined;
+              this.triggerRealtimeListeners({
+                kind: 'private_note',
+                targetUserIds: targetStudentId ? [targetStudentId] : undefined,
+              });
               return;
             }
             this.triggerRealtimeListeners({ kind: 'notification' });
@@ -2791,7 +2802,9 @@ export class SupabaseService {
         if (userId) {
           query = query.eq('user_id', userId);
         } else {
-          query = query.neq('user_id', AUDIT_LOG_SYSTEM_USER_ID);
+          query = query
+            .neq('user_id', AUDIT_LOG_SYSTEM_USER_ID)
+            .neq('user_id', PRIVATE_NOTE_SYSTEM_USER_ID);
         }
 
         const { data, error } = await query;
@@ -2923,6 +2936,7 @@ export class SupabaseService {
           .from('notifications')
           .delete()
           .neq('user_id', AUDIT_LOG_SYSTEM_USER_ID)
+          .neq('user_id', PRIVATE_NOTE_SYSTEM_USER_ID)
           .or(`created_at.lt.${cutoffIso},expires_at.lte.${nowIso}`);
 
         if (error) {
@@ -3004,6 +3018,7 @@ export class SupabaseService {
         .from('notifications')
         .delete()
         .neq('user_id', AUDIT_LOG_SYSTEM_USER_ID)
+        .neq('user_id', PRIVATE_NOTE_SYSTEM_USER_ID)
         .eq('post_id', postId);
       if (error && (error.code === '42P01' || error.message?.includes('notifications'))) {
         this.notificationsTableStatus = 'missing';
@@ -3164,6 +3179,142 @@ export class SupabaseService {
         .from('notifications')
         .delete()
         .eq('user_id', AUDIT_LOG_SYSTEM_USER_ID);
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Fetch Private Notes / Leave Requests from Supabase.
+   * - Students filter by `post_id = studentId` so they physically ONLY download their own notes!
+   * - Admins / Co-Admins fetch all private notes across courses.
+   */
+  static async getRemotePrivateNotes(options?: {
+    studentId?: string;
+    courseIds?: string[];
+    limit?: number;
+  }): Promise<PrivateNote[] | null> {
+    if (this.notificationsTableStatus === 'missing') {
+      return null;
+    }
+    const studentKey = options?.studentId || 'all';
+    const courseKey =
+      options?.courseIds && options.courseIds.length > 0
+        ? options.courseIds.slice().sort().join(',')
+        : 'all';
+    const limit = options?.limit || 300;
+
+    return this.dedupeGet(`private_notes:${studentKey}:${courseKey}:${limit}`, async () => {
+      try {
+        let query = supabase
+          .from('notifications')
+          .select('id,course_id,course_code,course_title,post_id,author_name,title,message,created_at')
+          .eq('user_id', PRIVATE_NOTE_SYSTEM_USER_ID)
+          .order('created_at', { ascending: false })
+          .limit(limit);
+
+        if (options?.studentId) {
+          query = query.eq('post_id', options.studentId);
+        }
+        if (options?.courseIds && options.courseIds.length > 0 && options.courseIds.length <= 25) {
+          query = query.in('course_id', options.courseIds);
+        }
+
+        const { data, error } = await query;
+        if (error) {
+          if (error.code === '42P01' || error.message?.includes('notifications')) {
+            this.notificationsTableStatus = 'missing';
+          }
+          return null;
+        }
+        this.notificationsTableStatus = 'available';
+        if (!data) return [];
+
+        const notes: PrivateNote[] = [];
+        for (const row of data) {
+          try {
+            if (row.message && String(row.message).trim().startsWith('{')) {
+              const parsed = JSON.parse(String(row.message)) as PrivateNote;
+              if (parsed && parsed.id && parsed.courseId && parsed.studentId) {
+                notes.push(parsed);
+                continue;
+              }
+            }
+          } catch {
+            // ignore malformed JSON
+          }
+        }
+        return notes;
+      } catch {
+        return null;
+      }
+    });
+  }
+
+  /**
+   * Upsert a Private Note / Leave Request to Supabase (`user_id = 'SYSTEM_PRIVATE_NOTE'`).
+   * Never deleted by the 30-minute notification sweep.
+   */
+  static async upsertPrivateNote(note: PrivateNote, silent: boolean = false): Promise<boolean> {
+    if (this.notificationsTableStatus === 'missing') {
+      return false;
+    }
+    try {
+      const createdMs = note.createdAtMs || Date.now();
+      const expiresMs = createdMs + PRIVATE_NOTE_TTL_MS;
+      const row = {
+        id: note.id,
+        user_id: PRIVATE_NOTE_SYSTEM_USER_ID,
+        course_id: note.courseId,
+        course_code: note.courseCode || null,
+        course_title: note.courseTitle || '',
+        post_id: note.studentId, // Stored in post_id for strict student-scoped SQL filtering
+        author_name: note.studentName,
+        author_role: 'student',
+        title: note.subject || 'Private Note',
+        message: JSON.stringify(note),
+        type: 'private_note',
+        is_read: Boolean(note.isReadByInstructor && note.isReadByStudent),
+        created_at: new Date(createdMs).toISOString(),
+        expires_at: new Date(expiresMs).toISOString(),
+      };
+
+      const { error } = await supabase.from('notifications').upsert([row], { onConflict: 'id' });
+      if (error) {
+        if (error.code === '42P01' || error.message?.includes('notifications')) {
+          this.notificationsTableStatus = 'missing';
+        }
+        return false;
+      }
+      this.notificationsTableStatus = 'available';
+      if (!silent) {
+        this.notifyRealtimePeers('private_note', { targetUserIds: [note.studentId] });
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Delete a Private Note from Supabase
+   */
+  static async deleteRemotePrivateNote(noteId: string, studentId?: string): Promise<boolean> {
+    if (this.notificationsTableStatus === 'missing') return false;
+    try {
+      this.ignoredRealtimeDeleteIds.add(noteId);
+      const { error } = await supabase
+        .from('notifications')
+        .delete()
+        .eq('id', noteId)
+        .eq('user_id', PRIVATE_NOTE_SYSTEM_USER_ID);
+      if (!error) {
+        this.notifyRealtimePeers('delete', {
+          deletedIds: [noteId],
+          targetUserIds: studentId ? [studentId] : undefined,
+        });
+      }
       return !error;
     } catch {
       return false;
@@ -4401,6 +4552,17 @@ export class SupabaseService {
           const pId = r.post_id ? String(r.post_id) : '';
           // Never delete SYSTEM_AUDIT_LOG rows during orphan notification sweeps
           if (uId === AUDIT_LOG_SYSTEM_USER_ID) {
+            return;
+          }
+          // For SYSTEM_PRIVATE_NOTE rows, pId stores studentId (not postId)
+          if (uId === PRIVATE_NOTE_SYSTEM_USER_ID) {
+            if (
+              deletedSet.has(id) ||
+              (cId && !courseIdSet.has(cId)) ||
+              (pId && !userIdSet.has(pId))
+            ) {
+              orphanNotifIds.push(id);
+            }
             return;
           }
           if (

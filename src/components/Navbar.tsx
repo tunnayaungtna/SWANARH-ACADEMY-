@@ -42,7 +42,10 @@ interface NavbarProps {
   onNavigateHome: () => void;
   notifications: NotificationItem[];
   onRefreshNotifications: () => void;
-  onSelectNotificationCourse?: (courseId: string) => void;
+  onSelectNotificationCourse?: (
+    courseId: string,
+    targetTab?: 'stream' | 'attendance' | 'private_notes' | 'people'
+  ) => void;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
   onUpdateCurrentUser: (user: User) => void;
@@ -385,7 +388,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                             ClassroomDB.markNotificationRead(notif.id);
                             onRefreshNotifications();
                             if (notif.courseId && onSelectNotificationCourse) {
-                              onSelectNotificationCourse(notif.courseId);
+                              onSelectNotificationCourse(
+                                notif.courseId,
+                                notif.targetTab ||
+                                  (notif.type === 'private_note' ? 'private_notes' : 'stream')
+                              );
                               setShowNotifications(false);
                             }
                           }}
@@ -409,15 +416,21 @@ export const Navbar: React.FC<NavbarProps> = ({
                           <div className="flex items-center justify-between gap-2 mt-2 pt-1.5 border-t border-slate-200/40 dark:border-slate-700/40 text-[10px]">
                             <span className="text-slate-400 font-mono truncate">
                               {notif.createdAt}
-                              {remainingMins !== null && (
-                                <span className="ml-1.5 text-amber-600 dark:text-amber-400 font-semibold">
-                                  · ⏱ {remainingMins}m ကျန်
+                              {notif.type === 'private_note' ? (
+                                <span className="ml-1.5 text-emerald-600 dark:text-emerald-400 font-semibold">
+                                  · 🔒 သီးသန့်စာ (မပျက်ပါ)
                                 </span>
+                              ) : (
+                                remainingMins !== null && (
+                                  <span className="ml-1.5 text-amber-600 dark:text-amber-400 font-semibold">
+                                    · ⏱ {remainingMins}m ကျန်
+                                  </span>
+                                )
                               )}
                             </span>
                             {notif.courseId && (
                               <span className="font-bold text-indigo-600 dark:text-indigo-400 shrink-0">
-                                အတန်းသို့ →
+                                {notif.type === 'private_note' ? 'စာဖတ်ရန် →' : 'အတန်းသို့ →'}
                               </span>
                             )}
                           </div>

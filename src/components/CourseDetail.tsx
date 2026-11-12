@@ -3,47 +3,61 @@ import { Course, CoursePost, User, CertificateData } from '../types/classroom';
 import { CourseStream } from './CourseStream';
 import { PeopleView } from './PeopleView';
 import { AttendanceView } from './AttendanceView';
+import { PrivateNotesView } from './PrivateNotesView';
 import { ClassroomDB } from '../services/storage';
 import { useBackHandler } from '../utils/backNavigation';
-import { ArrowLeft, MessageSquare, Users, CalendarCheck } from 'lucide-react';
+import { ArrowLeft, MessageSquare, Users, CalendarCheck, Lock } from 'lucide-react';
+
+export type ClassroomTab = 'stream' | 'attendance' | 'private_notes' | 'people';
 
 interface CourseDetailProps {
   course: Course;
   currentUser: User;
   posts: CoursePost[];
+  initialTab?: ClassroomTab;
   onBack: () => void;
   onRefresh: () => void;
   onOpenCertificate: (cert: CertificateData) => void;
 }
 
-type ClassroomTab = 'stream' | 'attendance' | 'people';
-
 export const CourseDetail: React.FC<CourseDetailProps> = ({
   course,
   currentUser,
   posts,
+  initialTab = 'stream',
   onBack,
   onRefresh,
   onOpenCertificate,
 }) => {
-  const [tabHistory, setTabHistory] = useState<ClassroomTab[]>(['stream']);
+  const [tabHistory, setTabHistory] = useState<ClassroomTab[]>([initialTab]);
   const activeTab = tabHistory[tabHistory.length - 1] || 'stream';
 
-  // Live lightweight 0.3KB delta attendance sync while inside any classroom tab (Stream, Attendance, People)
-  // Guarantees that when Admin/Co-Admin opens or closes Attendance, all student screens update within seconds!
+  useEffect(() => {
+    if (initialTab && initialTab !== activeTab) {
+      setTabHistory((prev) => [...prev, initialTab]);
+    }
+  }, [initialTab, course.id]);
+
+  // Live lightweight 0.3KB delta attendance & private notes sync while inside any classroom tab
+  // Guarantees that when Admin/Co-Admin opens/closes Attendance or replies to a Private Note, all screens update within seconds!
   useEffect(() => {
     let mounted = true;
-    const syncCourseAttendance = () => {
+    const syncCourseLiveState = () => {
       if (document.visibilityState === 'visible' && navigator.onLine !== false) {
         ClassroomDB.syncAttendanceFromCloud().then((changed) => {
           if (mounted && changed) {
             onRefresh();
           }
         });
+        ClassroomDB.syncPrivateNotesFromCloud().then((changed) => {
+          if (mounted && changed) {
+            onRefresh();
+          }
+        });
       }
     };
-    syncCourseAttendance();
-    const timer = setInterval(syncCourseAttendance, 8_000);
+    syncCourseLiveState();
+    const timer = setInterval(syncCourseLiveState, 8_000);
     return () => {
       mounted = false;
       clearInterval(timer);
@@ -56,6 +70,10 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
     if (typeof navigator === 'undefined' || navigator.onLine !== false) {
       if (nextTab === 'attendance') {
         ClassroomDB.syncAttendanceFromCloud(true).then((updated) => {
+          if (updated) onRefresh();
+        });
+      } else if (nextTab === 'private_notes') {
+        ClassroomDB.syncPrivateNotesFromCloud(true).then((updated) => {
           if (updated) onRefresh();
         });
       } else {
@@ -73,11 +91,12 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
 
   const attendanceSessions = ClassroomDB.getAttendanceSessions(course.id);
   const hasOpenAttendance = attendanceSessions.some((s) => s.isOpen);
+  const unreadPrivateNotesCount = ClassroomDB.getUnreadPrivateNotesCount(course.id, currentUser);
 
   return (
     <div className="space-y-5 sm:space-y-6">
       {/* Top Sculpted Neumorphic Course Header & Tab Switcher */}
-      <div className="neu-raised rounded-3xl p-3.5 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5">
+      <div className="neu-raised rounded-3xl p-3.5 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-3.5">
         <div className="flex items-center gap-3 min-w-0">
           <button
             onClick={onBack}
@@ -100,11 +119,11 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
           </div>
         </div>
 
-        {/* Recessed Neumorphic 3-Tab Switcher (Stream · Attendance · People) */}
-        <div className="neu-inset p-1.5 rounded-2xl grid grid-cols-3 sm:flex items-center gap-1 sm:gap-1.5 text-xs font-bold self-stretch sm:self-auto">
+        {/* Recessed Neumorphic 4-Tab Switcher (Stream · Attendance · Private Notes · People) */}
+        <div className="neu-inset p-1.5 rounded-2xl grid grid-cols-2 sm:flex items-center gap-1 sm:gap-1.5 text-xs font-bold self-stretch lg:self-auto">
           <button
             onClick={() => handleSwitchTab('stream')}
-            className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2 sm:px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
+            className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'stream'
                 ? 'neu-raised-sm text-indigo-700 dark:text-indigo-300'
                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -116,7 +135,7 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
 
           <button
             onClick={() => handleSwitchTab('attendance')}
-            className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2 sm:px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
+            className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'attendance'
                 ? 'neu-raised-sm text-emerald-700 dark:text-emerald-300'
                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -130,8 +149,30 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
           </button>
 
           <button
+            onClick={() => handleSwitchTab('private_notes')}
+            className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
+              activeTab === 'private_notes'
+                ? 'neu-raised-sm text-amber-800 dark:text-amber-300'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+            }`}
+            title={
+              currentUser.role === 'student'
+                ? 'ဆရာသို့ သီးသန့်မေးရန် / ခွင့်တိုင်ရန် (Private Note & Leave Request)'
+                : 'ကျောင်းသား သီးသန့်စာများနှင့် ခွင့်တိုင်ကြားစာများ (Private Student Notes)'
+            }
+          >
+            <Lock className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span>သီးသန့်စာ</span>
+            {unreadPrivateNotesCount > 0 && (
+              <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-rose-600 text-white text-[10px] font-extrabold flex items-center justify-center animate-pulse shrink-0">
+                {unreadPrivateNotesCount}
+              </span>
+            )}
+          </button>
+
+          <button
             onClick={() => handleSwitchTab('people')}
-            className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2 sm:px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
+            className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'people'
                 ? 'neu-raised-sm text-indigo-700 dark:text-indigo-300'
                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -161,6 +202,14 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
             currentUser={currentUser}
             onRefresh={onRefresh}
             onOpenCertificate={onOpenCertificate}
+          />
+        )}
+
+        {activeTab === 'private_notes' && (
+          <PrivateNotesView
+            course={course}
+            currentUser={currentUser}
+            onRefresh={onRefresh}
           />
         )}
 

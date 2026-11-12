@@ -17,6 +17,9 @@ import {
   AuditLogEntry,
   AuditLogCategory,
   AuditLogSeverity,
+  PrivateNote,
+  PrivateNoteCategory,
+  PrivateNoteStatus,
 } from '../types/classroom';
 import {
   SupabaseService,
@@ -83,6 +86,7 @@ const STORAGE_KEYS = {
   CLOUD_CONFIRMED_ATTENDANCE: 'classroom_os_cloud_confirmed_attendance_v1',
   CLOUD_CONFIRMED_USERS: 'classroom_os_cloud_confirmed_users_v1',
   DELETED_USERS_META: 'classroom_deleted_users_meta_v2',
+  PRIVATE_NOTES: 'classroom_private_notes_v1',
 };
 
 // Rate limiting in-memory / storage tracker
@@ -4091,6 +4095,7 @@ export class ClassroomDB {
           remoteQuizzes,
           initialRemoteAttendance,
           remoteNotifications,
+          remotePrivateNotes,
           singleLoggedProfile,
         ] = await Promise.all([
           wantProfiles
@@ -4114,6 +4119,12 @@ export class ClassroomDB {
             : Promise.resolve(null),
           wantNotifications && loggedUser
             ? SupabaseService.getRemoteNotifications(loggedUser.id)
+            : Promise.resolve(null),
+          wantNotifications && loggedUser
+            ? SupabaseService.getRemotePrivateNotes({
+                studentId: loggedUser.role === 'student' ? loggedUser.id : undefined,
+                courseIds: studentScopedCourseIds,
+              })
             : Promise.resolve(null),
           !wantProfiles && !targetTables && loggedUser && loggedUser.role === 'student'
             ? SupabaseService.getRemoteProfileByIdentifier(loggedUser.username || loggedUser.email, true)
@@ -4705,6 +4716,13 @@ export class ClassroomDB {
           }
         }
 
+        // 7. Private Notes Reconciliation
+        if (remotePrivateNotes !== null) {
+          if (this.reconcileRemotePrivateNotes(remotePrivateNotes, deletedSet)) {
+            updated = true;
+          }
+        }
+
         if (newlyDiscoveredRemoteDeletions.length > 0) {
           this.recordDeletedIds(newlyDiscoveredRemoteDeletions);
           if (newlyDeletedUsernames.length > 0 || newlyDeletedEmails.length > 0) {
@@ -4984,6 +5002,105 @@ export class ClassroomDB {
       }
     })();
     return this.activeAttendanceSyncPromise;
+  }
+
+  /**
+   * Reconciles remote Private Notes with local Private Notes using updatedAtMs / repliedAtMs / createdAtMs
+   */
+  private static reconcileRemotePrivateNotes(
+    remoteNotes: PrivateNote[],
+    externalDeletedSet?: Set<string>
+  ): boolean {
+    const deletedSet = externalDeletedSet || new Set(this.getDeletedIds());
+    const localNotes = this.getItem<PrivateNote[]>(STORAGE_KEYS.PRIVATE_NOTES, []).filter(
+      (n) => !deletedSet.has(n.id) && !deletedSet.has(n.courseId)
+    );
+    const prevJson = JSON.stringify(localNotes);
+    const noteMap = new Map<string, PrivateNote>();
+
+    localNotes.forEach((ln) => {
+      noteMap.set(ln.id, ln);
+    });
+
+    remoteNotes.forEach((rn) => {
+      if (!rn || !rn.id || deletedSet.has(rn.id) || deletedSet.has(rn.courseId)) {
+        return;
+      }
+      const existing = noteMap.get(rn.id);
+      if (!existing) {
+        noteMap.set(rn.id, rn);
+        return;
+      }
+      const localTs = existing.updatedAtMs || existing.repliedAtMs || existing.createdAtMs || 0;
+      const remoteTs = rn.updatedAtMs || rn.repliedAtMs || rn.createdAtMs || 0;
+      const winner = remoteTs >= localTs ? rn : existing;
+      noteMap.set(rn.id, {
+        ...existing,
+        ...winner,
+        isReadByInstructor: Boolean(existing.isReadByInstructor || rn.isReadByInstructor),
+        isReadByStudent:
+          winner.status !== 'pending' && existing.status === 'pending'
+            ? Boolean(rn.isReadByStudent)
+            : Boolean(existing.isReadByStudent || rn.isReadByStudent),
+      });
+    });
+
+    const merged = Array.from(noteMap.values()).sort(
+      (a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0)
+    );
+    if (JSON.stringify(merged) !== prevJson) {
+      this.setItem(STORAGE_KEYS.PRIVATE_NOTES, merged);
+      return true;
+    }
+    return false;
+  }
+
+  private static activePrivateNoteSyncPromise: Promise<boolean> | null = null;
+  private static lastPrivateNoteSyncAt = 0;
+  static async syncPrivateNotesFromCloud(force: boolean = false): Promise<boolean> {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return false;
+    }
+    const now = Date.now();
+    if (!force && now - this.lastPrivateNoteSyncAt < 5_000) {
+      return false;
+    }
+    if (this.activePrivateNoteSyncPromise) {
+      return this.activePrivateNoteSyncPromise;
+    }
+    this.lastPrivateNoteSyncAt = now;
+    this.activePrivateNoteSyncPromise = (async () => {
+      try {
+        const loggedUser = this.getCurrentUser();
+        if (!loggedUser) return false;
+        const deletedSet = new Set(this.getDeletedIds());
+        const currentCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter(
+          (c) => !deletedSet.has(c.id)
+        );
+        const enrolledIdsForStudent =
+          loggedUser.role === 'student'
+            ? currentCourses
+                .filter((c) => c.enrolledStudentIds.includes(loggedUser.id))
+                .map((c) => c.id)
+            : undefined;
+        const studentScopedCourseIds =
+          enrolledIdsForStudent && enrolledIdsForStudent.length > 0
+            ? enrolledIdsForStudent
+            : undefined;
+
+        const remoteNotes = await SupabaseService.getRemotePrivateNotes({
+          studentId: loggedUser.role === 'student' ? loggedUser.id : undefined,
+          courseIds: studentScopedCourseIds,
+        });
+        if (!remoteNotes) return false;
+        return this.reconcileRemotePrivateNotes(remoteNotes, deletedSet);
+      } catch {
+        return false;
+      } finally {
+        this.activePrivateNoteSyncPromise = null;
+      }
+    })();
+    return this.activePrivateNoteSyncPromise;
   }
 
   /**
@@ -7273,10 +7390,93 @@ export class ClassroomDB {
   static getNotifications(userId: string): NotificationItem[] {
     this.purgeExpiredNotifications();
     const notifs = this.getItem<NotificationItem[]>(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
-    return notifs.filter((n) => n.userId === userId);
+    const regularNotifs = notifs.filter((n) => n.userId === userId);
+
+    // Synthesize persistent Bell notifications for Pending Private Notes (Admin/Co-Admin)
+    // and Unseen Instructor Replies (Students) so they NEVER disappear after 30 minutes!
+    const user = this.getAllUsers().find((u) => u.id === userId) || this.getCurrentUser();
+    const persistentPrivateNotifs: NotificationItem[] = [];
+
+    if (user && user.id === userId) {
+      const notes = this.getPrivateNotes(undefined, user);
+      if (user.role === 'admin' || user.role === 'co_admin') {
+        for (const note of notes) {
+          if (note.status === 'pending') {
+            const catLabel =
+              note.category === 'leave_request'
+                ? '📅 ခွင့်တိုင်ကြားစာ (Leave Request)'
+                : note.category === 'question'
+                ? '📘 သင်ခန်းစာ မေးခွန်း (Question)'
+                : '💬 သီးသန့် တင်ပြချက် (Feedback)';
+            persistentPrivateNotifs.push({
+              id: `pnote-bell-instructor-${note.id}`,
+              userId: user.id,
+              courseId: note.courseId,
+              courseCode: note.courseCode,
+              courseTitle: note.courseTitle,
+              authorName: note.studentName,
+              authorRole: 'student',
+              title: `${catLabel} — ${note.studentName}`,
+              message: `[${note.courseCode}] ${note.subject}${
+                note.leaveDate ? ` (ခွင့်ရက်: ${note.leaveDate})` : ''
+              }: ${note.content.slice(0, 90)}${note.content.length > 90 ? '...' : ''}`,
+              type: 'private_note',
+              targetTab: 'private_notes',
+              privateNoteId: note.id,
+              isRead: Boolean(note.isReadByInstructor),
+              createdAt: note.createdAt,
+              createdAtMs: note.createdAtMs,
+            });
+          }
+        }
+      } else if (user.role === 'student') {
+        for (const note of notes) {
+          if (note.studentId === user.id && note.status !== 'pending' && !note.isReadByStudent) {
+            const statusText =
+              note.status === 'approved'
+                ? 'ခွင့်ပြုပြီး ✓'
+                : note.status === 'rejected'
+                ? 'ငြင်းပယ်ထားသည်'
+                : 'ဖြေကြားပြီး ✓';
+            persistentPrivateNotifs.push({
+              id: `pnote-bell-student-${note.id}`,
+              userId: user.id,
+              courseId: note.courseId,
+              courseCode: note.courseCode,
+              courseTitle: note.courseTitle,
+              authorName: note.repliedByName || 'Instructor',
+              authorRole: note.repliedByRole || 'admin',
+              title: `💬 ဆရာမှ အဖြေပြန်ကြားထားပါသည် (${statusText})`,
+              message: `[${note.courseCode}] ${note.subject} — "${(note.replyContent || '').slice(
+                0,
+                95
+              )}${(note.replyContent || '').length > 95 ? '...' : ''}"`,
+              type: 'private_note',
+              targetTab: 'private_notes',
+              privateNoteId: note.id,
+              isRead: false,
+              createdAt: note.repliedAt || note.createdAt,
+              createdAtMs: note.repliedAtMs || note.createdAtMs,
+            });
+          }
+        }
+      }
+    }
+
+    return [...persistentPrivateNotifs, ...regularNotifs];
   }
 
   static markNotificationRead(notificationId: string): void {
+    if (notificationId.startsWith('pnote-bell-instructor-')) {
+      const noteId = notificationId.replace('pnote-bell-instructor-', '');
+      this.markPrivateNoteReadByInstructor(noteId);
+      return;
+    }
+    if (notificationId.startsWith('pnote-bell-student-')) {
+      const noteId = notificationId.replace('pnote-bell-student-', '');
+      this.markPrivateNoteReadByStudent(noteId);
+      return;
+    }
     const notifs = this.getItem<NotificationItem[]>(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
     let targetNotif: NotificationItem | null = null;
     const updated = notifs.map((n) => {
@@ -7297,6 +7497,43 @@ export class ClassroomDB {
   }
 
   static markAllNotificationsRead(userId: string): void {
+    const user = this.getAllUsers().find((u) => u.id === userId) || this.getCurrentUser();
+    if (user && user.id === userId) {
+      const allNotes = this.getItem<PrivateNote[]>(STORAGE_KEYS.PRIVATE_NOTES, []);
+      let notesMutated = false;
+      const notesToSync: PrivateNote[] = [];
+      const nowMs = Date.now();
+      const updatedNotes = allNotes.map((note) => {
+        if (
+          (user.role === 'admin' || user.role === 'co_admin') &&
+          !note.isReadByInstructor
+        ) {
+          notesMutated = true;
+          const next = { ...note, isReadByInstructor: true, updatedAtMs: nowMs };
+          notesToSync.push(next);
+          return next;
+        }
+        if (
+          user.role === 'student' &&
+          note.studentId === user.id &&
+          note.status !== 'pending' &&
+          !note.isReadByStudent
+        ) {
+          notesMutated = true;
+          const next = { ...note, isReadByStudent: true, updatedAtMs: nowMs };
+          notesToSync.push(next);
+          return next;
+        }
+        return note;
+      });
+      if (notesMutated) {
+        this.setItem(STORAGE_KEYS.PRIVATE_NOTES, updatedNotes);
+        notesToSync.forEach((n) => {
+          SupabaseService.upsertPrivateNote(n, true).catch(() => {});
+        });
+      }
+    }
+
     const notifs = this.getItem<NotificationItem[]>(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
     const updatedForUser: NotificationItem[] = [];
     const updated = notifs.map((n) => {
@@ -7315,6 +7552,288 @@ export class ClassroomDB {
         // ignore
       }
     }
+  }
+
+  // ============================================================================
+  // PRIVATE STUDENT NOTES & LEAVE REQUESTS (သီးသန့် မေးမြန်းချက်နှင့် ခွင့်တိုင်စာစနစ်)
+  // ============================================================================
+
+  static getPrivateNotes(courseId?: string, viewer?: User | null): PrivateNote[] {
+    const activeViewer = viewer || this.getCurrentUser();
+    if (!activeViewer) return [];
+    const deletedSet = new Set(this.getDeletedIds());
+    const validCourseIds = new Set(
+      this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES)
+        .filter((c) => !deletedSet.has(c.id))
+        .map((c) => c.id)
+    );
+
+    const allNotes = this.getItem<PrivateNote[]>(STORAGE_KEYS.PRIVATE_NOTES, []).filter(
+      (n) =>
+        n &&
+        n.id &&
+        !deletedSet.has(n.id) &&
+        !deletedSet.has(n.courseId) &&
+        !deletedSet.has(n.studentId) &&
+        validCourseIds.has(n.courseId)
+    );
+
+    const scoped = allNotes.filter((n) => {
+      if (courseId && n.courseId !== courseId) return false;
+      // Strict Privacy: Students can ONLY see their own private notes!
+      if (activeViewer.role === 'student') {
+        return n.studentId === activeViewer.id;
+      }
+      return true;
+    });
+
+    return scoped.sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
+  }
+
+  static getUnreadPrivateNotesCount(courseId?: string, viewer?: User | null): number {
+    const activeViewer = viewer || this.getCurrentUser();
+    if (!activeViewer) return 0;
+    const notes = this.getPrivateNotes(courseId, activeViewer);
+    if (activeViewer.role === 'admin' || activeViewer.role === 'co_admin') {
+      // Count unanswered (pending) student notes/leave requests
+      return notes.filter((n) => n.status === 'pending').length;
+    }
+    // For students, count replied/approved/rejected notes they haven't read yet
+    return notes.filter((n) => n.status !== 'pending' && !n.isReadByStudent).length;
+  }
+
+  static createPrivateNote(
+    data: {
+      courseId: string;
+      category: PrivateNoteCategory;
+      subject: string;
+      leaveDate?: string;
+      content: string;
+    },
+    student: User
+  ): PrivateNote {
+    const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const course = courses.find((c) => c.id === data.courseId);
+    if (!course) {
+      throw new Error('သင်တန်းအခန်း မတွေ့ရှိပါ။');
+    }
+    const nowMs = Date.now();
+    const timeLabel = this.formatPostTimestamp(nowMs);
+    const defaultSubject =
+      data.category === 'leave_request'
+        ? `ခွင့်တိုင်ကြားစာ (${data.leaveDate || 'Leave Request'})`
+        : data.category === 'question'
+        ? 'သင်ခန်းစာ မေးခွန်း (Lesson Question)'
+        : 'သီးသန့် တင်ပြချက် (General Feedback)';
+
+    const newNote: PrivateNote = {
+      id: `pnote-${nowMs}-${Math.random().toString(36).slice(2, 7)}`,
+      courseId: course.id,
+      courseCode: course.code,
+      courseTitle: course.title,
+      studentId: student.id,
+      studentName: student.name,
+      studentUsername: student.username,
+      category: data.category,
+      subject: data.subject.trim() || defaultSubject,
+      leaveDate: data.category === 'leave_request' && data.leaveDate ? data.leaveDate.trim() : undefined,
+      content: data.content.trim(),
+      status: 'pending',
+      isReadByInstructor: false,
+      isReadByStudent: true,
+      createdAt: timeLabel,
+      createdAtMs: nowMs,
+      updatedAtMs: nowMs,
+    };
+
+    const existing = this.getItem<PrivateNote[]>(STORAGE_KEYS.PRIVATE_NOTES, []);
+    this.markLocalWrite(newNote.id);
+    this.setItem(STORAGE_KEYS.PRIVATE_NOTES, [newNote, ...existing]);
+
+    try {
+      SupabaseService.upsertPrivateNote(newNote).catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    return newNote;
+  }
+
+  static replyToPrivateNote(
+    noteId: string,
+    replyContent: string,
+    newStatus: Exclude<PrivateNoteStatus, 'pending'>,
+    instructor: User
+  ): PrivateNote | null {
+    if (instructor.role !== 'admin' && instructor.role !== 'co_admin') {
+      throw new Error('Unauthorized: Only Admin or Co-Admin can reply to student private notes.');
+    }
+    const existing = this.getItem<PrivateNote[]>(STORAGE_KEYS.PRIVATE_NOTES, []);
+    const target = existing.find((n) => n.id === noteId);
+    if (!target) return null;
+
+    const nowMs = Date.now();
+    const timeLabel = this.formatPostTimestamp(nowMs);
+    const defaultReply =
+      newStatus === 'approved'
+        ? 'သင်တင်ပြသော ခွင့်တိုင်ကြားစာကို သိရှိခွင့်ပြုပေးလိုက်ပါသည်။ ✓'
+        : newStatus === 'rejected'
+        ? 'သင်တင်ပြသော ခွင့်တိုင်ကြားစာကို ခွင့်မပြုနိုင်ပါ။'
+        : 'သင်၏ တင်ပြချက်ကို သိရှိဖြေကြားပေးလိုက်ပါသည်။';
+
+    const updatedNote: PrivateNote = {
+      ...target,
+      status: newStatus,
+      replyContent: replyContent.trim() || defaultReply,
+      repliedById: instructor.id,
+      repliedByName: instructor.name,
+      repliedByRole: instructor.role,
+      repliedAt: timeLabel,
+      repliedAtMs: nowMs,
+      isReadByInstructor: true,
+      isReadByStudent: false,
+      updatedAtMs: nowMs,
+    };
+
+    const updatedList = existing.map((n) => (n.id === noteId ? updatedNote : n));
+    this.markLocalWrite(noteId);
+    this.setItem(STORAGE_KEYS.PRIVATE_NOTES, updatedList);
+
+    // If this is an approved Leave Request and an Attendance Session exists for that course & date,
+    // automatically mark the student as 'excused' (ခွင့်ဖြင့်ပျက်ကွက်) in that session!
+    if (
+      target.category === 'leave_request' &&
+      newStatus === 'approved' &&
+      target.leaveDate
+    ) {
+      const sessions = this.getAttendanceSessions(target.courseId);
+      const matchingSession = sessions.find((s) => s.date === target.leaveDate);
+      const studentUser = this.getAllUsers().find((u) => u.id === target.studentId);
+      if (matchingSession && studentUser) {
+        this.instructorMarkAttendance(
+          matchingSession.id,
+          studentUser,
+          'excused',
+          `ခွင့်တိုင်ကြားစာ ခွင့်ပြုပြီး (${instructor.name})`
+        );
+      }
+    }
+
+    try {
+      SupabaseService.upsertPrivateNote(updatedNote).catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    this.recordAuditLog({
+      actor: instructor,
+      category: 'academic',
+      actionCode: 'PRIVATE_NOTE_REPLIED',
+      actionLabel: 'ကျောင်းသား သီးသန့်စာ/ခွင့်တိုင်စာ ပြန်ကြားခြင်း (Private Note Replied)',
+      severity: 'info',
+      targetType: 'user',
+      targetId: target.studentId,
+      targetName: target.studentName,
+      courseId: target.courseId,
+      courseCode: target.courseCode,
+      courseTitle: target.courseTitle,
+      summary: `${instructor.name} မှ ကျောင်းသား "${target.studentName}" ၏ သီးသန့်စာ (${target.subject}) ကို [${newStatus.toUpperCase()}] အဖြစ် ပြန်လည်ဖြေကြားခဲ့ပါသည်။`,
+      details: `အဖြေ: ${updatedNote.replyContent}`,
+    });
+
+    return updatedNote;
+  }
+
+  static markPrivateNoteReadByInstructor(noteId: string): void {
+    const existing = this.getItem<PrivateNote[]>(STORAGE_KEYS.PRIVATE_NOTES, []);
+    let targetNote: PrivateNote | null = null;
+    const nowMs = Date.now();
+    const updated = existing.map((n) => {
+      if (n.id === noteId && !n.isReadByInstructor) {
+        targetNote = { ...n, isReadByInstructor: true, updatedAtMs: nowMs };
+        return targetNote;
+      }
+      return n;
+    });
+    if (targetNote) {
+      this.setItem(STORAGE_KEYS.PRIVATE_NOTES, updated);
+      SupabaseService.upsertPrivateNote(targetNote, true).catch(() => {});
+    }
+  }
+
+  static markPrivateNoteReadByStudent(noteId: string): void {
+    const existing = this.getItem<PrivateNote[]>(STORAGE_KEYS.PRIVATE_NOTES, []);
+    let targetNote: PrivateNote | null = null;
+    const nowMs = Date.now();
+    const updated = existing.map((n) => {
+      if (n.id === noteId && !n.isReadByStudent) {
+        targetNote = { ...n, isReadByStudent: true, updatedAtMs: nowMs };
+        return targetNote;
+      }
+      return n;
+    });
+    if (targetNote) {
+      this.setItem(STORAGE_KEYS.PRIVATE_NOTES, updated);
+      SupabaseService.upsertPrivateNote(targetNote, true).catch(() => {});
+    }
+  }
+
+  static markPrivateNotesReadForCourse(courseId: string, user: User): void {
+    const existing = this.getItem<PrivateNote[]>(STORAGE_KEYS.PRIVATE_NOTES, []);
+    const toSync: PrivateNote[] = [];
+    const nowMs = Date.now();
+    const updated = existing.map((n) => {
+      if (n.courseId !== courseId) return n;
+      if (
+        user.role === 'student' &&
+        n.studentId === user.id &&
+        n.status !== 'pending' &&
+        !n.isReadByStudent
+      ) {
+        const next = { ...n, isReadByStudent: true, updatedAtMs: nowMs };
+        toSync.push(next);
+        return next;
+      }
+      if (
+        (user.role === 'admin' || user.role === 'co_admin') &&
+        !n.isReadByInstructor
+      ) {
+        const next = { ...n, isReadByInstructor: true, updatedAtMs: nowMs };
+        toSync.push(next);
+        return next;
+      }
+      return n;
+    });
+    if (toSync.length > 0) {
+      this.setItem(STORAGE_KEYS.PRIVATE_NOTES, updated);
+      toSync.forEach((n) => {
+        SupabaseService.upsertPrivateNote(n, true).catch(() => {});
+      });
+    }
+  }
+
+  static deletePrivateNote(noteId: string, actor: User): boolean {
+    const existing = this.getItem<PrivateNote[]>(STORAGE_KEYS.PRIVATE_NOTES, []);
+    const target = existing.find((n) => n.id === noteId);
+    if (!target) return false;
+    if (
+      actor.role !== 'admin' &&
+      actor.role !== 'co_admin' &&
+      target.studentId !== actor.id
+    ) {
+      return false;
+    }
+    this.recordDeletedIds([noteId]);
+    this.setItem(
+      STORAGE_KEYS.PRIVATE_NOTES,
+      existing.filter((n) => n.id !== noteId)
+    );
+    try {
+      SupabaseService.deleteRemotePrivateNote(noteId, target.studentId).catch(() => {});
+    } catch {
+      // ignore
+    }
+    return true;
   }
 
   static addNotification(item: Omit<NotificationItem, 'id' | 'createdAt' | 'isRead'>): NotificationItem {

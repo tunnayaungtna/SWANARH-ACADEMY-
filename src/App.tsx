@@ -78,6 +78,9 @@ export default function App() {
   const [showReorderPanel, setShowReorderPanel] = useState(false);
   const [draggedCourseId, setDraggedCourseId] = useState<string | null>(null);
   const [appBannerError, setAppBannerError] = useState<string | null>(null);
+  const [selectedCourseInitialTab, setSelectedCourseInitialTab] = useState<
+    'stream' | 'attendance' | 'private_notes' | 'people'
+  >('stream');
 
   // Mobile Back Key step-by-step navigation handlers (outer to inner)
   useBackHandler(!!selectedCourse, () => setSelectedCourse(null));
@@ -185,6 +188,24 @@ export default function App() {
         return;
       }
 
+      // 1b. Fast path for Private Note events (students ignore notes belonging to other students)
+      if (kinds.length === 1 && kinds[0] === 'private_note') {
+        if (
+          loggedUser.role === 'student' &&
+          payload?.targetUserIds &&
+          payload.targetUserIds.length > 0 &&
+          !payload.targetUserIds.includes(loggedUser.id)
+        ) {
+          return;
+        }
+        ClassroomDB.syncPrivateNotesFromCloud(true).then((notesChanged) => {
+          if (notesChanged) {
+            refreshData();
+          }
+        });
+        return;
+      }
+
       // 2. Fast path for Profile-only events (ignore other students' session lock updates on student devices)
       if (kinds.length === 1 && kinds[0] === 'profile') {
         if (
@@ -220,7 +241,7 @@ export default function App() {
           } else if (k === 'course') {
             tableSet.add('courses');
             tableSet.add('notifications');
-          } else if (k === 'notification') {
+          } else if (k === 'notification' || k === 'private_note') {
             tableSet.add('notifications');
           } else if (k === 'assignment' || k === 'submission') {
             tableSet.add('assignments');
@@ -413,7 +434,10 @@ export default function App() {
     setCourses([]);
   };
 
-  const handleOpenCourse = (course: Course) => {
+  const handleOpenCourse = (
+    course: Course,
+    initialTab: 'stream' | 'attendance' | 'private_notes' | 'people' = 'stream'
+  ) => {
     if (!currentUser) return;
     const check = ClassroomDB.getCourseById(course.id, currentUser);
     if (!check.course) {
@@ -422,6 +446,7 @@ export default function App() {
       return;
     }
 
+    setSelectedCourseInitialTab(initialTab);
     setSelectedCourse(check.course);
     setPosts(ClassroomDB.getPostsForCourse(check.course.id, currentUser));
     setAssignments(ClassroomDB.getAssignments(check.course.id));
@@ -438,11 +463,14 @@ export default function App() {
     }
   };
 
-  const handleOpenCourseById = (courseId: string) => {
+  const handleOpenCourseById = (
+    courseId: string,
+    initialTab: 'stream' | 'attendance' | 'private_notes' | 'people' = 'stream'
+  ) => {
     if (!currentUser) return;
     const target = courses.find((c) => c.id === courseId);
     if (target) {
-      handleOpenCourse(target);
+      handleOpenCourse(target, initialTab);
     }
   };
 
@@ -602,7 +630,11 @@ export default function App() {
               course={selectedCourse}
               currentUser={currentUser}
               posts={posts}
-              onBack={() => setSelectedCourse(null)}
+              initialTab={selectedCourseInitialTab}
+              onBack={() => {
+                setSelectedCourse(null);
+                setSelectedCourseInitialTab('stream');
+              }}
               onRefresh={refreshData}
               onOpenCertificate={(cert) => setActiveCertificate(cert)}
             />

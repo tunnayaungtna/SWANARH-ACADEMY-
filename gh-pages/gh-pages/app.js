@@ -33397,7 +33397,9 @@ function getAvatarCloudStorageInfo(raw) {
 var NOTIFICATION_TTL_MS = 18e5;
 var AUDIT_LOG_TTL_MS = 1728e5;
 var COMMENT_TTL_MS = 1728e5;
+var PRIVATE_NOTE_TTL_MS = 15552e6;
 var AUDIT_LOG_SYSTEM_USER_ID = "SYSTEM_AUDIT_LOG";
+var PRIVATE_NOTE_SYSTEM_USER_ID = "SYSTEM_PRIVATE_NOTE";
 function resolveCommentTimestampMs(comment, fallbackPostMs) {
 	const directMs = Number(comment?.createdAtMs);
 	if (Number.isFinite(directMs) && directMs > 16e11) return directMs;
@@ -33898,7 +33900,7 @@ DELETE FROM public.assignment_submissions WHERE assignment_id NOT IN (SELECT id 
 DELETE FROM public.quizzes WHERE course_id NOT IN (SELECT id FROM public.courses);
 DELETE FROM public.quiz_submissions WHERE quiz_id NOT IN (SELECT id FROM public.quizzes) OR student_id NOT IN (SELECT id FROM public.profiles);
 DELETE FROM public.attendance_sessions WHERE course_id NOT IN (SELECT id FROM public.courses);
-DELETE FROM public.notifications WHERE course_id NOT IN (SELECT id FROM public.courses) OR user_id NOT IN (SELECT id FROM public.profiles) OR expires_at <= now();
+DELETE FROM public.notifications WHERE course_id NOT IN (SELECT id FROM public.courses) OR (user_id NOT IN ('SYSTEM_AUDIT_LOG', 'SYSTEM_PRIVATE_NOTE') AND (user_id NOT IN (SELECT id FROM public.profiles) OR expires_at <= now()));
 
 -- Strip redundant Base64 avatars from posts, profiles, and submissions to cut Egress by 96%
 UPDATE public.posts SET author_avatar = '' WHERE author_avatar IS NOT NULL AND author_avatar <> '';
@@ -34166,6 +34168,14 @@ var SupabaseService = class {
 					if (payload?.eventType === "DELETE") return;
 					const newNotif = payload?.new || {};
 					if (newNotif.user_id === AUDIT_LOG_SYSTEM_USER_ID || newNotif.type === "audit_log") return;
+					if (newNotif.user_id === PRIVATE_NOTE_SYSTEM_USER_ID || newNotif.type === "private_note") {
+						const targetStudentId = newNotif.post_id ? String(newNotif.post_id) : void 0;
+						this.triggerRealtimeListeners({
+							kind: "private_note",
+							targetUserIds: targetStudentId ? [targetStudentId] : void 0
+						});
+						return;
+					}
 					this.triggerRealtimeListeners({ kind: "notification" });
 					return;
 				}
@@ -35245,7 +35255,7 @@ var SupabaseService = class {
 				const cutoffIso = (/* @__PURE__ */ new Date(Date.now() - NOTIFICATION_TTL_MS)).toISOString();
 				let query = supabase.from("notifications").select("id,user_id,course_id,course_code,course_title,post_id,author_name,author_role,title,message,type,is_read,created_at,expires_at").gt("created_at", cutoffIso).order("created_at", { ascending: false }).limit(40);
 				if (userId) query = query.eq("user_id", userId);
-				else query = query.neq("user_id", AUDIT_LOG_SYSTEM_USER_ID);
+				else query = query.neq("user_id", AUDIT_LOG_SYSTEM_USER_ID).neq("user_id", PRIVATE_NOTE_SYSTEM_USER_ID);
 				const { data, error } = await query;
 				if (error) {
 					if (error.code === "42P01" || error.message?.includes("notifications")) this.notificationsTableStatus = "missing";
@@ -35347,7 +35357,7 @@ var SupabaseService = class {
 				this.saveCloudCleanupTimestamps();
 				const cutoffIso = (/* @__PURE__ */ new Date(now - NOTIFICATION_TTL_MS)).toISOString();
 				const nowIso = new Date(now).toISOString();
-				const { error } = await supabase.from("notifications").delete().neq("user_id", AUDIT_LOG_SYSTEM_USER_ID).or(`created_at.lt.${cutoffIso},expires_at.lte.${nowIso}`);
+				const { error } = await supabase.from("notifications").delete().neq("user_id", AUDIT_LOG_SYSTEM_USER_ID).neq("user_id", PRIVATE_NOTE_SYSTEM_USER_ID).or(`created_at.lt.${cutoffIso},expires_at.lte.${nowIso}`);
 				if (error) {
 					if (error.code === "42P01" || error.message?.includes("notifications")) {
 						this.notificationsTableStatus = "missing";
@@ -35397,7 +35407,7 @@ var SupabaseService = class {
 	static async deleteNotificationsByPostId(postId) {
 		if (this.notificationsTableStatus === "missing") return false;
 		try {
-			const { error } = await supabase.from("notifications").delete().neq("user_id", AUDIT_LOG_SYSTEM_USER_ID).eq("post_id", postId);
+			const { error } = await supabase.from("notifications").delete().neq("user_id", AUDIT_LOG_SYSTEM_USER_ID).neq("user_id", PRIVATE_NOTE_SYSTEM_USER_ID).eq("post_id", postId);
 			if (error && (error.code === "42P01" || error.message?.includes("notifications"))) this.notificationsTableStatus = "missing";
 			return !error;
 		} catch {
@@ -35520,6 +35530,98 @@ var SupabaseService = class {
 		if (this.notificationsTableStatus === "missing") return false;
 		try {
 			const { error } = await supabase.from("notifications").delete().eq("user_id", AUDIT_LOG_SYSTEM_USER_ID);
+			return !error;
+		} catch {
+			return false;
+		}
+	}
+	/**
+	* Fetch Private Notes / Leave Requests from Supabase.
+	* - Students filter by `post_id = studentId` so they physically ONLY download their own notes!
+	* - Admins / Co-Admins fetch all private notes across courses.
+	*/
+	static async getRemotePrivateNotes(options) {
+		if (this.notificationsTableStatus === "missing") return null;
+		const studentKey = options?.studentId || "all";
+		const courseKey = options?.courseIds && options.courseIds.length > 0 ? options.courseIds.slice().sort().join(",") : "all";
+		const limit = options?.limit || 300;
+		return this.dedupeGet(`private_notes:${studentKey}:${courseKey}:${limit}`, async () => {
+			try {
+				let query = supabase.from("notifications").select("id,course_id,course_code,course_title,post_id,author_name,title,message,created_at").eq("user_id", PRIVATE_NOTE_SYSTEM_USER_ID).order("created_at", { ascending: false }).limit(limit);
+				if (options?.studentId) query = query.eq("post_id", options.studentId);
+				if (options?.courseIds && options.courseIds.length > 0 && options.courseIds.length <= 25) query = query.in("course_id", options.courseIds);
+				const { data, error } = await query;
+				if (error) {
+					if (error.code === "42P01" || error.message?.includes("notifications")) this.notificationsTableStatus = "missing";
+					return null;
+				}
+				this.notificationsTableStatus = "available";
+				if (!data) return [];
+				const notes = [];
+				for (const row of data) try {
+					if (row.message && String(row.message).trim().startsWith("{")) {
+						const parsed = JSON.parse(String(row.message));
+						if (parsed && parsed.id && parsed.courseId && parsed.studentId) {
+							notes.push(parsed);
+							continue;
+						}
+					}
+				} catch {}
+				return notes;
+			} catch {
+				return null;
+			}
+		});
+	}
+	/**
+	* Upsert a Private Note / Leave Request to Supabase (`user_id = 'SYSTEM_PRIVATE_NOTE'`).
+	* Never deleted by the 30-minute notification sweep.
+	*/
+	static async upsertPrivateNote(note, silent = false) {
+		if (this.notificationsTableStatus === "missing") return false;
+		try {
+			const createdMs = note.createdAtMs || Date.now();
+			const expiresMs = createdMs + PRIVATE_NOTE_TTL_MS;
+			const row = {
+				id: note.id,
+				user_id: PRIVATE_NOTE_SYSTEM_USER_ID,
+				course_id: note.courseId,
+				course_code: note.courseCode || null,
+				course_title: note.courseTitle || "",
+				post_id: note.studentId,
+				author_name: note.studentName,
+				author_role: "student",
+				title: note.subject || "Private Note",
+				message: JSON.stringify(note),
+				type: "private_note",
+				is_read: Boolean(note.isReadByInstructor && note.isReadByStudent),
+				created_at: new Date(createdMs).toISOString(),
+				expires_at: new Date(expiresMs).toISOString()
+			};
+			const { error } = await supabase.from("notifications").upsert([row], { onConflict: "id" });
+			if (error) {
+				if (error.code === "42P01" || error.message?.includes("notifications")) this.notificationsTableStatus = "missing";
+				return false;
+			}
+			this.notificationsTableStatus = "available";
+			if (!silent) this.notifyRealtimePeers("private_note", { targetUserIds: [note.studentId] });
+			return true;
+		} catch {
+			return false;
+		}
+	}
+	/**
+	* Delete a Private Note from Supabase
+	*/
+	static async deleteRemotePrivateNote(noteId, studentId) {
+		if (this.notificationsTableStatus === "missing") return false;
+		try {
+			this.ignoredRealtimeDeleteIds.add(noteId);
+			const { error } = await supabase.from("notifications").delete().eq("id", noteId).eq("user_id", PRIVATE_NOTE_SYSTEM_USER_ID);
+			if (!error) this.notifyRealtimePeers("delete", {
+				deletedIds: [noteId],
+				targetUserIds: studentId ? [studentId] : void 0
+			});
 			return !error;
 		} catch {
 			return false;
@@ -36306,6 +36408,10 @@ var SupabaseService = class {
 				const uId = String(r.user_id || "");
 				const pId = r.post_id ? String(r.post_id) : "";
 				if (uId === AUDIT_LOG_SYSTEM_USER_ID) return;
+				if (uId === PRIVATE_NOTE_SYSTEM_USER_ID) {
+					if (deletedSet.has(id) || cId && !courseIdSet.has(cId) || pId && !userIdSet.has(pId)) orphanNotifIds.push(id);
+					return;
+				}
 				if (deletedSet.has(id) || cId && !courseIdSet.has(cId) || uId && !userIdSet.has(uId) || pId && validPostIds.size > 0 && !validPostIds.has(pId)) orphanNotifIds.push(id);
 			});
 			const deleteByIdChunks = async (table, ids) => {
@@ -37322,7 +37428,8 @@ var STORAGE_KEYS = {
 	CLOUD_CONFIRMED_POSTS: "classroom_os_cloud_confirmed_posts_v1",
 	CLOUD_CONFIRMED_ATTENDANCE: "classroom_os_cloud_confirmed_attendance_v1",
 	CLOUD_CONFIRMED_USERS: "classroom_os_cloud_confirmed_users_v1",
-	DELETED_USERS_META: "classroom_deleted_users_meta_v2"
+	DELETED_USERS_META: "classroom_deleted_users_meta_v2",
+	PRIVATE_NOTES: "classroom_private_notes_v1"
 };
 var ClassroomDB = class {
 	static {
@@ -39930,7 +40037,7 @@ var ClassroomDB = class {
 				const wantQuizzes = targetTables ? targetTables.has("quizzes") : shouldFetchCatalog;
 				const wantAttendance = targetTables ? targetTables.has("attendance") : true;
 				const wantNotifications = targetTables ? targetTables.has("notifications") : true;
-				const [remoteProfiles, remoteCourses, initialRemotePosts, remoteAssignments, remoteQuizzes, initialRemoteAttendance, remoteNotifications, singleLoggedProfile] = await Promise.all([
+				const [remoteProfiles, remoteCourses, initialRemotePosts, remoteAssignments, remoteQuizzes, initialRemoteAttendance, remoteNotifications, remotePrivateNotes, singleLoggedProfile] = await Promise.all([
 					wantProfiles ? SupabaseService.getRemoteProfiles(force, {
 						studentLightweight: Boolean(isStudentLightweight && loggedUser),
 						currentUserId: loggedUser?.id,
@@ -39942,6 +40049,10 @@ var ClassroomDB = class {
 					wantQuizzes ? SupabaseService.getRemoteQuizzes(force) : Promise.resolve(null),
 					wantAttendance ? SupabaseService.getRemoteAttendanceSessions(studentScopedCourseIds, knownAttendanceMap) : Promise.resolve(null),
 					wantNotifications && loggedUser ? SupabaseService.getRemoteNotifications(loggedUser.id) : Promise.resolve(null),
+					wantNotifications && loggedUser ? SupabaseService.getRemotePrivateNotes({
+						studentId: loggedUser.role === "student" ? loggedUser.id : void 0,
+						courseIds: studentScopedCourseIds
+					}) : Promise.resolve(null),
 					!wantProfiles && !targetTables && loggedUser && loggedUser.role === "student" ? SupabaseService.getRemoteProfileByIdentifier(loggedUser.username || loggedUser.email, true) : Promise.resolve(null)
 				]);
 				let remotePosts = initialRemotePosts;
@@ -40277,6 +40388,9 @@ var ClassroomDB = class {
 				if (remoteAttendance !== null) {
 					if (this.reconcileRemoteAttendanceSessions(remoteAttendance, studentScopedCourseIds, cloudActive, deletedSet, newlyDiscoveredRemoteDeletions)) updated = true;
 				}
+				if (remotePrivateNotes !== null) {
+					if (this.reconcileRemotePrivateNotes(remotePrivateNotes, deletedSet)) updated = true;
+				}
 				if (newlyDiscoveredRemoteDeletions.length > 0) {
 					this.recordDeletedIds(newlyDiscoveredRemoteDeletions);
 					if (newlyDeletedUsernames.length > 0 || newlyDeletedEmails.length > 0) this.recordDeletedUserMeta(newlyDeletedUsernames, newlyDeletedEmails);
@@ -40436,6 +40550,74 @@ var ClassroomDB = class {
 			}
 		})();
 		return this.activeAttendanceSyncPromise;
+	}
+	/**
+	* Reconciles remote Private Notes with local Private Notes using updatedAtMs / repliedAtMs / createdAtMs
+	*/
+	static reconcileRemotePrivateNotes(remoteNotes, externalDeletedSet) {
+		const deletedSet = externalDeletedSet || new Set(this.getDeletedIds());
+		const localNotes = this.getItem(STORAGE_KEYS.PRIVATE_NOTES, []).filter((n) => !deletedSet.has(n.id) && !deletedSet.has(n.courseId));
+		const prevJson = JSON.stringify(localNotes);
+		const noteMap = /* @__PURE__ */ new Map();
+		localNotes.forEach((ln) => {
+			noteMap.set(ln.id, ln);
+		});
+		remoteNotes.forEach((rn) => {
+			if (!rn || !rn.id || deletedSet.has(rn.id) || deletedSet.has(rn.courseId)) return;
+			const existing = noteMap.get(rn.id);
+			if (!existing) {
+				noteMap.set(rn.id, rn);
+				return;
+			}
+			const localTs = existing.updatedAtMs || existing.repliedAtMs || existing.createdAtMs || 0;
+			const winner = (rn.updatedAtMs || rn.repliedAtMs || rn.createdAtMs || 0) >= localTs ? rn : existing;
+			noteMap.set(rn.id, {
+				...existing,
+				...winner,
+				isReadByInstructor: Boolean(existing.isReadByInstructor || rn.isReadByInstructor),
+				isReadByStudent: winner.status !== "pending" && existing.status === "pending" ? Boolean(rn.isReadByStudent) : Boolean(existing.isReadByStudent || rn.isReadByStudent)
+			});
+		});
+		const merged = Array.from(noteMap.values()).sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
+		if (JSON.stringify(merged) !== prevJson) {
+			this.setItem(STORAGE_KEYS.PRIVATE_NOTES, merged);
+			return true;
+		}
+		return false;
+	}
+	static {
+		this.activePrivateNoteSyncPromise = null;
+	}
+	static {
+		this.lastPrivateNoteSyncAt = 0;
+	}
+	static async syncPrivateNotesFromCloud(force = false) {
+		if (typeof navigator !== "undefined" && navigator.onLine === false) return false;
+		const now = Date.now();
+		if (!force && now - this.lastPrivateNoteSyncAt < 5e3) return false;
+		if (this.activePrivateNoteSyncPromise) return this.activePrivateNoteSyncPromise;
+		this.lastPrivateNoteSyncAt = now;
+		this.activePrivateNoteSyncPromise = (async () => {
+			try {
+				const loggedUser = this.getCurrentUser();
+				if (!loggedUser) return false;
+				const deletedSet = new Set(this.getDeletedIds());
+				const currentCourses = this.getItem(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter((c) => !deletedSet.has(c.id));
+				const enrolledIdsForStudent = loggedUser.role === "student" ? currentCourses.filter((c) => c.enrolledStudentIds.includes(loggedUser.id)).map((c) => c.id) : void 0;
+				const studentScopedCourseIds = enrolledIdsForStudent && enrolledIdsForStudent.length > 0 ? enrolledIdsForStudent : void 0;
+				const remoteNotes = await SupabaseService.getRemotePrivateNotes({
+					studentId: loggedUser.role === "student" ? loggedUser.id : void 0,
+					courseIds: studentScopedCourseIds
+				});
+				if (!remoteNotes) return false;
+				return this.reconcileRemotePrivateNotes(remoteNotes, deletedSet);
+			} catch {
+				return false;
+			} finally {
+				this.activePrivateNoteSyncPromise = null;
+			}
+		})();
+		return this.activePrivateNoteSyncPromise;
 	}
 	/**
 	* Safely parses the scheduled release timestamp (in ms) from a scheduled post.
@@ -42077,9 +42259,68 @@ var ClassroomDB = class {
 	}
 	static getNotifications(userId) {
 		this.purgeExpiredNotifications();
-		return this.getItem(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS).filter((n) => n.userId === userId);
+		const regularNotifs = this.getItem(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS).filter((n) => n.userId === userId);
+		const user = this.getAllUsers().find((u) => u.id === userId) || this.getCurrentUser();
+		const persistentPrivateNotifs = [];
+		if (user && user.id === userId) {
+			const notes = this.getPrivateNotes(void 0, user);
+			if (user.role === "admin" || user.role === "co_admin") {
+				for (const note of notes) if (note.status === "pending") {
+					const catLabel = note.category === "leave_request" ? "📅 ခွင့်တိုင်ကြားစာ (Leave Request)" : note.category === "question" ? "📘 သင်ခန်းစာ မေးခွန်း (Question)" : "💬 သီးသန့် တင်ပြချက် (Feedback)";
+					persistentPrivateNotifs.push({
+						id: `pnote-bell-instructor-${note.id}`,
+						userId: user.id,
+						courseId: note.courseId,
+						courseCode: note.courseCode,
+						courseTitle: note.courseTitle,
+						authorName: note.studentName,
+						authorRole: "student",
+						title: `${catLabel} — ${note.studentName}`,
+						message: `[${note.courseCode}] ${note.subject}${note.leaveDate ? ` (ခွင့်ရက်: ${note.leaveDate})` : ""}: ${note.content.slice(0, 90)}${note.content.length > 90 ? "..." : ""}`,
+						type: "private_note",
+						targetTab: "private_notes",
+						privateNoteId: note.id,
+						isRead: Boolean(note.isReadByInstructor),
+						createdAt: note.createdAt,
+						createdAtMs: note.createdAtMs
+					});
+				}
+			} else if (user.role === "student") {
+				for (const note of notes) if (note.studentId === user.id && note.status !== "pending" && !note.isReadByStudent) {
+					const statusText = note.status === "approved" ? "ခွင့်ပြုပြီး ✓" : note.status === "rejected" ? "ငြင်းပယ်ထားသည်" : "ဖြေကြားပြီး ✓";
+					persistentPrivateNotifs.push({
+						id: `pnote-bell-student-${note.id}`,
+						userId: user.id,
+						courseId: note.courseId,
+						courseCode: note.courseCode,
+						courseTitle: note.courseTitle,
+						authorName: note.repliedByName || "Instructor",
+						authorRole: note.repliedByRole || "admin",
+						title: `💬 ဆရာမှ အဖြေပြန်ကြားထားပါသည် (${statusText})`,
+						message: `[${note.courseCode}] ${note.subject} — "${(note.replyContent || "").slice(0, 95)}${(note.replyContent || "").length > 95 ? "..." : ""}"`,
+						type: "private_note",
+						targetTab: "private_notes",
+						privateNoteId: note.id,
+						isRead: false,
+						createdAt: note.repliedAt || note.createdAt,
+						createdAtMs: note.repliedAtMs || note.createdAtMs
+					});
+				}
+			}
+		}
+		return [...persistentPrivateNotifs, ...regularNotifs];
 	}
 	static markNotificationRead(notificationId) {
+		if (notificationId.startsWith("pnote-bell-instructor-")) {
+			const noteId = notificationId.replace("pnote-bell-instructor-", "");
+			this.markPrivateNoteReadByInstructor(noteId);
+			return;
+		}
+		if (notificationId.startsWith("pnote-bell-student-")) {
+			const noteId = notificationId.replace("pnote-bell-student-", "");
+			this.markPrivateNoteReadByStudent(noteId);
+			return;
+		}
 		const notifs = this.getItem(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
 		let targetNotif = null;
 		const updated = notifs.map((n) => {
@@ -42098,6 +42339,42 @@ var ClassroomDB = class {
 		} catch {}
 	}
 	static markAllNotificationsRead(userId) {
+		const user = this.getAllUsers().find((u) => u.id === userId) || this.getCurrentUser();
+		if (user && user.id === userId) {
+			const allNotes = this.getItem(STORAGE_KEYS.PRIVATE_NOTES, []);
+			let notesMutated = false;
+			const notesToSync = [];
+			const nowMs = Date.now();
+			const updatedNotes = allNotes.map((note) => {
+				if ((user.role === "admin" || user.role === "co_admin") && !note.isReadByInstructor) {
+					notesMutated = true;
+					const next = {
+						...note,
+						isReadByInstructor: true,
+						updatedAtMs: nowMs
+					};
+					notesToSync.push(next);
+					return next;
+				}
+				if (user.role === "student" && note.studentId === user.id && note.status !== "pending" && !note.isReadByStudent) {
+					notesMutated = true;
+					const next = {
+						...note,
+						isReadByStudent: true,
+						updatedAtMs: nowMs
+					};
+					notesToSync.push(next);
+					return next;
+				}
+				return note;
+			});
+			if (notesMutated) {
+				this.setItem(STORAGE_KEYS.PRIVATE_NOTES, updatedNotes);
+				notesToSync.forEach((n) => {
+					SupabaseService.upsertPrivateNote(n, true).catch(() => {});
+				});
+			}
+		}
 		const notifs = this.getItem(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
 		const updatedForUser = [];
 		const updated = notifs.map((n) => {
@@ -42115,6 +42392,191 @@ var ClassroomDB = class {
 		if (updatedForUser.length > 0) try {
 			SupabaseService.upsertNotifications(updatedForUser).catch(() => {});
 		} catch {}
+	}
+	static getPrivateNotes(courseId, viewer) {
+		const activeViewer = viewer || this.getCurrentUser();
+		if (!activeViewer) return [];
+		const deletedSet = new Set(this.getDeletedIds());
+		const validCourseIds = new Set(this.getItem(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter((c) => !deletedSet.has(c.id)).map((c) => c.id));
+		return this.getItem(STORAGE_KEYS.PRIVATE_NOTES, []).filter((n) => n && n.id && !deletedSet.has(n.id) && !deletedSet.has(n.courseId) && !deletedSet.has(n.studentId) && validCourseIds.has(n.courseId)).filter((n) => {
+			if (courseId && n.courseId !== courseId) return false;
+			if (activeViewer.role === "student") return n.studentId === activeViewer.id;
+			return true;
+		}).sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
+	}
+	static getUnreadPrivateNotesCount(courseId, viewer) {
+		const activeViewer = viewer || this.getCurrentUser();
+		if (!activeViewer) return 0;
+		const notes = this.getPrivateNotes(courseId, activeViewer);
+		if (activeViewer.role === "admin" || activeViewer.role === "co_admin") return notes.filter((n) => n.status === "pending").length;
+		return notes.filter((n) => n.status !== "pending" && !n.isReadByStudent).length;
+	}
+	static createPrivateNote(data, student) {
+		const course = this.getItem(STORAGE_KEYS.COURSES, INITIAL_COURSES).find((c) => c.id === data.courseId);
+		if (!course) throw new Error("သင်တန်းအခန်း မတွေ့ရှိပါ။");
+		const nowMs = Date.now();
+		const timeLabel = this.formatPostTimestamp(nowMs);
+		const defaultSubject = data.category === "leave_request" ? `ခွင့်တိုင်ကြားစာ (${data.leaveDate || "Leave Request"})` : data.category === "question" ? "သင်ခန်းစာ မေးခွန်း (Lesson Question)" : "သီးသန့် တင်ပြချက် (General Feedback)";
+		const newNote = {
+			id: `pnote-${nowMs}-${Math.random().toString(36).slice(2, 7)}`,
+			courseId: course.id,
+			courseCode: course.code,
+			courseTitle: course.title,
+			studentId: student.id,
+			studentName: student.name,
+			studentUsername: student.username,
+			category: data.category,
+			subject: data.subject.trim() || defaultSubject,
+			leaveDate: data.category === "leave_request" && data.leaveDate ? data.leaveDate.trim() : void 0,
+			content: data.content.trim(),
+			status: "pending",
+			isReadByInstructor: false,
+			isReadByStudent: true,
+			createdAt: timeLabel,
+			createdAtMs: nowMs,
+			updatedAtMs: nowMs
+		};
+		const existing = this.getItem(STORAGE_KEYS.PRIVATE_NOTES, []);
+		this.markLocalWrite(newNote.id);
+		this.setItem(STORAGE_KEYS.PRIVATE_NOTES, [newNote, ...existing]);
+		try {
+			SupabaseService.upsertPrivateNote(newNote).catch(() => {});
+		} catch {}
+		return newNote;
+	}
+	static replyToPrivateNote(noteId, replyContent, newStatus, instructor) {
+		if (instructor.role !== "admin" && instructor.role !== "co_admin") throw new Error("Unauthorized: Only Admin or Co-Admin can reply to student private notes.");
+		const existing = this.getItem(STORAGE_KEYS.PRIVATE_NOTES, []);
+		const target = existing.find((n) => n.id === noteId);
+		if (!target) return null;
+		const nowMs = Date.now();
+		const timeLabel = this.formatPostTimestamp(nowMs);
+		const defaultReply = newStatus === "approved" ? "သင်တင်ပြသော ခွင့်တိုင်ကြားစာကို သိရှိခွင့်ပြုပေးလိုက်ပါသည်။ ✓" : newStatus === "rejected" ? "သင်တင်ပြသော ခွင့်တိုင်ကြားစာကို ခွင့်မပြုနိုင်ပါ။" : "သင်၏ တင်ပြချက်ကို သိရှိဖြေကြားပေးလိုက်ပါသည်။";
+		const updatedNote = {
+			...target,
+			status: newStatus,
+			replyContent: replyContent.trim() || defaultReply,
+			repliedById: instructor.id,
+			repliedByName: instructor.name,
+			repliedByRole: instructor.role,
+			repliedAt: timeLabel,
+			repliedAtMs: nowMs,
+			isReadByInstructor: true,
+			isReadByStudent: false,
+			updatedAtMs: nowMs
+		};
+		const updatedList = existing.map((n) => n.id === noteId ? updatedNote : n);
+		this.markLocalWrite(noteId);
+		this.setItem(STORAGE_KEYS.PRIVATE_NOTES, updatedList);
+		if (target.category === "leave_request" && newStatus === "approved" && target.leaveDate) {
+			const matchingSession = this.getAttendanceSessions(target.courseId).find((s) => s.date === target.leaveDate);
+			const studentUser = this.getAllUsers().find((u) => u.id === target.studentId);
+			if (matchingSession && studentUser) this.instructorMarkAttendance(matchingSession.id, studentUser, "excused", `ခွင့်တိုင်ကြားစာ ခွင့်ပြုပြီး (${instructor.name})`);
+		}
+		try {
+			SupabaseService.upsertPrivateNote(updatedNote).catch(() => {});
+		} catch {}
+		this.recordAuditLog({
+			actor: instructor,
+			category: "academic",
+			actionCode: "PRIVATE_NOTE_REPLIED",
+			actionLabel: "ကျောင်းသား သီးသန့်စာ/ခွင့်တိုင်စာ ပြန်ကြားခြင်း (Private Note Replied)",
+			severity: "info",
+			targetType: "user",
+			targetId: target.studentId,
+			targetName: target.studentName,
+			courseId: target.courseId,
+			courseCode: target.courseCode,
+			courseTitle: target.courseTitle,
+			summary: `${instructor.name} မှ ကျောင်းသား "${target.studentName}" ၏ သီးသန့်စာ (${target.subject}) ကို [${newStatus.toUpperCase()}] အဖြစ် ပြန်လည်ဖြေကြားခဲ့ပါသည်။`,
+			details: `အဖြေ: ${updatedNote.replyContent}`
+		});
+		return updatedNote;
+	}
+	static markPrivateNoteReadByInstructor(noteId) {
+		const existing = this.getItem(STORAGE_KEYS.PRIVATE_NOTES, []);
+		let targetNote = null;
+		const nowMs = Date.now();
+		const updated = existing.map((n) => {
+			if (n.id === noteId && !n.isReadByInstructor) {
+				targetNote = {
+					...n,
+					isReadByInstructor: true,
+					updatedAtMs: nowMs
+				};
+				return targetNote;
+			}
+			return n;
+		});
+		if (targetNote) {
+			this.setItem(STORAGE_KEYS.PRIVATE_NOTES, updated);
+			SupabaseService.upsertPrivateNote(targetNote, true).catch(() => {});
+		}
+	}
+	static markPrivateNoteReadByStudent(noteId) {
+		const existing = this.getItem(STORAGE_KEYS.PRIVATE_NOTES, []);
+		let targetNote = null;
+		const nowMs = Date.now();
+		const updated = existing.map((n) => {
+			if (n.id === noteId && !n.isReadByStudent) {
+				targetNote = {
+					...n,
+					isReadByStudent: true,
+					updatedAtMs: nowMs
+				};
+				return targetNote;
+			}
+			return n;
+		});
+		if (targetNote) {
+			this.setItem(STORAGE_KEYS.PRIVATE_NOTES, updated);
+			SupabaseService.upsertPrivateNote(targetNote, true).catch(() => {});
+		}
+	}
+	static markPrivateNotesReadForCourse(courseId, user) {
+		const existing = this.getItem(STORAGE_KEYS.PRIVATE_NOTES, []);
+		const toSync = [];
+		const nowMs = Date.now();
+		const updated = existing.map((n) => {
+			if (n.courseId !== courseId) return n;
+			if (user.role === "student" && n.studentId === user.id && n.status !== "pending" && !n.isReadByStudent) {
+				const next = {
+					...n,
+					isReadByStudent: true,
+					updatedAtMs: nowMs
+				};
+				toSync.push(next);
+				return next;
+			}
+			if ((user.role === "admin" || user.role === "co_admin") && !n.isReadByInstructor) {
+				const next = {
+					...n,
+					isReadByInstructor: true,
+					updatedAtMs: nowMs
+				};
+				toSync.push(next);
+				return next;
+			}
+			return n;
+		});
+		if (toSync.length > 0) {
+			this.setItem(STORAGE_KEYS.PRIVATE_NOTES, updated);
+			toSync.forEach((n) => {
+				SupabaseService.upsertPrivateNote(n, true).catch(() => {});
+			});
+		}
+	}
+	static deletePrivateNote(noteId, actor) {
+		const existing = this.getItem(STORAGE_KEYS.PRIVATE_NOTES, []);
+		const target = existing.find((n) => n.id === noteId);
+		if (!target) return false;
+		if (actor.role !== "admin" && actor.role !== "co_admin" && target.studentId !== actor.id) return false;
+		this.recordDeletedIds([noteId]);
+		this.setItem(STORAGE_KEYS.PRIVATE_NOTES, existing.filter((n) => n.id !== noteId));
+		try {
+			SupabaseService.deleteRemotePrivateNote(noteId, target.studentId).catch(() => {});
+		} catch {}
+		return true;
 	}
 	static addNotification(item) {
 		this.purgeExpiredNotifications();
@@ -44199,6 +44661,19 @@ var RefreshCw = createLucideIcon("refresh-cw", [
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
+var Reply = createLucideIcon("reply", [["path", {
+	d: "M20 18v-2a4 4 0 0 0-4-4H4",
+	key: "5vmcpk"
+}], ["path", {
+	d: "m9 17-5-5 5-5",
+	key: "nvlc11"
+}]]);
+/**
+* @license lucide-react v0.546.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
 var RotateCcw = createLucideIcon("rotate-ccw", [["path", {
 	d: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8",
 	key: "1357e3"
@@ -45357,7 +45832,7 @@ var PWAInstallButton = ({ variant = "navbar" }) => {
 };
 //#endregion
 //#region src/utils/appUpdater.ts
-var APP_VERSION_LABEL = "v20.8";
+var APP_VERSION_LABEL = "v20.9";
 /**
 * Performs a fast, non-destructive live update of both Classroom Cloud Data (Supabase)
 * and checks for any new Service Worker / Application Bundle updates.
@@ -46780,7 +47255,7 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 														ClassroomDB.markNotificationRead(notif.id);
 														onRefreshNotifications();
 														if (notif.courseId && onSelectNotificationCourse) {
-															onSelectNotificationCourse(notif.courseId);
+															onSelectNotificationCourse(notif.courseId, notif.targetTab || (notif.type === "private_note" ? "private_notes" : "stream"));
 															setShowNotifications(false);
 														}
 													},
@@ -46801,7 +47276,10 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 															className: "flex items-center justify-between gap-2 mt-2 pt-1.5 border-t border-slate-200/40 dark:border-slate-700/40 text-[10px]",
 															children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 																className: "text-slate-400 font-mono truncate",
-																children: [notif.createdAt, remainingMins !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+																children: [notif.createdAt, notif.type === "private_note" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+																	className: "ml-1.5 text-emerald-600 dark:text-emerald-400 font-semibold",
+																	children: "· 🔒 သီးသန့်စာ (မပျက်ပါ)"
+																}) : remainingMins !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 																	className: "ml-1.5 text-amber-600 dark:text-amber-400 font-semibold",
 																	children: [
 																		"· ⏱ ",
@@ -46811,7 +47289,7 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 																})]
 															}), notif.courseId && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 																className: "font-bold text-indigo-600 dark:text-indigo-400 shrink-0",
-																children: "အတန်းသို့ →"
+																children: notif.type === "private_note" ? "စာဖတ်ရန် →" : "အတန်းသို့ →"
 															})]
 														})
 													]
@@ -47192,6 +47670,7 @@ var CourseCard = ({ course, currentUser, progress: _progress, courseIndex = 0, t
 	const isInstructor = currentUser.role === "admin" || currentUser.role === "co_admin";
 	const [showDeleteConfirm, setShowDeleteConfirm] = (0, import_react.useState)(false);
 	const attendancePct = currentUser.role === "student" ? ClassroomDB.calculateTotalAttendancePercentage(course.id, currentUser.id) : 100;
+	const unreadPrivateNotesCount = ClassroomDB.getUnreadPrivateNotesCount(course.id, currentUser);
 	const handleConfirmDeleteCourse = (e) => {
 		e.stopPropagation();
 		ClassroomDB.deleteCourse(course.id, currentUser);
@@ -47323,22 +47802,34 @@ var CourseCard = ({ course, currentUser, progress: _progress, courseIndex = 0, t
 						children: course.description
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 pt-1 truncate",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "truncate",
-								children: course.instructorName
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								"aria-hidden": "true",
-								className: "shrink-0",
-								children: "·"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-								className: "shrink-0",
-								children: [course.totalLessons, " Lessons"]
-							})
-						]
+						className: "flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400 pt-1",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex items-center gap-2 truncate min-w-0",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "truncate",
+									children: course.instructorName
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									"aria-hidden": "true",
+									className: "shrink-0",
+									children: "·"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "shrink-0",
+									children: [course.totalLessons, " Lessons"]
+								})
+							]
+						}), unreadPrivateNotesCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							type: "button",
+							onClick: (e) => {
+								e.stopPropagation();
+								onSelectCourse(course, "private_notes");
+							},
+							className: "inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-extrabold shadow-xs animate-pulse cursor-pointer shrink-0",
+							title: isInstructor ? "ကျောင်းသား ပေးပို့ထားသော သီးသန့်စာ/ခွင့်တိုင်စာ ဖတ်ရှုရန်" : "ဆရာ ပြန်လည်ဖြေကြားထားသော သီးသန့်အဖြေ ဖတ်ရှုရန်",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Lock, { className: "w-3 h-3 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: isInstructor ? `${unreadPrivateNotesCount} သီးသန့်စာ` : `${unreadPrivateNotesCount} ဆရာ့အဖြေသစ်` })]
+						})]
 					}),
 					currentUser.role === "student" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "pt-2",
@@ -53035,19 +53526,552 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 	});
 };
 //#endregion
-//#region src/components/CourseDetail.tsx
-var CourseDetail = ({ course, currentUser, posts, onBack, onRefresh, onOpenCertificate }) => {
-	const [tabHistory, setTabHistory] = (0, import_react.useState)(["stream"]);
-	const activeTab = tabHistory[tabHistory.length - 1] || "stream";
+//#region src/components/PrivateNotesView.tsx
+var PrivateNotesView = ({ course, currentUser, onRefresh }) => {
+	const isInstructor = currentUser.role === "admin" || currentUser.role === "co_admin";
+	const [category, setCategory] = (0, import_react.useState)("question");
+	const [subject, setSubject] = (0, import_react.useState)("");
+	const [leaveDate, setLeaveDate] = (0, import_react.useState)(() => (/* @__PURE__ */ new Date()).toISOString().slice(0, 10));
+	const [content, setContent] = (0, import_react.useState)("");
+	const [submitSuccess, setSubmitSuccess] = (0, import_react.useState)(null);
+	const [submitError, setSubmitError] = (0, import_react.useState)(null);
+	const [statusFilter, setStatusFilter] = (0, import_react.useState)("all");
+	const [categoryFilter, setCategoryFilter] = (0, import_react.useState)("all");
+	const [searchQuery, setSearchQuery] = (0, import_react.useState)("");
+	const [replyDrafts, setReplyDrafts] = (0, import_react.useState)({});
+	const [editingNoteId, setEditingNoteId] = (0, import_react.useState)(null);
+	const [confirmDeleteId, setConfirmDeleteId] = (0, import_react.useState)(null);
+	const [isSyncing, setIsSyncing] = (0, import_react.useState)(false);
+	const notes = ClassroomDB.getPrivateNotes(course.id, currentUser);
+	(0, import_react.useEffect)(() => {
+		ClassroomDB.markPrivateNotesReadForCourse(course.id, currentUser);
+		onRefresh();
+		ClassroomDB.syncPrivateNotesFromCloud(true).then((changed) => {
+			if (changed) {
+				ClassroomDB.markPrivateNotesReadForCourse(course.id, currentUser);
+				onRefresh();
+			}
+		});
+	}, [course.id, currentUser.id]);
 	(0, import_react.useEffect)(() => {
 		let mounted = true;
-		const syncCourseAttendance = () => {
-			if (document.visibilityState === "visible" && navigator.onLine !== false) ClassroomDB.syncAttendanceFromCloud().then((changed) => {
+		const interval = setInterval(() => {
+			if (document.visibilityState === "visible" && navigator.onLine !== false) ClassroomDB.syncPrivateNotesFromCloud().then((changed) => {
 				if (mounted && changed) onRefresh();
 			});
+		}, 1e4);
+		return () => {
+			mounted = false;
+			clearInterval(interval);
 		};
-		syncCourseAttendance();
-		const timer = setInterval(syncCourseAttendance, 8e3);
+	}, [course.id]);
+	const handleManualSync = async () => {
+		setIsSyncing(true);
+		try {
+			await ClassroomDB.syncPrivateNotesFromCloud(true);
+			onRefresh();
+		} finally {
+			setIsSyncing(false);
+		}
+	};
+	const handleStudentSubmit = (e) => {
+		e.preventDefault();
+		setSubmitError(null);
+		if (!content.trim()) {
+			setSubmitError("ကျေးဇူးပြု၍ မေးမြန်းလိုသော အကြောင်းအရာ သို့မဟုတ် ခွင့်တိုင်လိုသော အကြောင်းပြချက်ကို ရေးသားပါ။");
+			return;
+		}
+		try {
+			ClassroomDB.createPrivateNote({
+				courseId: course.id,
+				category,
+				subject: subject.trim(),
+				leaveDate: category === "leave_request" ? leaveDate : void 0,
+				content: content.trim()
+			}, currentUser);
+			setSubject("");
+			setContent("");
+			setSubmitSuccess("သင်၏ သီးသန့်စာကို ဆရာ (Admin / Co-Admin) ထံသို့ အောင်မြင်စွာ ပေးပို့ပြီးပါပြီ! ဆရာ ပြန်လည်ဖြေကြားသည့်အခါ အပေါ်ဆုံး ခေါင်းလောင်းပုံ (Notification Bell) နှင့် ဤစာမျက်နှာတွင် ချက်ချင်း ပေါ်လာပါမည်။");
+			onRefresh();
+			setTimeout(() => setSubmitSuccess(null), 5e3);
+		} catch (err) {
+			setSubmitError(err instanceof Error ? err.message : "စာပေးပို့ရာတွင် အမှားဖြစ်ပေါ်ခဲ့ပါသည်။");
+		}
+	};
+	const handleInstructorReply = (note, newStatus) => {
+		const draft = (replyDrafts[note.id] ?? note.replyContent ?? "").trim();
+		ClassroomDB.replyToPrivateNote(note.id, draft, newStatus, currentUser);
+		setEditingNoteId(null);
+		onRefresh();
+	};
+	const handleDeleteNote = (noteId) => {
+		ClassroomDB.deletePrivateNote(noteId, currentUser);
+		setConfirmDeleteId(null);
+		onRefresh();
+	};
+	const pendingCount = notes.filter((n) => n.status === "pending").length;
+	const resolvedCount = notes.filter((n) => n.status !== "pending").length;
+	const filteredNotes = notes.filter((n) => {
+		if (statusFilter === "pending" && n.status !== "pending") return false;
+		if (statusFilter === "resolved" && n.status === "pending") return false;
+		if (categoryFilter !== "all" && n.category !== categoryFilter) return false;
+		if (searchQuery.trim()) {
+			const q = searchQuery.toLowerCase();
+			return n.studentName.toLowerCase().includes(q) || n.studentUsername.toLowerCase().includes(q) || n.subject.toLowerCase().includes(q) || n.content.toLowerCase().includes(q) || (n.replyContent || "").toLowerCase().includes(q);
+		}
+		return true;
+	});
+	const renderCategoryBadge = (cat, noteLeaveDate) => {
+		if (cat === "leave_request") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-xl bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 text-[11px] font-bold border border-amber-300/60 dark:border-amber-800/60",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Calendar, { className: "w-3 h-3 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["ခွင့်တိုင်ကြားစာ", noteLeaveDate ? ` (${noteLeaveDate})` : ""] })]
+		});
+		if (cat === "question") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-xl bg-indigo-100 dark:bg-indigo-950/70 text-indigo-800 dark:text-indigo-300 text-[11px] font-bold border border-indigo-300/60 dark:border-indigo-800/60",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BookOpen, { className: "w-3 h-3 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "သင်ခန်းစာ မေးခွန်း" })]
+		});
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-xl bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 text-[11px] font-bold border border-emerald-300/60 dark:border-emerald-800/60",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MessageSquare, { className: "w-3 h-3 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "သီးသန့် တင်ပြချက်" })]
+		});
+	};
+	const renderStatusBadge = (status) => {
+		if (status === "pending") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-xl bg-rose-100 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 text-[11px] font-extrabold border border-rose-300/60 dark:border-rose-800/60",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Clock, { className: "w-3 h-3 shrink-0 animate-pulse" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "မဖြေရသေး (Pending)" })]
+		});
+		if (status === "approved") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-xl bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 text-[11px] font-extrabold border border-emerald-300/60 dark:border-emerald-800/60",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleCheck, { className: "w-3 h-3 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "ခွင့်ပြုပြီး (Approved)" })]
+		});
+		if (status === "rejected") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-xl bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[11px] font-extrabold border border-slate-300 dark:border-slate-700",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleX, { className: "w-3 h-3 shrink-0 text-rose-500" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "ငြင်းပယ်ထားသည် (Declined)" })]
+		});
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-xl bg-indigo-100 dark:bg-indigo-950/70 text-indigo-800 dark:text-indigo-300 text-[11px] font-extrabold border border-indigo-300/60 dark:border-indigo-800/60",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleCheck, { className: "w-3 h-3 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "ဖြေကြားပြီး (Replied)" })]
+		});
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "space-y-6",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "neu-raised rounded-3xl p-4 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border border-indigo-500/15",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "flex items-start sm:items-center gap-3.5 min-w-0",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "neu-inset-sm p-3 rounded-2xl text-indigo-600 dark:text-indigo-400 shrink-0",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Lock, { className: "w-5 h-5" })
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "min-w-0",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex items-center gap-2 flex-wrap",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+								className: "text-sm sm:text-base font-extrabold text-slate-900 dark:text-white",
+								children: isInstructor ? "ကျောင်းသား သီးသန့်မေးခွန်းများနှင့် ခွင့်တိုင်ကြားစာများ (Private Student Notes)" : "ဆရာသို့ သီးသန့်မေးမြန်းရန်နှင့် ခွင့်တိုင်ကြားရန် (Private Note to Instructor)"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "px-2 py-0.5 rounded-lg bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold",
+								children: "🔒 1-on-1 Private"
+							})]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed",
+							children: isInstructor ? "ကျောင်းသားများ ပေးပို့ထားသော သင်ခန်းစာ မေးခွန်းများနှင့် ခွင့်တိုင်စာများကို ဤနေရာတွင် လက်ခံဖြေကြားနိုင်ပါသည်။ ခွင့်တိုင်စာကို \"ခွင့်ပြုသည်\" နှိပ်ပါက ထိုရက်၏ Attendance တွင်လည်း \"ခွင့် (Excused)\" အဖြစ် အလိုအလျောက် မှတ်တမ်းတင်ပေးပါသည်။" : "အတန်းတွင်း လူသိရှင်ကြား မမေးလိုသော သင်ခန်းစာ မေးခွန်းများ၊ ခွင့်တိုင်ကြားစာများကို ဆရာ (Admin / Co-Admin) ထံသို့ သီးသန့် ပေးပို့နိုင်ပါသည်။ အခြားကျောင်းသားများ လုံးဝ မမြင်တွေ့နိုင်ပါ။"
+						})]
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					onClick: handleManualSync,
+					disabled: isSyncing,
+					className: "neu-btn px-3.5 py-2 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center justify-center gap-1.5 cursor-pointer self-end sm:self-center shrink-0",
+					title: "နောက်ဆုံးရ စာများကို ပြန်လည်ရယူရန်",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RefreshCw, { className: `w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 ${isSyncing ? "animate-spin" : ""}` }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Sync" })]
+				})]
+			}),
+			!isInstructor && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+				onSubmit: handleStudentSubmit,
+				className: "neu-card rounded-3xl p-4 sm:p-6 space-y-4 border border-slate-200/70 dark:border-slate-800",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex items-center justify-between gap-2 pb-2 border-b border-slate-200/60 dark:border-slate-800",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", {
+							className: "text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white flex items-center gap-2",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Send, { className: "w-4 h-4 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "စာအသစ် ပေးပို့ရန် (Send New Private Note / Leave Request)" })]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "text-[11px] font-mono text-slate-500 dark:text-slate-400",
+							children: course.code
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "space-y-1.5",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+							className: "block text-xs font-bold text-slate-700 dark:text-slate-300",
+							children: "၁။ အမျိုးအစား ရွေးချယ်ပါ (Select Category)"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "grid grid-cols-1 sm:grid-cols-3 gap-2.5",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
+									onClick: () => setCategory("question"),
+									className: `p-3 rounded-2xl text-xs font-bold flex items-center gap-2.5 transition-all cursor-pointer text-left ${category === "question" ? "neu-inset ring-2 ring-indigo-500/40 text-indigo-700 dark:text-indigo-300" : "neu-btn text-slate-600 dark:text-slate-300"}`,
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BookOpen, { className: "w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: "သင်ခန်းစာ မေးခွန်း" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+										className: "text-[10px] font-normal opacity-75",
+										children: "Lesson Question"
+									})] })]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
+									onClick: () => setCategory("leave_request"),
+									className: `p-3 rounded-2xl text-xs font-bold flex items-center gap-2.5 transition-all cursor-pointer text-left ${category === "leave_request" ? "neu-inset ring-2 ring-amber-500/40 text-amber-800 dark:text-amber-300" : "neu-btn text-slate-600 dark:text-slate-300"}`,
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Calendar, { className: "w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: "ခွင့်တိုင်ကြားစာ" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+										className: "text-[10px] font-normal opacity-75",
+										children: "Leave Request"
+									})] })]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
+									onClick: () => setCategory("feedback"),
+									className: `p-3 rounded-2xl text-xs font-bold flex items-center gap-2.5 transition-all cursor-pointer text-left ${category === "feedback" ? "neu-inset ring-2 ring-emerald-500/40 text-emerald-800 dark:text-emerald-300" : "neu-btn text-slate-600 dark:text-slate-300"}`,
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MessageSquare, { className: "w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: "အထွေထွေ တင်ပြချက်" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+										className: "text-[10px] font-normal opacity-75",
+										children: "General Feedback"
+									})] })]
+								})
+							]
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "grid grid-cols-1 sm:grid-cols-2 gap-3.5",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+							className: "block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5",
+							children: "၂။ ခေါင်းစဉ် / အကြောင်းအရာအကျဉ်း (Subject)"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "text",
+							value: subject,
+							onChange: (e) => setSubject(e.target.value),
+							placeholder: category === "leave_request" ? "ဥပမာ — ကျန်းမာရေးကြောင့် ၁ ရက် ခွင့်တိုင်ကြားခြင်း" : category === "question" ? "ဥပမာ — Lesson 2 မှ သင်ခန်းစာ မရှင်းလင်းချက် မေးမြန်းခြင်း" : "ဥပမာ — သင်တန်းချိန်နှင့် ပတ်သက်၍ တင်ပြချက်",
+							className: "neu-input w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm text-slate-900 dark:text-slate-100"
+						})] }), category === "leave_request" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+							className: "block text-xs font-bold text-amber-800 dark:text-amber-300 mb-1.5",
+							children: "📅 ခွင့်ယူလိုသည့် ရက်စွဲ (Leave Date)"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "date",
+							value: leaveDate,
+							onChange: (e) => setLeaveDate(e.target.value),
+							className: "neu-input w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-mono text-slate-900 dark:text-slate-100"
+						})] })]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5",
+						children: ["၃။ အသေးစိတ် ရေးသားရန် (Message Details) ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "text-rose-500",
+							children: "*"
+						})]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+						rows: 4,
+						value: content,
+						onChange: (e) => setContent(e.target.value),
+						placeholder: category === "leave_request" ? "အတန်းမတက်ရောက်နိုင်သည့် အကြောင်းပြချက်ကို ရေးသားပေးပါ..." : "ဆရာထံ သီးသန့်မေးမြန်းလိုသော အကြောင်းအရာကို ပြည့်စုံစွာ ရေးသားပေးပါ...",
+						className: "neu-input w-full px-3.5 py-2.5 rounded-2xl text-xs sm:text-sm text-slate-900 dark:text-slate-100 leading-relaxed"
+					})] }),
+					submitError && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "p-3 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-xs font-semibold text-rose-700 dark:text-rose-300",
+						children: submitError
+					}),
+					submitSuccess && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-xs font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-2",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleCheck, { className: "w-4 h-4 text-emerald-600 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: submitSuccess })]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldCheck, { className: "w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "ဤစာသည် မိနစ် ၃၀ ကြာလျှင်လည်း လုံးဝ မပျက်သွားဘဲ ဆရာဖြေကြားသည့်အထိ ရှိနေပါမည်။" })]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							type: "submit",
+							className: "neu-btn-indigo px-5 py-2.5 rounded-xl text-xs font-extrabold text-white flex items-center justify-center gap-2 cursor-pointer shrink-0",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Send, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "ဆရာထံ ပေးပို့မည် (Send Private Note)" })]
+						})]
+					})
+				]
+			}),
+			isInstructor && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "neu-card rounded-3xl p-4 sm:p-5 space-y-3.5",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "flex flex-col lg:flex-row lg:items-center justify-between gap-3",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex flex-wrap items-center gap-2",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								onClick: () => setStatusFilter("all"),
+								className: `px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer transition-all ${statusFilter === "all" ? "neu-btn-indigo text-white" : "neu-btn text-slate-600 dark:text-slate-300"}`,
+								children: [
+									"အားလုံး (",
+									notes.length,
+									")"
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								onClick: () => setStatusFilter("pending"),
+								className: `px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer transition-all flex items-center gap-1.5 ${statusFilter === "pending" ? "bg-rose-600 text-white shadow-xs" : "neu-btn text-rose-700 dark:text-rose-300"}`,
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "w-2 h-2 rounded-full bg-current animate-pulse" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+									"မဖြေရသေး (",
+									pendingCount,
+									")"
+								] })]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								onClick: () => setStatusFilter("resolved"),
+								className: `px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer transition-all ${statusFilter === "resolved" ? "bg-emerald-600 text-white shadow-xs" : "neu-btn text-emerald-700 dark:text-emerald-300"}`,
+								children: [
+									"✓ ဖြေကြားပြီး (",
+									resolvedCount,
+									")"
+								]
+							})
+						]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+							value: categoryFilter,
+							onChange: (e) => setCategoryFilter(e.target.value),
+							className: "neu-input px-3 py-2 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "all",
+									children: "အမျိုးအစား အားလုံး (All Types)"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "question",
+									children: "📘 သင်ခန်းစာ မေးခွန်းများ"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "leave_request",
+									children: "📅 ခွင့်တိုင်ကြားစာများ"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "feedback",
+									children: "💬 အထွေထွေ တင်ပြချက်များ"
+								})
+							]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "relative w-full sm:w-60",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Search, { className: "w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								value: searchQuery,
+								onChange: (e) => setSearchQuery(e.target.value),
+								placeholder: "ကျောင်းသားအမည် / စာရှာရန်...",
+								className: "neu-input w-full pl-9 pr-3 py-2 rounded-xl text-xs text-slate-900 dark:text-slate-100"
+							})]
+						})]
+					})]
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "space-y-4",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "flex items-center justify-between px-1",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+						className: "text-xs sm:text-sm font-extrabold text-slate-800 dark:text-slate-200",
+						children: isInstructor ? `လက်ခံရရှိသော စာများ (${filteredNotes.length})` : `သင်ပေးပို့ထားသော စာများနှင့် ဆရာ့အဖြေများ (${filteredNotes.length})`
+					})
+				}), filteredNotes.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "neu-card rounded-3xl p-8 sm:p-12 text-center space-y-2",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "neu-inset-sm w-12 h-12 rounded-2xl mx-auto flex items-center justify-center text-slate-400",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MessageSquare, { className: "w-5 h-5" })
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "text-xs sm:text-sm font-bold text-slate-700 dark:text-slate-300",
+							children: isInstructor ? "လက်ရှိတွင် ကျောင်းသားများ ပေးပို့ထားသော သီးသန့်စာ မရှိသေးပါ။" : "သင်ပေးပို့ထားသော သီးသန့်စာ သို့မဟုတ် ခွင့်တိုင်ကြားစာ မရှိသေးပါ။"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto",
+							children: isInstructor ? "ကျောင်းသားတစ်ဦးမှ မေးခွန်း သို့မဟုတ် ခွင့်တိုင်စာ ပေးပို့လာပါက ဤနေရာနှင့် Notification Bell တွင် ချက်ချင်း ပေါ်လာပါမည်။" : "အပေါ်ရှိ ဖောင်မှတစ်ဆင့် သင်ခန်းစာ မေးခွန်း သို့မဟုတ် ခွင့်တိုင်ကြားစာကို ဆရာထံ သီးသန့် ပေးပို့နိုင်ပါသည်။"
+						})
+					]
+				}) : filteredNotes.map((note) => {
+					const isReplyingOrEditing = isInstructor && (note.status === "pending" || editingNoteId === note.id);
+					const currentDraft = replyDrafts[note.id] !== void 0 ? replyDrafts[note.id] : note.replyContent || "";
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: `neu-card rounded-3xl p-4 sm:p-5 space-y-3.5 transition-all border ${note.status === "pending" ? "border-amber-500/30 dark:border-amber-500/30" : "border-slate-200/70 dark:border-slate-800"}`,
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-slate-200/60 dark:border-slate-800",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "flex items-center gap-2.5 min-w-0",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+										className: "w-9 h-9 rounded-2xl bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center justify-center font-extrabold text-xs shrink-0",
+										children: "🎓"
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "min-w-0",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+											className: "flex items-center gap-2 flex-wrap",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white",
+												children: note.studentName
+											}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+												className: "text-[11px] font-mono text-indigo-600 dark:text-indigo-400",
+												children: ["@", note.studentUsername]
+											})]
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+											className: "text-[11px] font-mono text-slate-400",
+											children: ["ပေးပို့ချိန်: ", note.createdAt]
+										})]
+									})]
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "flex flex-wrap items-center gap-2",
+									children: [
+										renderCategoryBadge(note.category, note.leaveDate),
+										renderStatusBadge(note.status),
+										confirmDeleteId === note.id ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+											className: "flex items-center gap-1 bg-rose-50 dark:bg-rose-950/70 px-2 py-1 rounded-xl border border-rose-300 dark:border-rose-800",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												onClick: () => handleDeleteNote(note.id),
+												className: "text-[11px] font-extrabold text-rose-600 dark:text-rose-400 px-1.5 cursor-pointer",
+												children: "ဖျက်မည်"
+											}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												onClick: () => setConfirmDeleteId(null),
+												className: "text-[11px] font-semibold text-slate-500 px-1 cursor-pointer",
+												children: "မဖျက်ပါ"
+											})]
+										}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											type: "button",
+											onClick: () => setConfirmDeleteId(note.id),
+											className: "p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer",
+											title: "ဤစာကို ဖျက်ရန် (Delete Note)",
+											children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Trash2, { className: "w-3.5 h-3.5" })
+										})
+									]
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "space-y-1.5",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white",
+									children: note.subject
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+									className: "text-xs sm:text-sm text-slate-700 dark:text-slate-200 whitespace-pre-wrap leading-relaxed neu-inset-sm p-3.5 rounded-2xl",
+									children: note.content
+								})]
+							}),
+							note.status !== "pending" && note.replyContent && editingNoteId !== note.id && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "p-3.5 sm:p-4 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/35 border border-indigo-200/80 dark:border-indigo-800/60 space-y-2",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "flex flex-wrap items-center justify-between gap-2",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "flex items-center gap-2 text-xs font-extrabold text-indigo-900 dark:text-indigo-200",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UserCheck, { className: "w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+											"ဆရာ့အဖြေ — ",
+											note.repliedByName || "Instructor",
+											" ",
+											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+												className: "font-normal text-[11px] opacity-80",
+												children: [
+													"(",
+													note.repliedByRole === "admin" ? "Lead Mentor / Admin" : "Co-Admin",
+													")"
+												]
+											})
+										] })]
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "flex items-center gap-2",
+										children: [note.repliedAt && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "text-[10px] font-mono text-indigo-600 dark:text-indigo-400",
+											children: note.repliedAt
+										}), isInstructor && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+											type: "button",
+											onClick: () => {
+												setReplyDrafts((prev) => ({
+													...prev,
+													[note.id]: note.replyContent || ""
+												}));
+												setEditingNoteId(note.id);
+											},
+											className: "inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white dark:bg-slate-800 text-[11px] font-bold text-indigo-600 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 cursor-pointer",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PenLine, { className: "w-3 h-3" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "ပြင်မည်" })]
+										})]
+									})]
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+									className: "text-xs sm:text-sm text-slate-800 dark:text-slate-100 whitespace-pre-wrap leading-relaxed",
+									children: note.replyContent
+								})]
+							}),
+							isReplyingOrEditing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "pt-2 space-y-2.5",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+									rows: 2,
+									value: currentDraft,
+									onChange: (e) => setReplyDrafts((prev) => ({
+										...prev,
+										[note.id]: e.target.value
+									})),
+									placeholder: note.category === "leave_request" ? "မှတ်ချက်/အဖြေ ရေးရန် (မရေးဘဲ \"ခွင့်ပြုသည်\" တိုက်ရိုက်နှိပ်လျှင်လည်း စနစ်မှ အလိုအလျောက် စာသားထည့်ပေးပါမည်)..." : "ကျောင်းသားထံ ပြန်လည်ဖြေကြားလိုသော အဖြေကို ရေးသားပါ...",
+									className: "neu-input w-full px-3.5 py-2.5 rounded-2xl text-xs sm:text-sm text-slate-900 dark:text-slate-100"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "flex flex-wrap items-center justify-end gap-2",
+									children: [
+										editingNoteId === note.id && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											type: "button",
+											onClick: () => setEditingNoteId(null),
+											className: "neu-btn px-3 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 cursor-pointer",
+											children: "မပြင်တော့ပါ (Cancel)"
+										}),
+										note.category === "leave_request" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+											type: "button",
+											onClick: () => handleInstructorReply(note, "approved"),
+											className: "px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-xs cursor-pointer",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleCheck, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "✓ ခွင့်ပြုသည် (Approve Leave)" })]
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+											type: "button",
+											onClick: () => handleInstructorReply(note, "rejected"),
+											className: "px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleX, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "ငြင်းပယ်သည် (Decline)" })]
+										})] }),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+											type: "button",
+											onClick: () => handleInstructorReply(note, "replied"),
+											className: "neu-btn-indigo px-4 py-2 rounded-xl text-xs font-extrabold text-white flex items-center gap-1.5 cursor-pointer",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Reply, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "အဖြေပေးပို့မည် (Send Reply)" })]
+										})
+									]
+								})]
+							})
+						]
+					}, note.id);
+				})]
+			})
+		]
+	});
+};
+//#endregion
+//#region src/components/CourseDetail.tsx
+var CourseDetail = ({ course, currentUser, posts, initialTab = "stream", onBack, onRefresh, onOpenCertificate }) => {
+	const [tabHistory, setTabHistory] = (0, import_react.useState)([initialTab]);
+	const activeTab = tabHistory[tabHistory.length - 1] || "stream";
+	(0, import_react.useEffect)(() => {
+		if (initialTab && initialTab !== activeTab) setTabHistory((prev) => [...prev, initialTab]);
+	}, [initialTab, course.id]);
+	(0, import_react.useEffect)(() => {
+		let mounted = true;
+		const syncCourseLiveState = () => {
+			if (document.visibilityState === "visible" && navigator.onLine !== false) {
+				ClassroomDB.syncAttendanceFromCloud().then((changed) => {
+					if (mounted && changed) onRefresh();
+				});
+				ClassroomDB.syncPrivateNotesFromCloud().then((changed) => {
+					if (mounted && changed) onRefresh();
+				});
+			}
+		};
+		syncCourseLiveState();
+		const timer = setInterval(syncCourseLiveState, 8e3);
 		return () => {
 			mounted = false;
 			clearInterval(timer);
@@ -53060,6 +54084,9 @@ var CourseDetail = ({ course, currentUser, posts, onBack, onRefresh, onOpenCerti
 			if (nextTab === "attendance") ClassroomDB.syncAttendanceFromCloud(true).then((updated) => {
 				if (updated) onRefresh();
 			});
+			else if (nextTab === "private_notes") ClassroomDB.syncPrivateNotesFromCloud(true).then((updated) => {
+				if (updated) onRefresh();
+			});
 			else ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
 				if (updated) onRefresh();
 			});
@@ -53069,10 +54096,11 @@ var CourseDetail = ({ course, currentUser, posts, onBack, onRefresh, onOpenCerti
 		setTabHistory((prev) => prev.length > 1 ? prev.slice(0, -1) : prev);
 	});
 	const hasOpenAttendance = ClassroomDB.getAttendanceSessions(course.id).some((s) => s.isOpen);
+	const unreadPrivateNotesCount = ClassroomDB.getUnreadPrivateNotesCount(course.id, currentUser);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "space-y-5 sm:space-y-6",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "neu-raised rounded-3xl p-3.5 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5",
+			className: "neu-raised rounded-3xl p-3.5 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-3.5",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "flex items-center gap-3 min-w-0",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -53102,16 +54130,16 @@ var CourseDetail = ({ course, currentUser, posts, onBack, onRefresh, onOpenCerti
 					})]
 				})]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "neu-inset p-1.5 rounded-2xl grid grid-cols-3 sm:flex items-center gap-1 sm:gap-1.5 text-xs font-bold self-stretch sm:self-auto",
+				className: "neu-inset p-1.5 rounded-2xl grid grid-cols-2 sm:flex items-center gap-1 sm:gap-1.5 text-xs font-bold self-stretch lg:self-auto",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						onClick: () => handleSwitchTab("stream"),
-						className: `flex items-center justify-center gap-1 sm:gap-1.5 px-2 sm:px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${activeTab === "stream" ? "neu-raised-sm text-indigo-700 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
+						className: `flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${activeTab === "stream" ? "neu-raised-sm text-indigo-700 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MessageSquare, { className: "w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Stream" })]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						onClick: () => handleSwitchTab("attendance"),
-						className: `flex items-center justify-center gap-1 sm:gap-1.5 px-2 sm:px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${activeTab === "attendance" ? "neu-raised-sm text-emerald-700 dark:text-emerald-300" : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
+						className: `flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${activeTab === "attendance" ? "neu-raised-sm text-emerald-700 dark:text-emerald-300" : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CalendarCheck, { className: "w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Attendance" }),
@@ -53122,8 +54150,21 @@ var CourseDetail = ({ course, currentUser, posts, onBack, onRefresh, onOpenCerti
 						]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						onClick: () => handleSwitchTab("private_notes"),
+						className: `flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${activeTab === "private_notes" ? "neu-raised-sm text-amber-800 dark:text-amber-300" : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
+						title: currentUser.role === "student" ? "ဆရာသို့ သီးသန့်မေးရန် / ခွင့်တိုင်ရန် (Private Note & Leave Request)" : "ကျောင်းသား သီးသန့်စာများနှင့် ခွင့်တိုင်ကြားစာများ (Private Student Notes)",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Lock, { className: "w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "သီးသန့်စာ" }),
+							unreadPrivateNotesCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "min-w-[18px] h-[18px] px-1 rounded-full bg-rose-600 text-white text-[10px] font-extrabold flex items-center justify-center animate-pulse shrink-0",
+								children: unreadPrivateNotesCount
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						onClick: () => handleSwitchTab("people"),
-						className: `flex items-center justify-center gap-1 sm:gap-1.5 px-2 sm:px-4 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${activeTab === "people" ? "neu-raised-sm text-indigo-700 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
+						className: `flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${activeTab === "people" ? "neu-raised-sm text-indigo-700 dark:text-indigo-300" : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"}`,
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Users, { className: "w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "People" })]
 					})
 				]
@@ -53141,6 +54182,11 @@ var CourseDetail = ({ course, currentUser, posts, onBack, onRefresh, onOpenCerti
 				currentUser,
 				onRefresh,
 				onOpenCertificate
+			}),
+			activeTab === "private_notes" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PrivateNotesView, {
+				course,
+				currentUser,
+				onRefresh
 			}),
 			activeTab === "people" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeopleView, {
 				course,
@@ -59097,6 +60143,7 @@ function App() {
 	const [showReorderPanel, setShowReorderPanel] = (0, import_react.useState)(false);
 	const [draggedCourseId, setDraggedCourseId] = (0, import_react.useState)(null);
 	const [appBannerError, setAppBannerError] = (0, import_react.useState)(null);
+	const [selectedCourseInitialTab, setSelectedCourseInitialTab] = (0, import_react.useState)("stream");
 	useBackHandler(!!selectedCourse, () => setSelectedCourse(null));
 	useBackHandler(!!activeCertificate, () => setActiveCertificate(null));
 	useBackHandler(showArchitectureModal, () => setShowArchitectureModal(false));
@@ -59165,6 +60212,13 @@ function App() {
 				});
 				return;
 			}
+			if (kinds.length === 1 && kinds[0] === "private_note") {
+				if (loggedUser.role === "student" && payload?.targetUserIds && payload.targetUserIds.length > 0 && !payload.targetUserIds.includes(loggedUser.id)) return;
+				ClassroomDB.syncPrivateNotesFromCloud(true).then((notesChanged) => {
+					if (notesChanged) refreshData();
+				});
+				return;
+			}
 			if (kinds.length === 1 && kinds[0] === "profile") {
 				if (loggedUser.role === "student" && payload?.targetUserIds && payload.targetUserIds.length > 0 && !payload.targetUserIds.includes(loggedUser.id)) return;
 				ClassroomDB.pullFromSupabase({
@@ -59184,7 +60238,7 @@ function App() {
 				} else if (k === "course") {
 					tableSet.add("courses");
 					tableSet.add("notifications");
-				} else if (k === "notification") tableSet.add("notifications");
+				} else if (k === "notification" || k === "private_note") tableSet.add("notifications");
 				else if (k === "assignment" || k === "submission") {
 					tableSet.add("assignments");
 					tableSet.add("courses");
@@ -59311,7 +60365,7 @@ function App() {
 		setSelectedCourse(null);
 		setCourses([]);
 	};
-	const handleOpenCourse = (course) => {
+	const handleOpenCourse = (course, initialTab = "stream") => {
 		if (!currentUser) return;
 		const check = ClassroomDB.getCourseById(course.id, currentUser);
 		if (!check.course) {
@@ -59319,6 +60373,7 @@ function App() {
 			setTimeout(() => setAppBannerError(null), 5e3);
 			return;
 		}
+		setSelectedCourseInitialTab(initialTab);
 		setSelectedCourse(check.course);
 		setPosts(ClassroomDB.getPostsForCourse(check.course.id, currentUser));
 		setAssignments(ClassroomDB.getAssignments(check.course.id));
@@ -59328,10 +60383,10 @@ function App() {
 			if (updated) refreshData();
 		});
 	};
-	const handleOpenCourseById = (courseId) => {
+	const handleOpenCourseById = (courseId, initialTab = "stream") => {
 		if (!currentUser) return;
 		const target = courses.find((c) => c.id === courseId);
-		if (target) handleOpenCourse(target);
+		if (target) handleOpenCourse(target, initialTab);
 	};
 	const handleResetData = () => {
 		setShowResetConfirmModal(true);
@@ -59470,7 +60525,11 @@ function App() {
 							course: selectedCourse,
 							currentUser,
 							posts,
-							onBack: () => setSelectedCourse(null),
+							initialTab: selectedCourseInitialTab,
+							onBack: () => {
+								setSelectedCourse(null);
+								setSelectedCourseInitialTab("stream");
+							},
 							onRefresh: refreshData,
 							onOpenCertificate: (cert) => setActiveCertificate(cert)
 						})
