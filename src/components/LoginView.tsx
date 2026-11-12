@@ -117,7 +117,9 @@ export const LoginView: React.FC<LoginViewProps> = ({
       setErrorMessage(res.error);
     } else if (res.user) {
       if (res.user.role !== activeRole) {
-        setActiveRole(res.user.role);
+        ClassroomDB.logout();
+        setErrorMessage(ClassroomDB.getRoleMismatchError(res.user.role, activeRole));
+        return;
       }
       onLoginSuccess(res.user);
       ClassroomDB.pullFromSupabase({ force: true }).catch(() => {});
@@ -422,9 +424,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
               <form onSubmit={handleSignInSubmit} className="space-y-5">
                 <div className="space-y-2">
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 pl-1">
-                    {activeRole === 'student'
-                      ? 'Username သို့မဟုတ် Email'
-                      : 'Admin / Co-Admin Username သို့မဟုတ် Email'}
+                    {activeRole === 'admin'
+                      ? 'Admin Username သို့မဟုတ် Email (ဆရာအကောင့်သာ)'
+                      : activeRole === 'co_admin'
+                      ? 'Co-Admin Username သို့မဟုတ် Email (တွဲဖက်ဆရာအကောင့်သာ)'
+                      : 'Student Username သို့မဟုတ် Email (ကျောင်းသားအကောင့်သာ)'}
                   </label>
                   <div className="relative flex items-center">
                     <div className="absolute left-3.5 pointer-events-none text-slate-400 dark:text-slate-500">
@@ -440,9 +444,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
                       spellCheck={false}
                       autoComplete="username"
                       placeholder={
-                        activeRole === 'student'
-                          ? 'Username သို့မဟုတ် Email ရိုက်ထည့်ပါ'
-                          : 'Admin Username သို့မဟုတ် Email ရိုက်ထည့်ပါ'
+                        activeRole === 'admin'
+                          ? 'Admin Username သို့မဟုတ် Email ရိုက်ထည့်ပါ'
+                          : activeRole === 'co_admin'
+                          ? 'Co-Admin Username သို့မဟုတ် Email ရိုက်ထည့်ပါ'
+                          : 'Student Username သို့မဟုတ် Email ရိုက်ထည့်ပါ'
                       }
                       className="neu-input w-full pl-10 pr-4 py-3.5 text-xs sm:text-sm rounded-2xl text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 font-mono"
                       required

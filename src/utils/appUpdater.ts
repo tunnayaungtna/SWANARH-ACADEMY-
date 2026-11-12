@@ -1,7 +1,7 @@
 import { ClassroomDB } from '../services/storage';
 
-export const APP_VERSION_LABEL = 'v20.9';
-export const ACTIVE_SW_CACHE_NAME = 'swanarh-classroom-v20';
+export const APP_VERSION_LABEL = 'v21.0';
+export const ACTIVE_SW_CACHE_NAME = 'swanarh-classroom-v21';
 
 /**
  * Performs a fast, non-destructive live update of both Classroom Cloud Data (Supabase)

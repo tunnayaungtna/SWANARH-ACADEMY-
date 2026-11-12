@@ -1729,15 +1729,20 @@ export class SupabaseService {
 
     const fetcher = async (): Promise<User[]> => {
       try {
+        const isEmailInput = compactId.includes('@');
         const filterSet = new Set<string>();
-        filterSet.add(`username.ilike.${compactId}`);
-        filterSet.add(`email.ilike.${compactId}`);
-        filterSet.add(`title.ilike.%||USR:${compactId}%`);
-        if (idLocalPart) {
-          filterSet.add(`username.ilike.${idLocalPart}`);
-          filterSet.add(`email.ilike.${idLocalPart}@%`);
-          filterSet.add(`title.ilike.%||USR:${idLocalPart}%`);
+        if (isEmailInput) {
+          filterSet.add(`email.ilike.${compactId}`);
+        } else {
+          filterSet.add(`username.ilike.${compactId}`);
+          filterSet.add(`title.ilike.%||USR:${compactId}||%`);
         }
+
+        const matchesExactIdentifier = (u: User): boolean => {
+          const uName = (u.username || '').trim().replace(/^@+/, '').toLowerCase();
+          const uEmail = (u.email || '').trim().toLowerCase();
+          return isEmailInput ? uEmail === compactId : uName === compactId;
+        };
 
         const profileFullCols =
           'id,name,username,email,role,phone,avatar,title,gender,address,password';
@@ -1751,7 +1756,9 @@ export class SupabaseService {
           .limit(15);
 
         if (!error && Array.isArray(data) && data.length > 0) {
-          return data.map((r) => this.mapProfileRowToUser(r as unknown as Record<string, unknown>));
+          return data
+            .map((r) => this.mapProfileRowToUser(r as unknown as Record<string, unknown>))
+            .filter(matchesExactIdentifier);
         }
 
         // Fallback 1: core columns with username column intact (if password/gender/address are missing)
@@ -1762,28 +1769,24 @@ export class SupabaseService {
             .or(Array.from(filterSet).join(','))
             .limit(15);
           if (!coreErr && Array.isArray(coreData) && coreData.length > 0) {
-            return coreData.map((r) =>
-              this.mapProfileRowToUser(r as unknown as Record<string, unknown>)
-            );
+            return coreData
+              .map((r) => this.mapProfileRowToUser(r as unknown as Record<string, unknown>))
+              .filter(matchesExactIdentifier);
           }
 
           // Fallback 2: if `username` column itself is missing in an older table schema
-          const noUserFilters = [
-            `email.ilike.${compactId}`,
-            `title.ilike.%||USR:${compactId}%`,
-            ...(idLocalPart
-              ? [`email.ilike.${idLocalPart}@%`, `title.ilike.%||USR:${idLocalPart}%`]
-              : []),
-          ];
+          const noUserFilters = isEmailInput
+            ? [`email.ilike.${compactId}`]
+            : [`title.ilike.%||USR:${compactId}||%`, `email.ilike.${compactId}@%`];
           const { data: fbData, error: fbErr } = await supabase
             .from('profiles')
             .select(profileNoUsernameCols)
             .or(Array.from(new Set(noUserFilters)).join(','))
             .limit(15);
           if (!fbErr && Array.isArray(fbData) && fbData.length > 0) {
-            return fbData.map((r) =>
-              this.mapProfileRowToUser(r as unknown as Record<string, unknown>)
-            );
+            return fbData
+              .map((r) => this.mapProfileRowToUser(r as unknown as Record<string, unknown>))
+              .filter(matchesExactIdentifier);
           }
         }
         return [];
@@ -1820,17 +1823,20 @@ export class SupabaseService {
     const compactId = safeId.replace(/\s+/g, '');
     if (!compactId) return { networkOk: false, dbSeeded: false, users: [] };
 
-    const idLocalPart = compactId.includes('@') ? compactId.split('@')[0].trim() : compactId;
+    const isEmailInput = compactId.includes('@');
+    const matchesExactIdentifier = (u: User): boolean => {
+      const uName = (u.username || '').trim().replace(/^@+/, '').toLowerCase();
+      const uEmail = (u.email || '').trim().toLowerCase();
+      return isEmailInput ? uEmail === compactId : uName === compactId;
+    };
 
     try {
       const filterSet = new Set<string>();
-      filterSet.add(`username.ilike.${compactId}`);
-      filterSet.add(`email.ilike.${compactId}`);
-      filterSet.add(`title.ilike.%||USR:${compactId}%`);
-      if (idLocalPart) {
-        filterSet.add(`username.ilike.${idLocalPart}`);
-        filterSet.add(`email.ilike.${idLocalPart}@%`);
-        filterSet.add(`title.ilike.%||USR:${idLocalPart}%`);
+      if (isEmailInput) {
+        filterSet.add(`email.ilike.${compactId}`);
+      } else {
+        filterSet.add(`username.ilike.${compactId}`);
+        filterSet.add(`title.ilike.%||USR:${compactId}||%`);
       }
 
       const profileFullCols =
@@ -1845,11 +1851,14 @@ export class SupabaseService {
         .limit(15);
 
       if (!error && Array.isArray(data)) {
-        if (data.length > 0) {
+        const matchedUsers = data
+          .map((r) => this.mapProfileRowToUser(r as unknown as Record<string, unknown>))
+          .filter(matchesExactIdentifier);
+        if (matchedUsers.length > 0) {
           return {
             networkOk: true,
             dbSeeded: true,
-            users: data.map((r) => this.mapProfileRowToUser(r as unknown as Record<string, unknown>)),
+            users: matchedUsers,
           };
         }
         // 0 rows matched: verify via lightweight HEAD count (0 bytes row payload) that `profiles` table is seeded
@@ -1874,13 +1883,14 @@ export class SupabaseService {
           .or(Array.from(filterSet).join(','))
           .limit(15);
         if (!coreErr && Array.isArray(coreData)) {
-          if (coreData.length > 0) {
+          const matchedCoreUsers = coreData
+            .map((r) => this.mapProfileRowToUser(r as unknown as Record<string, unknown>))
+            .filter(matchesExactIdentifier);
+          if (matchedCoreUsers.length > 0) {
             return {
               networkOk: true,
               dbSeeded: true,
-              users: coreData.map((r) =>
-                this.mapProfileRowToUser(r as unknown as Record<string, unknown>)
-              ),
+              users: matchedCoreUsers,
             };
           }
           const { count, error: countErr } = await supabase
@@ -1897,24 +1907,23 @@ export class SupabaseService {
         }
 
         // Fallback 2: if `username` column itself is missing
-        const fallbackFilters = [
-          `email.ilike.${compactId}`,
-          `title.ilike.%||USR:${compactId}%`,
-          ...(idLocalPart
-            ? [`email.ilike.${idLocalPart}@%`, `title.ilike.%||USR:${idLocalPart}%`]
-            : []),
-        ];
+        const fallbackFilters = isEmailInput
+          ? [`email.ilike.${compactId}`]
+          : [`title.ilike.%||USR:${compactId}||%`, `email.ilike.${compactId}@%`];
         const { data: fbData, error: fbErr } = await supabase
           .from('profiles')
           .select(profileNoUsernameCols)
           .or(Array.from(new Set(fallbackFilters)).join(','))
           .limit(15);
         if (!fbErr && Array.isArray(fbData)) {
-          if (fbData.length > 0) {
+          const matchedFbUsers = fbData
+            .map((r) => this.mapProfileRowToUser(r as unknown as Record<string, unknown>))
+            .filter(matchesExactIdentifier);
+          if (matchedFbUsers.length > 0) {
             return {
               networkOk: true,
               dbSeeded: true,
-              users: fbData.map((r) => this.mapProfileRowToUser(r as unknown as Record<string, unknown>)),
+              users: matchedFbUsers,
             };
           }
           const { count, error: countErr } = await supabase
@@ -1952,21 +1961,14 @@ export class SupabaseService {
       .replace(/^@+/, '')
       .toLowerCase();
     const compactId = rawClean.replace(/\s+/g, '');
-    const idLocalPart = compactId.includes('@') ? compactId.split('@')[0].trim() : compactId;
+    const isEmailInput = compactId.includes('@');
 
     return (
       candidates.find((u) => {
         const uName = (u.username || '').trim().toLowerCase();
         const uEmail = (u.email || '').trim().toLowerCase();
-        const uEmailLocal = uEmail.includes('@') ? uEmail.split('@')[0].trim() : uEmail;
-        return (
-          uName === compactId ||
-          uName === rawClean ||
-          uEmail === compactId ||
-          uEmail === rawClean ||
-          (idLocalPart && (uName === idLocalPart || uEmailLocal === idLocalPart))
-        );
-      }) || candidates[0]
+        return isEmailInput ? uEmail === compactId : uName === compactId;
+      }) || null
     );
   }
 
@@ -2105,14 +2107,7 @@ export class SupabaseService {
             !row.avatar && (fetchedAvatars.has(uId) || mergedKnownAvatars.has(uId))
               ? { ...row, avatar: fetchedAvatars.get(uId) || mergedKnownAvatars.get(uId) || '' }
               : row;
-          const sanitizedRow =
-            isStudentLite && uId !== options?.currentUserId
-              ? { ...resolvedRow, password: '' }
-              : resolvedRow;
-          const userObj = this.mapProfileRowToUser(sanitizedRow);
-          if (isStudentLite && uId !== options?.currentUserId) {
-            userObj.password = undefined;
-          }
+          const userObj = this.mapProfileRowToUser(resolvedRow);
           if (
             userObj.role === 'admin' &&
             userObj.avatar &&
@@ -3394,10 +3389,28 @@ export class SupabaseService {
     }
   ): Promise<{ success: boolean; error?: string }> {
     try {
+      let resolvedPassword = user.password;
+      if (!resolvedPassword && typeof window !== 'undefined') {
+        try {
+          const rawUsers = localStorage.getItem('classroom_users');
+          if (rawUsers) {
+            const parsed = JSON.parse(rawUsers) as User[];
+            const match = Array.isArray(parsed)
+              ? parsed.find((u) => u && u.id === user.id && u.password)
+              : undefined;
+            if (match?.password) {
+              resolvedPassword = match.password;
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
       const normalizedUser: User = {
         ...user,
         username: (user.username || '').trim().toLowerCase(),
         email: (user.email || '').trim().toLowerCase(),
+        password: resolvedPassword,
       };
       const payload = this.buildProfilePayload(normalizedUser, this.profileSchemaMode);
       const sigKey = `profile:${normalizedUser.id}`;

@@ -1351,30 +1351,38 @@ export class ClassroomDB {
       .trim();
   }
 
-  private static checkPasswordForUser(user: User, cleanPwd: string): boolean {
-    const firstLowerPwd =
-      cleanPwd.length > 1 ? cleanPwd.charAt(0).toLowerCase() + cleanPwd.slice(1) : cleanPwd.toLowerCase();
+  static getRoleMismatchError(actualRole: UserRole, expectedRole: UserRole): string {
+    const expectedLabel =
+      expectedRole === 'admin'
+        ? 'Admin (ဆရာ)'
+        : expectedRole === 'co_admin'
+        ? 'Co-Admin (တွဲဖက်ဆရာ)'
+        : 'Student (ကျောင်းသား)';
+    if (actualRole === 'admin') {
+      return `🚫 ဝင်ရောက်ခွင့် မပြုပါ: ဤအကောင့်သည် Primary Admin (ဆရာ) အကောင့် ဖြစ်ပါသည်။ ${expectedLabel} နေရာမှ ဝင်ရောက်၍ မရပါ။ ကျေးဇူးပြု၍ အပေါ်ရှိ "Admin" Tab ကို ရွေးချယ်ပြီးမှ ဝင်ရောက်ပါ။`;
+    }
+    if (actualRole === 'co_admin') {
+      return `🚫 ဝင်ရောက်ခွင့် မပြုပါ: ဤအကောင့်သည် Co-Admin (တွဲဖက်ဆရာ) အကောင့် ဖြစ်ပါသည်။ ${expectedLabel} နေရာမှ ဝင်ရောက်၍ မရပါ။ ကျေးဇူးပြု၍ အပေါ်ရှိ "Co-Admin" Tab ကို ရွေးချယ်ပြီးမှ ဝင်ရောက်ပါ။`;
+    }
+    return `🚫 ဝင်ရောက်ခွင့် မပြုပါ: ဤအကောင့်သည် ကျောင်းသား (Student) အကောင့် ဖြစ်ပါသည်။ ${expectedLabel} နေရာမှ လုံးဝ ဝင်ရောက်ခွင့် မရှိပါ။ ကျေးဇူးပြု၍ အပေါ်ရှိ "Student" Tab ကို ရွေးချယ်ပြီးမှ ဝင်ရောက်ပါ။`;
+  }
 
-    return (
-      verifyPassword(cleanPwd, user.password, user.role) ||
-      (firstLowerPwd !== cleanPwd && verifyPassword(firstLowerPwd, user.password, user.role)) ||
-      (cleanPwd.toLowerCase() !== cleanPwd &&
-        decryptPassword(user.password, user.role) === decryptPassword(user.password, user.role).toLowerCase() &&
-        verifyPassword(cleanPwd.toLowerCase(), user.password, user.role))
-    );
+  private static checkPasswordForUser(user: User, cleanPwd: string): boolean {
+    if (!cleanPwd || !user.password) return false;
+    return verifyPassword(cleanPwd, user.password, user.role);
   }
 
   private static verifyCredentialsOnly(
     identifier: string,
     password: string,
-    _expectedRole?: UserRole
+    expectedRole?: UserRole
   ): { user: User | null; error?: string } {
     this.init();
 
-    const { cleanId, compactId, idLocalPart, alphaNumId } = this.normalizeLoginIdentifier(identifier);
+    const { cleanId, compactId } = this.normalizeLoginIdentifier(identifier);
     const cleanPwd = this.normalizeLoginPassword(password);
 
-    if (!cleanId || !cleanPwd) {
+    if (!cleanId || !compactId || !cleanPwd) {
       return {
         user: null,
         error: 'Username သို့မဟုတ် Email နှင့် Password ပြည့်စုံစွာ ရိုက်ထည့်ပေးပါ။',
@@ -1382,60 +1390,21 @@ export class ClassroomDB {
     }
 
     const allUsers = this.getAllUsers();
+    const isEmailInput = compactId.includes('@');
     const candidateSet = new Set<User>();
 
-    // Priority 1: Exact Username or Exact Email match
+    // Strict Exact Match:
+    // - If input contains '@', it MUST match the user's exact email address.
+    // - If input does not contain '@', it MUST match the user's exact username.
     for (const u of allUsers) {
       const uName = (u.username || '').trim().replace(/^@+/, '').toLowerCase();
       const uEmail = (u.email || '').trim().toLowerCase();
-      if (
-        uName === cleanId ||
-        uName === compactId ||
-        uEmail === cleanId ||
-        uEmail === compactId
-      ) {
-        candidateSet.add(u);
-      }
-    }
-
-    // Priority 2: Cross-match between Username and Email local-part (before '@')
-    // Ensures both Username and Email work interchangeably for every account
-    if (idLocalPart) {
-      for (const u of allUsers) {
-        const uName = (u.username || '').trim().replace(/^@+/, '').toLowerCase();
-        const uEmail = (u.email || '').trim().toLowerCase();
-        const uEmailLocal = uEmail.includes('@') ? uEmail.split('@')[0].trim() : uEmail;
-        if (
-          uName === idLocalPart ||
-          uEmailLocal === compactId ||
-          uEmailLocal === idLocalPart
-        ) {
+      if (isEmailInput) {
+        if (uEmail === cleanId || uEmail === compactId) {
           candidateSet.add(u);
         }
-      }
-    }
-
-    // Priority 3: Punctuation/space-insensitive Username or Email prefix match
-    if (alphaNumId.length >= 2) {
-      for (const u of allUsers) {
-        const uName = (u.username || '').trim().toLowerCase();
-        const uEmail = (u.email || '').trim().toLowerCase();
-        const uEmailLocal = uEmail.includes('@') ? uEmail.split('@')[0].trim() : uEmail;
-        const uAlphaName = uName.replace(/[^a-z0-9\u1000-\u109f]/g, '');
-        const uAlphaEmail = uEmailLocal.replace(/[^a-z0-9\u1000-\u109f]/g, '');
-
-        if (uAlphaName === alphaNumId || uAlphaEmail === alphaNumId) {
-          candidateSet.add(u);
-        }
-      }
-    }
-
-    // Priority 4: Auto-generated numeric suffix match on Username (e.g. "mgaungmin1" when user types "mgaungmin")
-    if (idLocalPart.length >= 3) {
-      for (const u of allUsers) {
-        const uName = (u.username || '').trim().toLowerCase();
-        const strippedDigits = uName.replace(/\d+$/, '');
-        if (strippedDigits && strippedDigits === idLocalPart) {
+      } else {
+        if (uName === cleanId || uName === compactId) {
           candidateSet.add(u);
         }
       }
@@ -1452,8 +1421,23 @@ export class ClassroomDB {
       };
     }
 
-    // Check password across ALL candidate matches so stale/duplicate entries never block a valid account
-    for (const candidate of candidates) {
+    // Strict Role Tab Enforcement:
+    // Admin accounts can ONLY sign in under the "Admin" tab,
+    // Co-Admin accounts can ONLY sign in under the "Co-Admin" tab,
+    // and Student accounts can ONLY sign in under the "Student" tab.
+    const roleMatchedCandidates = expectedRole
+      ? candidates.filter((u) => u.role === expectedRole)
+      : candidates;
+
+    if (expectedRole && roleMatchedCandidates.length === 0) {
+      return {
+        user: null,
+        error: this.getRoleMismatchError(candidates[0].role, expectedRole),
+      };
+    }
+
+    // Strictly verify password only against candidates matching the selected role
+    for (const candidate of roleMatchedCandidates) {
       if (this.checkPasswordForUser(candidate, cleanPwd)) {
         return { user: candidate };
       }
@@ -1513,6 +1497,12 @@ export class ClassroomDB {
     }
 
     const matched = check.user;
+    if (expectedRole && matched.role !== expectedRole) {
+      return {
+        user: null,
+        error: this.getRoleMismatchError(matched.role, expectedRole),
+      };
+    }
     const localDeviceId = this.getDeviceId();
     const activeDev = matched.activeDeviceId || '';
 
@@ -1719,18 +1709,13 @@ export class ClassroomDB {
 
         // 2. 0 matching profiles in Supabase yet: check if this account exists locally
         const localUsersNow = this.getAllUsers();
+        const isEmailInput = compactId.includes('@');
         const matchingLocalUser = localUsersNow.find((u) => {
           const uName = (u.username || '').trim().replace(/^@+/, '').toLowerCase();
           const uEmail = (u.email || '').trim().toLowerCase();
-          const uEmailLocal = uEmail.includes('@') ? uEmail.split('@')[0].trim() : uEmail;
-          return (
-            uName === cleanId ||
-            uName === compactId ||
-            uName === idLocalPart ||
-            uEmail === cleanId ||
-            uEmail === compactId ||
-            uEmailLocal === idLocalPart
-          );
+          return isEmailInput
+            ? uEmail === cleanId || uEmail === compactId
+            : uName === cleanId || uName === compactId;
         });
 
         if (matchingLocalUser) {
@@ -4283,16 +4268,13 @@ export class ClassroomDB {
               rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
               rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
               avatar: resolvedAvatar,
-              password:
-                loggedUser && loggedUser.role === 'student' && ru.id !== loggedUser.id
-                  ? undefined
-                  : encryptPassword(
-                      this.isRecentLocalWrite(ru.id)
-                        ? existing?.password || ru.password
-                        : ru.password || existing?.password,
-                      ru.role,
-                      ru.id
-                    ),
+              password: encryptPassword(
+                this.isRecentLocalWrite(ru.id)
+                  ? existing?.password || ru.password
+                  : ru.password || existing?.password,
+                ru.role,
+                ru.id
+              ),
             };
             userMap.set(ru.id, mergedProfile);
             latestAvatarByUserId.set(ru.id, resolvedAvatar);
