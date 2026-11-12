@@ -153,7 +153,7 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
     setConnectionStatus({
       tested: true,
       connected: res.success,
-      message: `📉 Egress < 5.5 GB Slimming ပြီးမြောက်ပါပြီ! Supabase Cloud ရှိ ပိုလျှံနေသော Base64 ပုံ/Data အတန်း (${res.slimmedRows}) ခုနှင့် မလိုအပ်တော့သော Orphaned Data (${res.cleanedOrphans}) ခုကို ချက်ချင်း ချုံ့ပြီး ရှင်းလင်းပေးလိုက်ပါပြီ။`,
+      message: `📉 Database Slimming ပြီးမြောက်ပါပြီ! Supabase Cloud ရှိ ပိုလျှံနေသော Base64 ပုံ/Data အတန်း (${res.slimmedRows}) ခုနှင့် မလိုအပ်တော့သော Orphaned Data (${res.cleanedOrphans}) ခုကို ချက်ချင်း ချုံ့ပြီး ရှင်းလင်းပေးလိုက်ပါပြီ။`,
     });
   };
 
@@ -203,7 +203,7 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                  Supabase Integration & Database Setup
+                  Supabase Integration &amp; Database Setup
                 </h3>
                 <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/80 px-2 py-0.5 rounded-full border border-emerald-300 dark:border-emerald-800">
                   Live Connected
@@ -241,7 +241,7 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
                   title="Supabase Database ထဲရှိ Base64 ပုံဟောင်းများနှင့် Egress စားနေသော Data များကို ချက်ချင်း ချုံ့ပေးမည်"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isSlimming ? 'animate-spin' : ''}`} />
-                  <span>{isSlimming ? 'Slimming...' : '📉 Egress < 5.5 GB လျှော့ချမည်'}</span>
+                  <span>{isSlimming ? 'Slimming...' : '📉 Optimize Egress & Storage'}</span>
                 </button>
                 <button
                   type="button"
@@ -420,12 +420,12 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
               </div>
             </div>
 
-            {/* Supabase Free Plan Quota & Client-Side Caching Banner */}
+            {/* Client-Side Caching Banner */}
             <div className="p-3.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-800/60 space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
                   <Sparkles className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                  <span>Client-Side Caching &amp; Sub-5.5GB Egress Guard (Active)</span>
+                  <span>Client-Side Caching &amp; High-Speed Sync</span>
                 </span>
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-600 text-white">
@@ -482,9 +482,8 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({ isOpen, onClose })
               </div>
 
               <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
-                • <b>Persistent Client-Side Asset &amp; Query Cache</b>: Course Banner ပုံများ၊ Lead Mentor (Admin) Profile ပုံ၊ Posts၊ Quizzes နှင့် Assignments များကို Browser ၏ LocalStorage Cache တွင် သိမ်းဆည်းထားသဖြင့် Page Refresh လုပ်ချိန်တိုင်း Supabase မှ အစအဆုံး ပြန်ဆွဲရန် မလိုတော့ပါ (0 Bytes Egress on Cache Hit)။<br />
-                • <b>Write-Through Cache Invalidation &amp; Delta Sync</b>: ဆရာ သို့မဟုတ် ကျောင်းသားတစ်ဦးမှ Post အသစ်တင်ခြင်း၊ Comment ပေးခြင်း၊ Attendance ဖွင့်/ပိတ်ခြင်း ပြုလုပ်မှသာ ပြောင်းလဲသွားသော Row အသစ်ကို ကွက်၍ ဆွဲယူပေးပါသည်။<br />
-                • <b>1-Click Database Slimmer</b>: အထက်ပါ <b>&quot;📉 Egress &lt; 5.5 GB လျှော့ချမည်&quot;</b> ခလုတ်ကို နှိပ်ရုံဖြင့် Supabase ထဲရှိ ပုံဟောင်း/Data အပိုများအားလုံးကို ချက်ချင်း ဖယ်ရှားချုံ့ပေးပါသည်။
+                • <b>Persistent Client-Side Asset &amp; Query Cache</b>: Course Banner ပုံများ၊ Lead Mentor (Admin) Profile ပုံ၊ Posts၊ Quizzes နှင့် Assignments များကို Browser ၏ LocalStorage Cache တွင် သိမ်းဆည်းထားပါသည်။<br />
+                • <b>Write-Through Cache Invalidation &amp; Delta Sync</b>: ဆရာ သို့မဟုတ် ကျောင်းသားတစ်ဦးမှ Post အသစ်တင်ခြင်း၊ Comment ပေးခြင်း၊ Attendance ဖွင့်/ပိတ်ခြင်း ပြုလုပ်သည့်အခါ ပြောင်းလဲသွားသော Data အသစ်ကို ချက်ချင်း ဆွဲယူပေးပါသည်။
               </p>
             </div>
           </div>

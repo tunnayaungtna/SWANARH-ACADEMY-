@@ -2448,17 +2448,21 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                       </p>
                     </div>
                   </div>
-                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 min-w-0">
                     <select
                       value={selectedCsvCourseId}
                       onChange={(e) => setSelectedCsvCourseId(e.target.value)}
-                      className="flex-1 min-w-0 px-2.5 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-emerald-300 dark:border-emerald-700 rounded-lg text-slate-900 dark:text-white"
+                      className="flex-1 min-w-0 w-full max-w-full truncate px-2.5 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-emerald-300 dark:border-emerald-700 rounded-lg text-slate-900 dark:text-white"
                     >
-                      {courses.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.code} — {c.title} ({c.enrolledStudentIds.length} ဦး)
-                        </option>
-                      ))}
+                      {courses.map((c) => {
+                        const shortTitle =
+                          c.title && c.title.length > 28 ? `${c.title.slice(0, 28)}...` : c.title;
+                        return (
+                          <option key={c.id} value={c.id}>
+                            {c.code} — {shortTitle} ({c.enrolledStudentIds.length} ဦး)
+                          </option>
+                        );
+                      })}
                       <option value="all">All Classes Combined Report</option>
                     </select>
                     <button
@@ -2473,12 +2477,12 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                 </div>
 
                 {/* Rules Acceptance Audit CSV */}
-                <div className="p-3 rounded-xl border border-indigo-200 dark:border-indigo-800/60 bg-indigo-50/50 dark:bg-indigo-950/30 flex flex-col justify-between gap-2.5">
+                <div className="p-3 rounded-xl border border-indigo-200 dark:border-indigo-800/60 bg-indigo-50/50 dark:bg-indigo-950/30 flex flex-col justify-between gap-2.5 min-w-0 overflow-hidden">
                   <div className="flex items-start gap-2.5">
                     <div className="p-2 rounded-lg bg-indigo-600 text-white shrink-0">
                       <ShieldCheck className="w-4 h-4" />
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <h4 className="text-xs font-bold text-slate-900 dark:text-white">
                         Export Rules Acceptance Audit ({acceptedStudentsCount}/{studentUsers.length} Accepted)
                       </h4>
@@ -2487,11 +2491,11 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                       </p>
                     </div>
                   </div>
-                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 min-w-0">
                     <select
                       value={auditFilterMode}
                       onChange={(e) => setAuditFilterMode(e.target.value as 'accepted_only' | 'all')}
-                      className="flex-1 min-w-0 px-2.5 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700 rounded-lg text-slate-900 dark:text-white"
+                      className="flex-1 min-w-0 w-full max-w-full truncate px-2.5 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700 rounded-lg text-slate-900 dark:text-white"
                     >
                       <option value="accepted_only">Accepted Only ({acceptedStudentsCount} ဦး)</option>
                       <option value="all">All Students ({studentUsers.length} ဦး — {pendingStudentsCount} pending)</option>
@@ -3483,8 +3487,8 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
             )}
 
             {/* Clean Unified Search & Filter Control Bar */}
-            <div className="p-3 bg-white dark:bg-slate-800/80 rounded-2xl border border-slate-200/80 dark:border-slate-800 space-y-2.5 shadow-2xs">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+            <div className="p-3 bg-white dark:bg-slate-800/80 rounded-2xl border border-slate-200/80 dark:border-slate-800 space-y-2.5 shadow-2xs min-w-0 overflow-hidden">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5 min-w-0">
                 {/* Search Input */}
                 <div className="relative flex-1 min-w-0">
                   <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -3510,8 +3514,8 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                 </div>
 
                 {/* Course Enrollment Filter Dropdown */}
-                <div className="flex items-center gap-2 w-full md:w-auto md:max-w-[320px] lg:max-w-[380px] min-w-0">
-                  <div className="relative w-full min-w-0">
+                <div className="flex items-center gap-2 w-full md:w-72 lg:w-80 min-w-0 max-w-full overflow-hidden shrink-0">
+                  <div className="relative w-full min-w-0 max-w-full overflow-hidden">
                     <BookOpen className="w-3.5 h-3.5 text-indigo-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                     <select
                       value={courseFilterId}
@@ -3522,12 +3526,12 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                         }
                         setVisibleLimit(60);
                       }}
-                      className="w-full max-w-full truncate pl-8 pr-7 py-2 text-xs font-bold bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 cursor-pointer focus:outline-none focus:border-indigo-500"
+                      className="block w-full min-w-0 max-w-full truncate pl-8 pr-7 py-2 text-xs font-bold bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 cursor-pointer focus:outline-none focus:border-indigo-500"
                     >
                       <option value="all">အတန်းအားလုံး (All Classes)</option>
                       {courses.map((c) => {
                         const shortTitle =
-                          c.title && c.title.length > 40 ? `${c.title.slice(0, 40)}...` : c.title;
+                          c.title && c.title.length > 26 ? `${c.title.slice(0, 26)}...` : c.title;
                         return (
                           <option key={c.id} value={c.id}>
                             {c.code} — {shortTitle} ({c.enrolledStudentIds.length} ဦး)
@@ -3648,12 +3652,12 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                   return (
                     <div
                       key={user.id}
-                      className="p-3.5 sm:p-4 rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-800/90 hover:border-indigo-300 dark:hover:border-slate-700 transition-all shadow-2xs space-y-3"
+                      className="p-3.5 sm:p-4 rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-800/90 hover:border-indigo-300 dark:hover:border-slate-700 transition-all shadow-2xs space-y-3 min-w-0 overflow-hidden"
                     >
                       {/* Top Row: User Identity + Quick Credentials Strip + Delete */}
-                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 min-w-0">
                         {/* Left: Identity & Contact */}
-                        <div className="flex items-start gap-3 min-w-0">
+                        <div className="flex items-start gap-3 min-w-0 flex-1">
                           {user.role === 'admin' ? (
                             <div className="relative group/avatar shrink-0">
                               <img

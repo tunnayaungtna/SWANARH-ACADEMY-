@@ -85,7 +85,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       }
     };
     syncNow();
-    const timer = setInterval(syncNow, 15000);
+    const timer = setInterval(syncNow, 20000);
     return () => {
       mounted = false;
       clearInterval(timer);

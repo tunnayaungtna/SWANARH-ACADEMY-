@@ -956,6 +956,8 @@ export class SupabaseService {
   private static realtimeListeners = new Set<
     (payload?: {
       kind?: string;
+      kinds?: string[];
+      targetUserIds?: string[];
       deletedIds?: string[];
       deletedUsernames?: string[];
       deletedEmails?: string[];
@@ -967,7 +969,39 @@ export class SupabaseService {
   private static pendingDeletedIds = new Set<string>();
   private static pendingDeletedUsernames = new Set<string>();
   private static pendingDeletedEmails = new Set<string>();
-  private static pendingKind: string | undefined;
+  private static pendingKinds = new Set<string>();
+  private static pendingTargetUserIds = new Set<string>();
+
+  private static loadCloudCleanupTimestamps(): void {
+    if (typeof window === 'undefined' || (this.lastExpiredCleanupAt > 0 && this.lastAuditLogCleanupAt > 0)) {
+      return;
+    }
+    try {
+      const raw = localStorage.getItem('classroom_os_cloud_cleanup_ts_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw) as { expired?: number; audit?: number };
+        if (typeof parsed.expired === 'number') this.lastExpiredCleanupAt = parsed.expired;
+        if (typeof parsed.audit === 'number') this.lastAuditLogCleanupAt = parsed.audit;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  private static saveCloudCleanupTimestamps(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(
+        'classroom_os_cloud_cleanup_ts_v1',
+        JSON.stringify({
+          expired: this.lastExpiredCleanupAt,
+          audit: this.lastAuditLogCleanupAt,
+        })
+      );
+    } catch {
+      // ignore
+    }
+  }
 
   static computePostSignature(
     content: string,
@@ -992,6 +1026,7 @@ export class SupabaseService {
         this.localBroadcastChannel.onmessage = (ev) => {
           const data = (ev?.data || {}) as {
             kind?: string;
+            targetUserIds?: string[];
             deletedIds?: string[];
             deletedUsernames?: string[];
             deletedEmails?: string[];
@@ -1011,6 +1046,7 @@ export class SupabaseService {
         .on('broadcast', { event: 'classroom_update' }, (msg) => {
           const data = (msg?.payload || {}) as {
             kind?: string;
+            targetUserIds?: string[];
             deletedIds?: string[];
             deletedUsernames?: string[];
             deletedEmails?: string[];
@@ -1018,6 +1054,21 @@ export class SupabaseService {
           this.triggerRealtimeListeners(data);
         })
         .on('postgres_changes', { event: '*', schema: 'public' }, (payload) => {
+          const tableName = String(payload?.table || '');
+
+          // Ignore notification/audit-log background DELETE sweeps & audit_log inserts so they NEVER trigger sync waves
+          if (tableName === 'notifications') {
+            if (payload?.eventType === 'DELETE') {
+              return;
+            }
+            const newNotif = (payload?.new || {}) as Record<string, unknown>;
+            if (newNotif.user_id === AUDIT_LOG_SYSTEM_USER_ID || newNotif.type === 'audit_log') {
+              return;
+            }
+            this.triggerRealtimeListeners({ kind: 'notification' });
+            return;
+          }
+
           if (payload?.eventType === 'DELETE' && payload?.old && typeof payload.old === 'object') {
             const oldRec = payload.old as Record<string, unknown>;
             const delId = oldRec.id ? String(oldRec.id) : '';
@@ -1031,7 +1082,31 @@ export class SupabaseService {
             });
             return;
           }
-          this.triggerRealtimeListeners();
+
+          const tableKindMap: Record<string, string> = {
+            attendance_sessions: 'attendance',
+            posts: 'post',
+            courses: 'course',
+            profiles: 'profile',
+            assignments: 'assignment',
+            assignment_submissions: 'submission',
+            quizzes: 'quiz',
+            quiz_submissions: 'quiz_submission',
+          };
+          const mappedKind = tableKindMap[tableName] || 'all';
+          if (mappedKind === 'profile' && payload?.eventType === 'UPDATE' && payload?.new) {
+            const newProf = payload.new as Record<string, unknown>;
+            const profId = newProf.id ? String(newProf.id) : '';
+            const profRole = newProf.role ? String(newProf.role) : '';
+            if (profId && profRole === 'student') {
+              this.triggerRealtimeListeners({
+                kind: 'profile',
+                targetUserIds: [profId],
+              });
+              return;
+            }
+          }
+          this.triggerRealtimeListeners({ kind: mappedKind });
         })
         .subscribe();
       this.activeRealtimeChannel = ch;
@@ -1042,12 +1117,30 @@ export class SupabaseService {
 
   private static triggerRealtimeListeners(meta?: {
     kind?: string;
+    targetUserIds?: string[];
     deletedIds?: string[];
     deletedUsernames?: string[];
     deletedEmails?: string[];
   }): void {
-    if (meta?.kind) {
-      this.pendingKind = meta.kind;
+    const incomingKind = meta?.kind || 'all';
+    this.pendingKinds.add(incomingKind);
+    if (incomingKind === 'course' || incomingKind === 'all') {
+      this.invalidateClientCache('courses');
+    }
+    if (incomingKind === 'assignment' || incomingKind === 'all') {
+      this.invalidateClientCache('assignments');
+    }
+    if (incomingKind === 'submission' || incomingKind === 'all') {
+      this.invalidateClientCache('submissions');
+    }
+    if (incomingKind === 'quiz' || incomingKind === 'all') {
+      this.invalidateClientCache('quizzes');
+    }
+
+    if (Array.isArray(meta?.targetUserIds)) {
+      meta.targetUserIds.forEach((uid) => {
+        if (uid) this.pendingTargetUserIds.add(uid);
+      });
     }
     if (Array.isArray(meta?.deletedIds)) {
       meta.deletedIds.forEach((id) => {
@@ -1070,8 +1163,14 @@ export class SupabaseService {
     }
     this.realtimeDebounceTimer = setTimeout(() => {
       this.realtimeDebounceTimer = null;
+      const kindsList = Array.from(this.pendingKinds);
+      const primaryKind =
+        kindsList.length === 1 ? kindsList[0] : kindsList.includes('delete') ? 'delete' : 'all';
       const snapshot = {
-        kind: this.pendingKind,
+        kind: primaryKind,
+        kinds: kindsList,
+        targetUserIds:
+          this.pendingTargetUserIds.size > 0 ? Array.from(this.pendingTargetUserIds) : undefined,
         deletedIds:
           this.pendingDeletedIds.size > 0 ? Array.from(this.pendingDeletedIds) : undefined,
         deletedUsernames:
@@ -1081,7 +1180,8 @@ export class SupabaseService {
         deletedEmails:
           this.pendingDeletedEmails.size > 0 ? Array.from(this.pendingDeletedEmails) : undefined,
       };
-      this.pendingKind = undefined;
+      this.pendingKinds.clear();
+      this.pendingTargetUserIds.clear();
       this.pendingDeletedIds.clear();
       this.pendingDeletedUsernames.clear();
       this.pendingDeletedEmails.clear();
@@ -1093,12 +1193,14 @@ export class SupabaseService {
           // ignore
         }
       });
-    }, 180);
+    }, 150);
   }
 
   static subscribeToRealtimeChanges(
     onChange: (payload?: {
       kind?: string;
+      kinds?: string[];
+      targetUserIds?: string[];
       deletedIds?: string[];
       deletedUsernames?: string[];
       deletedEmails?: string[];
@@ -1114,6 +1216,7 @@ export class SupabaseService {
   static notifyRealtimePeers(
     kind: string = 'all',
     meta?: {
+      targetUserIds?: string[];
       deletedIds?: string[];
       deletedUsernames?: string[];
       deletedEmails?: string[];
@@ -1124,6 +1227,7 @@ export class SupabaseService {
     const messagePayload = {
       kind,
       ts: Date.now(),
+      ...(meta?.targetUserIds?.length ? { targetUserIds: meta.targetUserIds } : {}),
       ...(meta?.deletedIds?.length ? { deletedIds: meta.deletedIds } : {}),
       ...(meta?.deletedUsernames?.length ? { deletedUsernames: meta.deletedUsernames } : {}),
       ...(meta?.deletedEmails?.length ? { deletedEmails: meta.deletedEmails } : {}),
@@ -2336,7 +2440,7 @@ export class SupabaseService {
           maxPoints: row.total_points ?? 100,
           rubricItems: ['Code Quality & Correctness', 'Documentation & Verification'],
         }));
-        this.setCachedQuery('assignments:all', mapped, 15_000);
+        this.setCachedQuery('assignments:all', mapped, 180_000);
         return mapped;
       } catch {
         return null;
@@ -2345,7 +2449,7 @@ export class SupabaseService {
   }
 
   /**
-   * Fetch all assignment submissions from Supabase (with 15s Client-Side Cache TTL & no student_avatar column)
+   * Fetch all assignment submissions from Supabase (with 60s Client-Side Cache TTL & no student_avatar column)
    */
   static async getRemoteSubmissions(
     forceRefresh: boolean = false
@@ -2388,7 +2492,7 @@ export class SupabaseService {
               | 'graded',
           };
         });
-        this.setCachedQuery('submissions:all', mapped, 15_000);
+        this.setCachedQuery('submissions:all', mapped, 60_000);
         return mapped;
       } catch {
         return null;
@@ -2397,7 +2501,7 @@ export class SupabaseService {
   }
 
   /**
-   * Fetch all quizzes from Supabase (with 15s Client-Side Cache TTL)
+   * Fetch all quizzes from Supabase (with 3-minute Client-Side Cache TTL)
    */
   static async getRemoteQuizzes(forceRefresh: boolean = false): Promise<Quiz[] | null> {
     if (!forceRefresh) {
@@ -2422,7 +2526,7 @@ export class SupabaseService {
           passingScore: row.passing_score ?? 70,
           questions: Array.isArray(row.questions) ? row.questions : [],
         }));
-        this.setCachedQuery('quizzes:all', mapped, 15_000);
+        this.setCachedQuery('quizzes:all', mapped, 180_000);
         return mapped;
       } catch {
         return null;
@@ -2576,9 +2680,6 @@ export class SupabaseService {
     const cacheKey = `notifs:${userId || 'all'}`;
     return this.dedupeGet(cacheKey, async () => {
       try {
-        // Non-blocking background cleanup throttled to once every 10 minutes to save Free Plan requests
-        this.purgeExpiredNotifications([], false).catch(() => {});
-
         const cutoffIso = new Date(Date.now() - NOTIFICATION_TTL_MS).toISOString();
         let query = supabase
           .from('notifications')
@@ -2696,17 +2797,19 @@ export class SupabaseService {
 
   /**
    * Auto-delete notifications older than 30 minutes (and also trigger 2-day Audit Log cleanup) from Supabase SQL database.
-   * Throttled to once every 10 minutes unless forced to protect Supabase Free Plan quota.
+   * Throttled via persistent localStorage to once every 60 minutes unless forced to protect Supabase Free Plan Log Ingestion quota.
    */
   static async purgeExpiredNotifications(expiredIds: string[] = [], force: boolean = false): Promise<boolean> {
     if (this.notificationsTableStatus === 'missing') {
       return false;
     }
+    this.loadCloudCleanupTimestamps();
     const now = Date.now();
-    const shouldRunTimeSweep = force || now - this.lastExpiredCleanupAt >= 600_000;
+    const shouldRunTimeSweep = force || now - this.lastExpiredCleanupAt >= 3_600_000;
 
-    // Also run the 2-day Audit Log background auto-delete sweep
-    this.purgeExpiredAuditLogs([], force).catch(() => {});
+    if (shouldRunTimeSweep) {
+      this.purgeExpiredAuditLogs([], force).catch(() => {});
+    }
 
     if (!shouldRunTimeSweep && expiredIds.length === 0) {
       return true;
@@ -2715,6 +2818,7 @@ export class SupabaseService {
     try {
       if (shouldRunTimeSweep) {
         this.lastExpiredCleanupAt = now;
+        this.saveCloudCleanupTimestamps();
         const cutoffIso = new Date(now - NOTIFICATION_TTL_MS).toISOString();
         const nowIso = new Date(now).toISOString();
         const { error } = await supabase
@@ -2744,14 +2848,15 @@ export class SupabaseService {
 
   /**
    * Auto-delete Security Audit Logs older than 2 days (48 hours) from Supabase SQL database in the background.
-   * Throttled to once every 10 minutes unless forced.
+   * Throttled via persistent localStorage to once every 60 minutes unless forced.
    */
   static async purgeExpiredAuditLogs(expiredIds: string[] = [], force: boolean = false): Promise<boolean> {
     if (this.notificationsTableStatus === 'missing') {
       return false;
     }
+    this.loadCloudCleanupTimestamps();
     const now = Date.now();
-    const shouldRunSweep = force || now - this.lastAuditLogCleanupAt >= 600_000;
+    const shouldRunSweep = force || now - this.lastAuditLogCleanupAt >= 3_600_000;
     if (!shouldRunSweep && expiredIds.length === 0) {
       return true;
     }
@@ -2759,6 +2864,7 @@ export class SupabaseService {
     try {
       if (shouldRunSweep) {
         this.lastAuditLogCleanupAt = now;
+        this.saveCloudCleanupTimestamps();
         const cutoffIso = new Date(now - AUDIT_LOG_TTL_MS).toISOString();
         const nowIso = new Date(now).toISOString();
         const { error } = await supabase
@@ -2820,9 +2926,6 @@ export class SupabaseService {
     }
     return this.dedupeGet(`audit_logs:${limit}`, async () => {
       try {
-        // Trigger background 2-day auto-purge in Supabase
-        this.purgeExpiredAuditLogs([], false).catch(() => {});
-
         const now = Date.now();
         const cutoffIso = new Date(now - AUDIT_LOG_TTL_MS).toISOString();
 
@@ -3029,7 +3132,11 @@ export class SupabaseService {
    */
   static async upsertProfile(
     user: User,
-    forceUpload: boolean = false
+    forceUpload: boolean = false,
+    options?: {
+      silentRealtime?: boolean;
+      sessionLockOnly?: boolean;
+    }
   ): Promise<{ success: boolean; error?: string }> {
     try {
       const normalizedUser: User = {
@@ -3045,11 +3152,20 @@ export class SupabaseService {
         return { success: true };
       }
 
+      const emitProfilePeerUpdate = () => {
+        if (options?.silentRealtime) return;
+        if (options?.sessionLockOnly || normalizedUser.role === 'student') {
+          this.notifyRealtimePeers('profile', { targetUserIds: [normalizedUser.id] });
+        } else {
+          this.notifyRealtimePeers('profile');
+        }
+      };
+
       const { error } = await supabase.from('profiles').upsert(payload, { onConflict: 'id' });
 
       if (!error) {
         this.recordSignature(sigKey, comparablePayload);
-        this.notifyRealtimePeers('profile');
+        emitProfilePeerUpdate();
         return { success: true };
       }
 
@@ -3078,7 +3194,7 @@ export class SupabaseService {
             .upsert(payload, { onConflict: 'id' });
           if (!retryErr) {
             this.recordSignature(sigKey, comparablePayload);
-            this.notifyRealtimePeers('profile');
+            emitProfilePeerUpdate();
             return { success: true };
           }
         } catch {
@@ -3100,7 +3216,7 @@ export class SupabaseService {
         if (!errNoPwd) {
           this.profileSchemaMode = 'no_password';
           this.recordSignature(sigKey, comparablePayload);
-          this.notifyRealtimePeers('profile');
+          emitProfilePeerUpdate();
           return { success: true };
         }
       }
@@ -3116,7 +3232,7 @@ export class SupabaseService {
           this.profileSchemaMode = 'core';
         }
         this.recordSignature(sigKey, comparablePayload);
-        this.notifyRealtimePeers('profile');
+        emitProfilePeerUpdate();
         return { success: true };
       }
 
@@ -3668,9 +3784,32 @@ export class SupabaseService {
     }
   ): Promise<boolean> {
     try {
+      const sigKey = `att:${session.id}`;
       let mergedRecords: Record<string, AttendanceRecord> = { ...(session.records || {}) };
       let resolvedIsOpen = Boolean(session.isOpen);
       let resolvedStatusMs = session.statusUpdatedAtMs || Date.now();
+
+      const candidateSession: AttendanceSession = {
+        ...session,
+        isOpen: resolvedIsOpen,
+        statusUpdatedAtMs: resolvedStatusMs,
+        records: mergedRecords,
+      };
+      const initialRow = {
+        id: session.id,
+        course_id: session.courseId,
+        date: session.date,
+        display_date: session.displayDate,
+        title: session.title,
+        is_open: resolvedIsOpen,
+        opened_by: encodeAttendanceOpenedBy(candidateSession),
+        records: mergedRecords,
+      };
+
+      // Deduplicate identical attendance session upserts before making network calls
+      if (!options?.force && !this.hasChangedSignature(sigKey, initialRow)) {
+        return true;
+      }
 
       // Fetch current remote row first so concurrent student check-ins or remote open/close changes are never clobbered
       const { data: existingRow } = await supabase
@@ -3700,8 +3839,25 @@ export class SupabaseService {
         if (options?.preserveRemoteOpenState) {
           resolvedIsOpen = Boolean(existingRow.is_open);
         }
-        // Always bump statusUpdatedAtMs when records or state are updated so delta sync downloads the updated records
-        resolvedStatusMs = Math.max(Date.now(), session.statusUpdatedAtMs || 0);
+
+        const decodedExisting = decodeAttendanceOpenedBy(
+          existingRow.opened_by as string | null,
+          existingRow.is_open
+        );
+        // Preserve caller's statusUpdatedAtMs if already >= remote, avoiding artificial timestamp inflation loops
+        resolvedStatusMs = Math.max(
+          session.statusUpdatedAtMs || Date.now(),
+          decodedExisting.statusUpdatedAtMs || 0
+        );
+
+        // If remote state + records are already identical to what we would write, skip the UPSERT & Realtime broadcast completely!
+        if (
+          Boolean(existingRow.is_open) === resolvedIsOpen &&
+          JSON.stringify(cleanRemoteRecords) === JSON.stringify(mergedRecords)
+        ) {
+          this.recordSignature(sigKey, initialRow);
+          return true;
+        }
       }
 
       const sessionToEncode: AttendanceSession = {
@@ -3722,7 +3878,6 @@ export class SupabaseService {
         records: mergedRecords,
       };
 
-      const sigKey = `att:${session.id}`;
       const { error } = await supabase
         .from('attendance_sessions')
         .upsert(row, { onConflict: 'id' });

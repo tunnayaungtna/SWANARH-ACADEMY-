@@ -818,8 +818,8 @@ export class ClassroomDB {
 
   static async syncAuditLogsFromCloud(): Promise<AuditLogEntry[]> {
     try {
-      this.purgeExpiredAuditLogs(true);
-      const remoteLogs = await SupabaseService.getRemoteAuditLogs(300);
+      this.purgeExpiredAuditLogs(false);
+      const remoteLogs = await SupabaseService.getRemoteAuditLogs(250);
       if (remoteLogs && remoteLogs.length > 0) {
         const now = Date.now();
         const localLogs = this.getItem<AuditLogEntry[]>(STORAGE_KEYS.AUDIT_LOGS, []);
@@ -3647,6 +3647,7 @@ export class ClassroomDB {
     force?: boolean;
     onlyProfiles?: boolean;
     background?: boolean;
+    tables?: Array<'profiles' | 'courses' | 'posts' | 'assignments' | 'quizzes' | 'attendance' | 'notifications'>;
   }): Promise<boolean> {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       return false;
@@ -3663,11 +3664,12 @@ export class ClassroomDB {
     const force = Boolean(options?.force);
     const onlyProfiles = Boolean(options?.onlyProfiles);
     const isBackground = Boolean(options?.background);
+    const targetTables = options?.tables && options.tables.length > 0 ? new Set(options.tables) : null;
     const now = Date.now();
-    const COOLDOWN_MS = 15_000; // 15s background delta cooldown (Realtime events pass force=true for 0ms latency while saving Egress)
-    const CATALOG_TTL_MS = 45_000; // 45s catalog TTL for full profiles, assignments & quizzes in background polls
+    const COOLDOWN_MS = 10_000; // 10s Pro Plan delta cooldown
+    const CATALOG_TTL_MS = 120_000; // 2-minute catalog TTL for full profiles, assignments & quizzes in background polls
 
-    if (!force) {
+    if (!force && !targetTables) {
       if (onlyProfiles && now - this.lastProfilePullAt < COOLDOWN_MS) {
         return purgedLocalNotifs;
       }
@@ -3677,7 +3679,7 @@ export class ClassroomDB {
     }
 
     if (this.activePullPromise) {
-      if (force) {
+      if (force || targetTables) {
         try {
           await this.activePullPromise;
         } catch {
@@ -3696,10 +3698,23 @@ export class ClassroomDB {
         const newlyDeletedUsernames: string[] = [];
         const newlyDeletedEmails: string[] = [];
 
+        const loggedUser = this.getCurrentUser();
+        const isStudentLightweight = Boolean(loggedUser && loggedUser.role === 'student');
+        const knownAvatars = new Map<string, string>();
+        this.getAllUsers().forEach((u) => {
+          if (u.id && u.role === 'admin' && u.avatar) {
+            knownAvatars.set(u.id, u.avatar);
+          }
+        });
+
         if (onlyProfiles) {
           this.lastProfilePullAt = Date.now();
           this.savePullTimestampsToCache();
-          const remoteProfiles = await SupabaseService.getRemoteProfiles(force);
+          const remoteProfiles = await SupabaseService.getRemoteProfiles(force, {
+            studentLightweight: Boolean(isStudentLightweight && loggedUser),
+            currentUserId: loggedUser?.id,
+            knownAvatars,
+          });
           if (!remoteProfiles || remoteProfiles.length === 0) {
             return purgedLocalNotifs;
           }
@@ -3715,7 +3730,11 @@ export class ClassroomDB {
           const prevJson = JSON.stringify(localUsers);
           const userMap = new Map<string, User>();
           localUsers.forEach((u) => {
-            if (remoteProfileIds.has(u.id) || this.isRecentLocalWrite(u.id)) {
+            if (
+              remoteProfileIds.has(u.id) ||
+              this.isRecentLocalWrite(u.id) ||
+              (isStudentLightweight && u.role === 'student' && u.id !== loggedUser?.id)
+            ) {
               userMap.set(u.id, u);
             } else {
               newlyDiscoveredRemoteDeletions.push(u.id);
@@ -3736,6 +3755,9 @@ export class ClassroomDB {
             userMap.set(ru.id, {
               ...existing,
               ...ru,
+              activeDeviceId: ru.activeDeviceId,
+              activeSessionToken: ru.activeSessionToken,
+              sessionUpdatedAtMs: ru.sessionUpdatedAtMs,
               rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
               rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
               avatar: resolvedAvatar,
@@ -3755,22 +3777,26 @@ export class ClassroomDB {
           const mergedUsers = Array.from(userMap.values());
           if (JSON.stringify(mergedUsers) !== prevJson) {
             this.setItem(STORAGE_KEYS.USERS, mergedUsers);
+            if (loggedUser && userMap.has(loggedUser.id)) {
+              this.setCurrentUser(userMap.get(loggedUser.id)!);
+            }
             return true;
           }
           return purgedLocalNotifs;
         }
 
-        this.lastFullPullAt = now;
-        const shouldFetchCatalog =
-          !isBackground || force || now - this.lastCatalogPullAt >= CATALOG_TTL_MS;
-        if (shouldFetchCatalog) {
+        if (!targetTables) {
+          this.lastFullPullAt = now;
+        }
+        const shouldFetchCatalog = targetTables
+          ? targetTables.has('profiles') || targetTables.has('assignments') || targetTables.has('quizzes')
+          : (!isBackground && force) || now - this.lastCatalogPullAt >= CATALOG_TTL_MS;
+        if (shouldFetchCatalog && !targetTables) {
           this.lastCatalogPullAt = now;
           this.lastProfilePullAt = now;
         }
         this.savePullTimestampsToCache();
 
-        const loggedUser = this.getCurrentUser();
-        const isStudentLightweight = Boolean(loggedUser && loggedUser.role === 'student');
         const currentCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter(
           (c) => !deletedSet.has(c.id)
         );
@@ -3790,13 +3816,6 @@ export class ClassroomDB {
         currentCourses.forEach((c) => {
           if (c.id && c.bannerImage) {
             knownBanners.set(c.id, c.bannerImage);
-          }
-        });
-
-        const knownAvatars = new Map<string, string>();
-        this.getAllUsers().forEach((u) => {
-          if (u.id && u.role === 'admin' && u.avatar) {
-            knownAvatars.set(u.id, u.avatar);
           }
         });
 
@@ -3868,8 +3887,16 @@ export class ClassroomDB {
           typeof window !== 'undefined' &&
           localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) === 'true';
 
-        // Always fetch courses (using knownBanners so banner_image is omitted unless changed: ~1.5 KB)
-        // so classroom creation, edits, reordering, and student enrollments reflect immediately!
+        const wantProfiles = targetTables
+          ? targetTables.has('profiles')
+          : shouldFetchCatalog;
+        const wantCourses = targetTables ? targetTables.has('courses') : true;
+        const wantPosts = targetTables ? targetTables.has('posts') : true;
+        const wantAssignments = targetTables ? targetTables.has('assignments') : shouldFetchCatalog;
+        const wantQuizzes = targetTables ? targetTables.has('quizzes') : shouldFetchCatalog;
+        const wantAttendance = targetTables ? targetTables.has('attendance') : true;
+        const wantNotifications = targetTables ? targetTables.has('notifications') : true;
+
         const [
           remoteProfiles,
           remoteCourses,
@@ -3880,23 +3907,29 @@ export class ClassroomDB {
           remoteNotifications,
           singleLoggedProfile,
         ] = await Promise.all([
-          shouldFetchCatalog || isStudentLightweight
+          wantProfiles
             ? SupabaseService.getRemoteProfiles(force, {
                 studentLightweight: Boolean(isStudentLightweight && loggedUser),
                 currentUserId: loggedUser?.id,
                 knownAvatars: isAlreadyCloudSynced || isBackground ? knownAvatars : undefined,
               })
             : Promise.resolve(null),
-          SupabaseService.getRemoteCourses(knownBanners),
-          SupabaseService.getRemotePosts(
-            studentScopedCourseIds,
-            isAlreadyCloudSynced || isBackground ? knownPostsMap : undefined
-          ),
-          shouldFetchCatalog ? SupabaseService.getRemoteAssignments(force) : Promise.resolve(null),
-          shouldFetchCatalog ? SupabaseService.getRemoteQuizzes(force) : Promise.resolve(null),
-          SupabaseService.getRemoteAttendanceSessions(studentScopedCourseIds, knownAttendanceMap),
-          loggedUser ? SupabaseService.getRemoteNotifications(loggedUser.id) : Promise.resolve(null),
-          !shouldFetchCatalog && !isStudentLightweight && loggedUser
+          wantCourses ? SupabaseService.getRemoteCourses(knownBanners) : Promise.resolve(null),
+          wantPosts
+            ? SupabaseService.getRemotePosts(
+                studentScopedCourseIds,
+                isAlreadyCloudSynced || isBackground ? knownPostsMap : undefined
+              )
+            : Promise.resolve(null),
+          wantAssignments ? SupabaseService.getRemoteAssignments(force) : Promise.resolve(null),
+          wantQuizzes ? SupabaseService.getRemoteQuizzes(force) : Promise.resolve(null),
+          wantAttendance
+            ? SupabaseService.getRemoteAttendanceSessions(studentScopedCourseIds, knownAttendanceMap)
+            : Promise.resolve(null),
+          wantNotifications && loggedUser
+            ? SupabaseService.getRemoteNotifications(loggedUser.id)
+            : Promise.resolve(null),
+          !wantProfiles && !targetTables && loggedUser && loggedUser.role === 'student'
             ? SupabaseService.getRemoteProfileByIdentifier(loggedUser.username || loggedUser.email, true)
             : Promise.resolve(null),
         ]);
@@ -4194,18 +4227,20 @@ export class ClassroomDB {
             const isInQueriedScope = !scopedCourseSet || scopedCourseSet.has(p.courseId);
             const isInitialDemo = /^post-\d{3}$/.test(p.id || '');
             const wasConfirmedInCloud = confirmedCloudPosts.has(p.id);
+            const isRecentWrite = this.isRecentLocalWrite(p.id);
 
             if (remotePostIds.has(p.id)) {
               postMap.set(p.id, p);
+            } else if (!isInQueriedScope) {
+              // Out of student's queried course scope: keep locally without ever pushing to cloud!
+              postMap.set(p.id, p);
             } else if (
               !cloudActive ||
-              !isInQueriedScope ||
-              this.isRecentLocalWrite(p.id) ||
-              (!wasConfirmedInCloud && !isInitialDemo)
+              isRecentWrite ||
+              (!wasConfirmedInCloud && !isInitialDemo && !isStudentLightweight)
             ) {
-              // Keep unconfirmed/recent local post and sync to Supabase; never resurrect confirmed posts that were deleted remotely!
               postMap.set(p.id, p);
-              if (!isInitialDemo) {
+              if (isRecentWrite && !isInitialDemo) {
                 postsToPushToCloud.push(p);
               }
             } else {
@@ -4322,10 +4357,9 @@ export class ClassroomDB {
             postMap.set(rp.id, mergedPost);
 
             if (
-              wasAlreadyPublishedLocally ||
-              isRpScheduleDueNow ||
               isLocalRecent ||
-              hadExpiredRemoteComments
+              (!isStudentLightweight &&
+                (wasAlreadyPublishedLocally || isRpScheduleDueNow || hadExpiredRemoteComments))
             ) {
               postsToPushToCloud.push(mergedPost);
             }
@@ -4473,15 +4507,6 @@ export class ClassroomDB {
           updated = true;
         }
 
-        // If Primary Admin is logged in, also pull latest Security Audit Logs from Supabase
-        if (loggedUser && loggedUser.role === 'admin' && shouldFetchCatalog) {
-          const prevAuditCount = this.getAuditLogs().length;
-          const mergedAudit = await this.syncAuditLogsFromCloud();
-          if (mergedAudit.length !== prevAuditCount) {
-            updated = true;
-          }
-        }
-
         return updated;
       } catch {
         return purgedLocalNotifs;
@@ -4506,6 +4531,11 @@ export class ClassroomDB {
     externalDeletedSet?: Set<string>,
     externalNewDeletions?: string[]
   ): boolean {
+    const loggedUserForAtt = this.getCurrentUser();
+    const isInstructorForAtt = Boolean(
+      loggedUserForAtt &&
+        (loggedUserForAtt.role === 'admin' || loggedUserForAtt.role === 'co_admin')
+    );
     const deletedSet = externalDeletedSet || new Set(this.getDeletedIds());
     const newlyDiscoveredRemoteDeletions = externalNewDeletions || [];
     const remoteAttIds = new Set(remoteAttendance.map((ratt) => ratt.id));
@@ -4528,17 +4558,20 @@ export class ClassroomDB {
       const isInQueriedScope = !scopedCourseSet || scopedCourseSet.has(att.courseId);
       const isInitialDemo = /^att-sess-\d{1,4}$/.test(att.id || '');
       const wasConfirmedInCloud = confirmedCloudAtt.has(att.id);
+      const isRecentAttWrite = this.isRecentLocalWrite(att.id, 20_000);
 
       if (remoteAttIds.has(att.id)) {
         attMap.set(att.id, att);
+      } else if (!isInQueriedScope) {
+        // Out of student's queried course scope: keep locally without ever re-uploading to Supabase!
+        attMap.set(att.id, att);
       } else if (
         !cloudActive ||
-        !isInQueriedScope ||
-        this.isRecentLocalWrite(att.id, 30_000) ||
-        (!wasConfirmedInCloud && !isInitialDemo)
+        isRecentAttWrite ||
+        (!wasConfirmedInCloud && !isInitialDemo && isInstructorForAtt)
       ) {
         attMap.set(att.id, att);
-        if (!isInitialDemo) {
+        if (isRecentAttWrite && isInstructorForAtt && !isInitialDemo) {
           attToPushToCloud.push(att);
         }
       } else {

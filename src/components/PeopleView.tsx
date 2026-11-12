@@ -35,13 +35,18 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
 
   useEffect(() => {
     let mounted = true;
+    if (currentUser.role === 'student') {
+      return () => {
+        mounted = false;
+      };
+    }
     const knownIds = new Set(ClassroomDB.getAllUsers().map((u) => u.id));
     const hasMissingEnrolledStudent = course.enrolledStudentIds.some((id) => !knownIds.has(id));
     if (
       hasMissingEnrolledStudent &&
       (typeof navigator === 'undefined' || navigator.onLine !== false)
     ) {
-      ClassroomDB.pullFromSupabase({ force: true, onlyProfiles: true }).then((updated) => {
+      ClassroomDB.pullFromSupabase({ onlyProfiles: true }).then((updated) => {
         if (mounted && updated) {
           onRefresh();
         }
@@ -50,7 +55,7 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
     return () => {
       mounted = false;
     };
-  }, [course.id, course.enrolledStudentIds.length]);
+  }, [course.id, course.enrolledStudentIds.length, currentUser.role]);
 
   // Step-by-step mobile Back button handlers for PeopleView modals
   useBackHandler(showAddModal, () => setShowAddModal(false));

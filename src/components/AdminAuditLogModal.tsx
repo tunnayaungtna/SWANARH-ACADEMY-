@@ -69,7 +69,7 @@ export const AdminAuditLogModal: React.FC<AdminAuditLogModalProps> = ({
   const handleSyncLogs = async () => {
     setIsSyncing(true);
     try {
-      ClassroomDB.purgeExpiredAuditLogs(true);
+      ClassroomDB.purgeExpiredAuditLogs(false);
       const synced = await ClassroomDB.syncAuditLogsFromCloud();
       setLogs(synced);
     } finally {
@@ -79,7 +79,7 @@ export const AdminAuditLogModal: React.FC<AdminAuditLogModalProps> = ({
 
   useEffect(() => {
     if (!isOpen || currentUser.role !== 'admin') return;
-    ClassroomDB.purgeExpiredAuditLogs(true);
+    ClassroomDB.purgeExpiredAuditLogs(false);
     setLogs(ClassroomDB.getAuditLogs());
     handleSyncLogs();
 

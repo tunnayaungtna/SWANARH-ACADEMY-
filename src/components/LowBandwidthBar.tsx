@@ -76,8 +76,8 @@ export const LowBandwidthBar: React.FC<LowBandwidthBarProps> = ({
               </span>
             ) : (
               <span className="text-slate-300">
-                <strong className="text-emerald-400 font-semibold">Free Plan Eco-Sync</strong>
-                <span className="hidden md:inline"> · 98% Egress Saved · {APP_VERSION_LABEL}</span>
+                <strong className="text-emerald-400 font-semibold">Live Cloud Sync</strong>
+                <span className="hidden md:inline"> · {APP_VERSION_LABEL}</span>
               </span>
             )}
           </span>

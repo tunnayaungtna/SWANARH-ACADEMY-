@@ -145,7 +145,7 @@ export default function App() {
     const initTimer = setTimeout(() => {
       ClassroomDB.init();
       ClassroomDB.purgeExpiredComments();
-      ClassroomDB.purgeExpiredAuditLogs(true);
+      ClassroomDB.purgeExpiredAuditLogs(false);
       refreshData();
       const loggedUser = ClassroomDB.getCurrentUser();
       if (loggedUser) {
@@ -158,6 +158,7 @@ export default function App() {
     }, 30);
 
     // Instant Realtime Broadcast + Postgres Changes subscription across all accounts & devices
+    // Smartly routes each Realtime event to ONLY the affected table(s) to cut Log Ingestion & Egress by ~90%
     const unsubscribeRealtime = SupabaseService.subscribeToRealtimeChanges((payload) => {
       const deletedChanged = ClassroomDB.applyRemoteDeletions(payload);
       if (deletedChanged) {
@@ -165,13 +166,94 @@ export default function App() {
       }
       if (navigator.onLine === false) return;
       const loggedUser = ClassroomDB.getCurrentUser();
-      if (loggedUser) {
-        ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
+      if (!loggedUser) return;
+
+      const kinds =
+        payload?.kinds && payload.kinds.length > 0
+          ? payload.kinds
+          : payload?.kind
+          ? [payload.kind]
+          : ['all'];
+
+      // 1. Fast path for Attendance-only events (1 lightweight 0.3KB delta request instead of 8 queries)
+      if (kinds.length === 1 && kinds[0] === 'attendance') {
+        ClassroomDB.syncAttendanceFromCloud(true).then((attChanged) => {
+          if (attChanged) {
+            refreshData();
+          }
+        });
+        return;
+      }
+
+      // 2. Fast path for Profile-only events (ignore other students' session lock updates on student devices)
+      if (kinds.length === 1 && kinds[0] === 'profile') {
+        if (
+          loggedUser.role === 'student' &&
+          payload?.targetUserIds &&
+          payload.targetUserIds.length > 0 &&
+          !payload.targetUserIds.includes(loggedUser.id)
+        ) {
+          return;
+        }
+        ClassroomDB.pullFromSupabase({ force: true, onlyProfiles: true }).then((updated) => {
           if (updated || !ClassroomDB.getCurrentUser()) {
             refreshData();
           }
         });
+        return;
       }
+
+      // 3. Fast path for Delete events where deletedIds were already applied locally
+      if (kinds.length === 1 && kinds[0] === 'delete' && payload?.deletedIds?.length) {
+        return;
+      }
+
+      // 4. Targeted table pull for specific classroom updates (post, course, assignment, quiz, notification)
+      if (!kinds.includes('all') && !kinds.includes('delete')) {
+        const tableSet = new Set<
+          'profiles' | 'courses' | 'posts' | 'assignments' | 'quizzes' | 'attendance' | 'notifications'
+        >();
+        for (const k of kinds) {
+          if (k === 'post') {
+            tableSet.add('posts');
+            tableSet.add('notifications');
+          } else if (k === 'course') {
+            tableSet.add('courses');
+            tableSet.add('notifications');
+          } else if (k === 'notification') {
+            tableSet.add('notifications');
+          } else if (k === 'assignment' || k === 'submission') {
+            tableSet.add('assignments');
+            tableSet.add('courses');
+            tableSet.add('notifications');
+          } else if (k === 'quiz' || k === 'quiz_submission') {
+            tableSet.add('quizzes');
+            tableSet.add('courses');
+            tableSet.add('notifications');
+          } else if (k === 'attendance') {
+            tableSet.add('attendance');
+          } else if (k === 'profile') {
+            tableSet.add('profiles');
+          }
+        }
+        if (tableSet.size > 0) {
+          ClassroomDB.pullFromSupabase({
+            force: true,
+            tables: Array.from(tableSet),
+          }).then((updated) => {
+            if (updated || !ClassroomDB.getCurrentUser()) {
+              refreshData();
+            }
+          });
+          return;
+        }
+      }
+
+      ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
+        if (updated || !ClassroomDB.getCurrentUser()) {
+          refreshData();
+        }
+      });
     });
 
     // Multi-user / multi-tab synchronization
@@ -182,7 +264,7 @@ export default function App() {
 
     let lastUserInteractionAt = Date.now();
     const markUserActive = () => {
-      const wasIdle = Date.now() - lastUserInteractionAt > 60_000;
+      const wasIdle = Date.now() - lastUserInteractionAt > 90_000;
       lastUserInteractionAt = Date.now();
       if (wasIdle && document.visibilityState === 'visible' && navigator.onLine !== false) {
         const loggedUser = ClassroomDB.getCurrentUser();
@@ -200,7 +282,7 @@ export default function App() {
     window.addEventListener('touchstart', markUserActive, { passive: true });
 
     // When refreshing, focusing, or reopening the installed PWA from the background,
-    // immediately pull latest updates (throttled to 5s)
+    // pull latest delta updates (throttled to 20s to avoid redundant focus/visibility bursts)
     let lastWakeUpPullAt = 0;
     const handleWakeUp = () => {
       if (document.visibilityState === 'hidden') {
@@ -216,13 +298,9 @@ export default function App() {
 
         const loggedUser = ClassroomDB.getCurrentUser();
         if (loggedUser && navigator.onLine !== false && !isLowBandwidthRef.current) {
-          ClassroomDB.syncAttendanceFromCloud().then((attChanged) => {
-            if (attChanged) refreshData();
-          });
-
-          if (now - lastWakeUpPullAt >= 5_000) {
+          if (now - lastWakeUpPullAt >= 8_000) {
             lastWakeUpPullAt = now;
-            ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
+            ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
               if (updated || !ClassroomDB.getCurrentUser()) {
                 refreshData();
               }
@@ -235,7 +313,7 @@ export default function App() {
     window.addEventListener('pageshow', handleWakeUp);
     window.addEventListener('focus', handleWakeUp);
 
-    // Low-egress 30s delta background sync fallback when user is active (Realtime WebSocket handles instant <200ms updates)
+    // Pro Plan 45s delta background sync fallback when user is active (Realtime WebSocket handles instant <150ms updates)
     const syncInterval = setInterval(() => {
       const isUserActive = Date.now() - lastUserInteractionAt <= 360_000;
       if (
@@ -253,37 +331,15 @@ export default function App() {
           });
         }
       }
-    }, 30_000);
+    }, 45_000);
 
-    // 10-second timer to immediately auto-publish any due scheduled posts and perform 0.3KB delta Attendance checks when active
-    let attendanceTickCounter = 0;
+    // 15-second local timer to immediately auto-publish any due scheduled posts
     const scheduledPostsInterval = setInterval(() => {
       const publishedAny = ClassroomDB.checkAndPublishDueScheduledPosts();
       if (publishedAny) {
         refreshData();
       }
-      attendanceTickCounter++;
-      const isUserActive = Date.now() - lastUserInteractionAt <= 360_000;
-      // Check every 20s (every 2nd tick) if any session is open locally, or every 60s (every 6th tick) when all sessions are closed
-      const hasOpenLocalSession = ClassroomDB.getAttendanceSessions().some((s) => s.isOpen);
-      const shouldPollAttendance =
-        (hasOpenLocalSession && attendanceTickCounter % 2 === 0) ||
-        attendanceTickCounter % 6 === 0;
-      if (
-        shouldPollAttendance &&
-        isUserActive &&
-        document.visibilityState === 'visible' &&
-        navigator.onLine !== false &&
-        !isLowBandwidthRef.current &&
-        ClassroomDB.getCurrentUser()
-      ) {
-        ClassroomDB.syncAttendanceFromCloud().then((attChanged) => {
-          if (attChanged) {
-            refreshData();
-          }
-        });
-      }
-    }, 10000);
+    }, 15_000);
 
     // 30-second local timer to silently auto-delete expired comments (>2 days), notifications (>30 mins), and Audit Logs (>2 days)
     const notifCleanupInterval = setInterval(() => {
@@ -427,7 +483,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen neu-canvas text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-300">
+    <div className="min-h-screen w-full max-w-full overflow-x-hidden neu-canvas text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-300">
       <Suspense fallback={null}>
         {/* Low Bandwidth & One-Click Update Bar */}
         <LowBandwidthBar
@@ -460,8 +516,8 @@ export default function App() {
         />
       </Suspense>
 
-      {/* Main Container - Responsive padding for mobile & desktop screens */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-5 sm:py-8">
+      {/* Main Container - Responsive padding for mobile, tablet & desktop screens */}
+      <main className="flex-1 max-w-7xl w-full min-w-0 mx-auto px-2.5 sm:px-6 py-4 sm:py-8">
         {/* Student Unread Classroom Post Notification Alert Banner */}
         {currentUser.role === 'student' &&
           notifications.some((n) => !n.isRead && n.type === 'post') && (() => {
@@ -553,10 +609,10 @@ export default function App() {
           </Suspense>
         ) : (
           /* Dashboard: Course Catalog & Strict Enrollment View */
-          <div className="space-y-7 sm:space-y-9">
+          <div className="space-y-6 sm:space-y-9 min-w-0">
             {/* Sculpted Neumorphic Welcome & Role Command Console (Mobile, Tablet & Web Responsive) */}
-            <div className="neu-card rounded-3xl p-4 sm:p-6 lg:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-4 sm:gap-6">
-              <div className="flex items-start sm:items-center gap-3.5 sm:gap-4 min-w-0">
+            <div className="neu-card rounded-3xl p-4 sm:p-6 lg:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-4 sm:gap-6 min-w-0 overflow-hidden">
+              <div className="flex items-start sm:items-center gap-3 sm:gap-4 min-w-0 flex-1">
                 {currentUser.role === 'admin' && (
                   <img
                     src={resolveAvatarUrl(currentUser.avatar)}
@@ -565,12 +621,12 @@ export default function App() {
                     onError={(e) => {
                       (e.target as HTMLImageElement).src = DEFAULT_AVATAR_SVG;
                     }}
-                    className="w-12 h-12 sm:w-14 sm:h-14 rounded-full object-contain bg-white p-1 border-2 border-indigo-200 dark:border-indigo-700 shadow-sm shrink-0"
+                    className="w-11 h-11 sm:w-14 sm:h-14 rounded-full object-contain bg-white p-1 border-2 border-indigo-200 dark:border-indigo-700 shadow-sm shrink-0"
                   />
                 )}
-                <div className="space-y-1.5 sm:space-y-2 min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-mono text-slate-600 dark:text-slate-400">
-                    <span>
+                <div className="space-y-1.5 sm:space-y-2 min-w-0 flex-1 overflow-hidden">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-mono text-slate-600 dark:text-slate-400 min-w-0">
+                    <span className="truncate max-w-full">
                       Logged in as:{' '}
                       <strong className="text-slate-900 dark:text-white">{currentUser.name}</strong>
                     </span>

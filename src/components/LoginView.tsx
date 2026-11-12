@@ -56,8 +56,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
       if (kickReason) {
         setErrorMessage(kickReason);
       }
-      // Prefetch latest cloud user accounts immediately when LoginView opens on mobile/desktop
-      ClassroomDB.pullFromSupabase({ force: true, onlyProfiles: true }).catch(() => {});
     } catch {
       // ignore
     }

@@ -251,4 +251,16 @@ html.dark .neu-btn-indigo:hover:not(:disabled) {
   transform: translateY(-1px);
 }
 
+/* Strict horizontal overflow protection across Mobile, Tablet & Web */
+html,
+body,
+#root {
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+}
 
+select {
+  max-width: 100%;
+}

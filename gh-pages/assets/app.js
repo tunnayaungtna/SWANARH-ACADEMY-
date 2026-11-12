@@ -34093,6 +34093,32 @@ var SupabaseService = class {
 	static {
 		this.pendingDeletedEmails = /* @__PURE__ */ new Set();
 	}
+	static {
+		this.pendingKinds = /* @__PURE__ */ new Set();
+	}
+	static {
+		this.pendingTargetUserIds = /* @__PURE__ */ new Set();
+	}
+	static loadCloudCleanupTimestamps() {
+		if (typeof window === "undefined" || this.lastExpiredCleanupAt > 0 && this.lastAuditLogCleanupAt > 0) return;
+		try {
+			const raw = localStorage.getItem("classroom_os_cloud_cleanup_ts_v1");
+			if (raw) {
+				const parsed = JSON.parse(raw);
+				if (typeof parsed.expired === "number") this.lastExpiredCleanupAt = parsed.expired;
+				if (typeof parsed.audit === "number") this.lastAuditLogCleanupAt = parsed.audit;
+			}
+		} catch {}
+	}
+	static saveCloudCleanupTimestamps() {
+		if (typeof window === "undefined") return;
+		try {
+			localStorage.setItem("classroom_os_cloud_cleanup_ts_v1", JSON.stringify({
+				expired: this.lastExpiredCleanupAt,
+				audit: this.lastAuditLogCleanupAt
+			}));
+		} catch {}
+	}
 	static computePostSignature(content, comments, isPinned, pinOrder) {
 		const cleanComments = (comments || []).slice(-50).map((c) => {
 			const rec = c;
@@ -34118,6 +34144,14 @@ var SupabaseService = class {
 				event: "*",
 				schema: "public"
 			}, (payload) => {
+				const tableName = String(payload?.table || "");
+				if (tableName === "notifications") {
+					if (payload?.eventType === "DELETE") return;
+					const newNotif = payload?.new || {};
+					if (newNotif.user_id === AUDIT_LOG_SYSTEM_USER_ID || newNotif.type === "audit_log") return;
+					this.triggerRealtimeListeners({ kind: "notification" });
+					return;
+				}
 				if (payload?.eventType === "DELETE" && payload?.old && typeof payload.old === "object") {
 					const oldRec = payload.old;
 					const delId = oldRec.id ? String(oldRec.id) : "";
@@ -34131,13 +34165,43 @@ var SupabaseService = class {
 					});
 					return;
 				}
-				this.triggerRealtimeListeners();
+				const mappedKind = {
+					attendance_sessions: "attendance",
+					posts: "post",
+					courses: "course",
+					profiles: "profile",
+					assignments: "assignment",
+					assignment_submissions: "submission",
+					quizzes: "quiz",
+					quiz_submissions: "quiz_submission"
+				}[tableName] || "all";
+				if (mappedKind === "profile" && payload?.eventType === "UPDATE" && payload?.new) {
+					const newProf = payload.new;
+					const profId = newProf.id ? String(newProf.id) : "";
+					const profRole = newProf.role ? String(newProf.role) : "";
+					if (profId && profRole === "student") {
+						this.triggerRealtimeListeners({
+							kind: "profile",
+							targetUserIds: [profId]
+						});
+						return;
+					}
+				}
+				this.triggerRealtimeListeners({ kind: mappedKind });
 			}).subscribe();
 			this.activeRealtimeChannel = ch;
 		} catch {}
 	}
 	static triggerRealtimeListeners(meta) {
-		if (meta?.kind) this.pendingKind = meta.kind;
+		const incomingKind = meta?.kind || "all";
+		this.pendingKinds.add(incomingKind);
+		if (incomingKind === "course" || incomingKind === "all") this.invalidateClientCache("courses");
+		if (incomingKind === "assignment" || incomingKind === "all") this.invalidateClientCache("assignments");
+		if (incomingKind === "submission" || incomingKind === "all") this.invalidateClientCache("submissions");
+		if (incomingKind === "quiz" || incomingKind === "all") this.invalidateClientCache("quizzes");
+		if (Array.isArray(meta?.targetUserIds)) meta.targetUserIds.forEach((uid) => {
+			if (uid) this.pendingTargetUserIds.add(uid);
+		});
 		if (Array.isArray(meta?.deletedIds)) meta.deletedIds.forEach((id) => {
 			if (id) this.pendingDeletedIds.add(id);
 		});
@@ -34150,13 +34214,17 @@ var SupabaseService = class {
 		if (this.realtimeDebounceTimer) clearTimeout(this.realtimeDebounceTimer);
 		this.realtimeDebounceTimer = setTimeout(() => {
 			this.realtimeDebounceTimer = null;
+			const kindsList = Array.from(this.pendingKinds);
 			const snapshot = {
-				kind: this.pendingKind,
+				kind: kindsList.length === 1 ? kindsList[0] : kindsList.includes("delete") ? "delete" : "all",
+				kinds: kindsList,
+				targetUserIds: this.pendingTargetUserIds.size > 0 ? Array.from(this.pendingTargetUserIds) : void 0,
 				deletedIds: this.pendingDeletedIds.size > 0 ? Array.from(this.pendingDeletedIds) : void 0,
 				deletedUsernames: this.pendingDeletedUsernames.size > 0 ? Array.from(this.pendingDeletedUsernames) : void 0,
 				deletedEmails: this.pendingDeletedEmails.size > 0 ? Array.from(this.pendingDeletedEmails) : void 0
 			};
-			this.pendingKind = void 0;
+			this.pendingKinds.clear();
+			this.pendingTargetUserIds.clear();
 			this.pendingDeletedIds.clear();
 			this.pendingDeletedUsernames.clear();
 			this.pendingDeletedEmails.clear();
@@ -34165,7 +34233,7 @@ var SupabaseService = class {
 					cb(snapshot);
 				} catch {}
 			});
-		}, 180);
+		}, 150);
 	}
 	static subscribeToRealtimeChanges(onChange) {
 		this.realtimeListeners.add(onChange);
@@ -34180,6 +34248,7 @@ var SupabaseService = class {
 		const messagePayload = {
 			kind,
 			ts: Date.now(),
+			...meta?.targetUserIds?.length ? { targetUserIds: meta.targetUserIds } : {},
 			...meta?.deletedIds?.length ? { deletedIds: meta.deletedIds } : {},
 			...meta?.deletedUsernames?.length ? { deletedUsernames: meta.deletedUsernames } : {},
 			...meta?.deletedEmails?.length ? { deletedEmails: meta.deletedEmails } : {}
@@ -34951,7 +35020,7 @@ var SupabaseService = class {
 					maxPoints: row.total_points ?? 100,
 					rubricItems: ["Code Quality & Correctness", "Documentation & Verification"]
 				}));
-				this.setCachedQuery("assignments:all", mapped, 15e3);
+				this.setCachedQuery("assignments:all", mapped, 18e4);
 				return mapped;
 			} catch {
 				return null;
@@ -34959,7 +35028,7 @@ var SupabaseService = class {
 		});
 	}
 	/**
-	* Fetch all assignment submissions from Supabase (with 15s Client-Side Cache TTL & no student_avatar column)
+	* Fetch all assignment submissions from Supabase (with 60s Client-Side Cache TTL & no student_avatar column)
 	*/
 	static async getRemoteSubmissions(forceRefresh = false) {
 		if (!forceRefresh) {
@@ -34992,7 +35061,7 @@ var SupabaseService = class {
 						status: typeof row.grade === "number" ? "graded" : "submitted"
 					};
 				});
-				this.setCachedQuery("submissions:all", mapped, 15e3);
+				this.setCachedQuery("submissions:all", mapped, 6e4);
 				return mapped;
 			} catch {
 				return null;
@@ -35000,7 +35069,7 @@ var SupabaseService = class {
 		});
 	}
 	/**
-	* Fetch all quizzes from Supabase (with 15s Client-Side Cache TTL)
+	* Fetch all quizzes from Supabase (with 3-minute Client-Side Cache TTL)
 	*/
 	static async getRemoteQuizzes(forceRefresh = false) {
 		if (!forceRefresh) {
@@ -35021,7 +35090,7 @@ var SupabaseService = class {
 					passingScore: row.passing_score ?? 70,
 					questions: Array.isArray(row.questions) ? row.questions : []
 				}));
-				this.setCachedQuery("quizzes:all", mapped, 15e3);
+				this.setCachedQuery("quizzes:all", mapped, 18e4);
 				return mapped;
 			} catch {
 				return null;
@@ -35101,7 +35170,6 @@ var SupabaseService = class {
 		const cacheKey = `notifs:${userId || "all"}`;
 		return this.dedupeGet(cacheKey, async () => {
 			try {
-				this.purgeExpiredNotifications([], false).catch(() => {});
 				const cutoffIso = (/* @__PURE__ */ new Date(Date.now() - NOTIFICATION_TTL_MS)).toISOString();
 				let query = supabase.from("notifications").select("id,user_id,course_id,course_code,course_title,post_id,author_name,author_role,title,message,type,is_read,created_at,expires_at").gt("created_at", cutoffIso).order("created_at", { ascending: false }).limit(40);
 				if (userId) query = query.eq("user_id", userId);
@@ -35192,17 +35260,19 @@ var SupabaseService = class {
 	}
 	/**
 	* Auto-delete notifications older than 30 minutes (and also trigger 2-day Audit Log cleanup) from Supabase SQL database.
-	* Throttled to once every 10 minutes unless forced to protect Supabase Free Plan quota.
+	* Throttled via persistent localStorage to once every 60 minutes unless forced to protect Supabase Free Plan Log Ingestion quota.
 	*/
 	static async purgeExpiredNotifications(expiredIds = [], force = false) {
 		if (this.notificationsTableStatus === "missing") return false;
+		this.loadCloudCleanupTimestamps();
 		const now = Date.now();
-		const shouldRunTimeSweep = force || now - this.lastExpiredCleanupAt >= 6e5;
-		this.purgeExpiredAuditLogs([], force).catch(() => {});
+		const shouldRunTimeSweep = force || now - this.lastExpiredCleanupAt >= 36e5;
+		if (shouldRunTimeSweep) this.purgeExpiredAuditLogs([], force).catch(() => {});
 		if (!shouldRunTimeSweep && expiredIds.length === 0) return true;
 		try {
 			if (shouldRunTimeSweep) {
 				this.lastExpiredCleanupAt = now;
+				this.saveCloudCleanupTimestamps();
 				const cutoffIso = (/* @__PURE__ */ new Date(now - NOTIFICATION_TTL_MS)).toISOString();
 				const nowIso = new Date(now).toISOString();
 				const { error } = await supabase.from("notifications").delete().neq("user_id", AUDIT_LOG_SYSTEM_USER_ID).or(`created_at.lt.${cutoffIso},expires_at.lte.${nowIso}`);
@@ -35221,16 +35291,18 @@ var SupabaseService = class {
 	}
 	/**
 	* Auto-delete Security Audit Logs older than 2 days (48 hours) from Supabase SQL database in the background.
-	* Throttled to once every 10 minutes unless forced.
+	* Throttled via persistent localStorage to once every 60 minutes unless forced.
 	*/
 	static async purgeExpiredAuditLogs(expiredIds = [], force = false) {
 		if (this.notificationsTableStatus === "missing") return false;
+		this.loadCloudCleanupTimestamps();
 		const now = Date.now();
-		const shouldRunSweep = force || now - this.lastAuditLogCleanupAt >= 6e5;
+		const shouldRunSweep = force || now - this.lastAuditLogCleanupAt >= 36e5;
 		if (!shouldRunSweep && expiredIds.length === 0) return true;
 		try {
 			if (shouldRunSweep) {
 				this.lastAuditLogCleanupAt = now;
+				this.saveCloudCleanupTimestamps();
 				const cutoffIso = (/* @__PURE__ */ new Date(now - AUDIT_LOG_TTL_MS)).toISOString();
 				const nowIso = new Date(now).toISOString();
 				const { error } = await supabase.from("notifications").delete().eq("user_id", AUDIT_LOG_SYSTEM_USER_ID).or(`created_at.lt.${cutoffIso},expires_at.lte.${nowIso}`);
@@ -35268,7 +35340,6 @@ var SupabaseService = class {
 		if (this.notificationsTableStatus === "missing") return null;
 		return this.dedupeGet(`audit_logs:${limit}`, async () => {
 			try {
-				this.purgeExpiredAuditLogs([], false).catch(() => {});
 				const now = Date.now();
 				const cutoffIso = (/* @__PURE__ */ new Date(now - AUDIT_LOG_TTL_MS)).toISOString();
 				const { data, error } = await supabase.from("notifications").select("id,user_id,course_id,course_code,course_title,post_id,author_name,author_role,title,message,type,created_at,expires_at").eq("user_id", AUDIT_LOG_SYSTEM_USER_ID).gte("created_at", cutoffIso).order("created_at", { ascending: false }).limit(limit);
@@ -35429,7 +35500,7 @@ var SupabaseService = class {
 	* Create or update a profile in Supabase with cached schema mode & signature deduplication
 	* so Free Plan never wastes extra HTTP calls.
 	*/
-	static async upsertProfile(user, forceUpload = false) {
+	static async upsertProfile(user, forceUpload = false, options) {
 		try {
 			const normalizedUser = {
 				...user,
@@ -35440,10 +35511,15 @@ var SupabaseService = class {
 			const sigKey = `profile:${normalizedUser.id}`;
 			const { updated_at: _ignoreTs, ...comparablePayload } = payload;
 			if (!forceUpload && !this.hasChangedSignature(sigKey, comparablePayload)) return { success: true };
+			const emitProfilePeerUpdate = () => {
+				if (options?.silentRealtime) return;
+				if (options?.sessionLockOnly || normalizedUser.role === "student") this.notifyRealtimePeers("profile", { targetUserIds: [normalizedUser.id] });
+				else this.notifyRealtimePeers("profile");
+			};
 			const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
 			if (!error) {
 				this.recordSignature(sigKey, comparablePayload);
-				this.notifyRealtimePeers("profile");
+				emitProfilePeerUpdate();
 				return { success: true };
 			}
 			if (error.code === "23505" || error.message && error.message.toLowerCase().includes("duplicate key")) try {
@@ -35452,7 +35528,7 @@ var SupabaseService = class {
 				const { error: retryErr } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
 				if (!retryErr) {
 					this.recordSignature(sigKey, comparablePayload);
-					this.notifyRealtimePeers("profile");
+					emitProfilePeerUpdate();
 					return { success: true };
 				}
 			} catch {}
@@ -35463,7 +35539,7 @@ var SupabaseService = class {
 				if (!errNoPwd) {
 					this.profileSchemaMode = "no_password";
 					this.recordSignature(sigKey, comparablePayload);
-					this.notifyRealtimePeers("profile");
+					emitProfilePeerUpdate();
 					return { success: true };
 				}
 			}
@@ -35472,7 +35548,7 @@ var SupabaseService = class {
 			if (!fallbackError) {
 				if (isMissingColumnError) this.profileSchemaMode = "core";
 				this.recordSignature(sigKey, comparablePayload);
-				this.notifyRealtimePeers("profile");
+				emitProfilePeerUpdate();
 				return { success: true };
 			}
 			return {
@@ -35867,9 +35943,27 @@ var SupabaseService = class {
 	*/
 	static async upsertAttendanceSession(session, options) {
 		try {
+			const sigKey = `att:${session.id}`;
 			let mergedRecords = { ...session.records || {} };
 			let resolvedIsOpen = Boolean(session.isOpen);
 			let resolvedStatusMs = session.statusUpdatedAtMs || Date.now();
+			const candidateSession = {
+				...session,
+				isOpen: resolvedIsOpen,
+				statusUpdatedAtMs: resolvedStatusMs,
+				records: mergedRecords
+			};
+			const initialRow = {
+				id: session.id,
+				course_id: session.courseId,
+				date: session.date,
+				display_date: session.displayDate,
+				title: session.title,
+				is_open: resolvedIsOpen,
+				opened_by: encodeAttendanceOpenedBy(candidateSession),
+				records: mergedRecords
+			};
+			if (!options?.force && !this.hasChangedSignature(sigKey, initialRow)) return true;
 			const { data: existingRow } = await supabase.from("attendance_sessions").select("id,is_open,opened_by,records").eq("id", session.id).maybeSingle();
 			if (existingRow) {
 				const remoteRecords = existingRow.records && typeof existingRow.records === "object" ? existingRow.records : {};
@@ -35880,7 +35974,12 @@ var SupabaseService = class {
 					...session.records || {}
 				};
 				if (options?.preserveRemoteOpenState) resolvedIsOpen = Boolean(existingRow.is_open);
-				resolvedStatusMs = Math.max(Date.now(), session.statusUpdatedAtMs || 0);
+				const decodedExisting = decodeAttendanceOpenedBy(existingRow.opened_by, existingRow.is_open);
+				resolvedStatusMs = Math.max(session.statusUpdatedAtMs || Date.now(), decodedExisting.statusUpdatedAtMs || 0);
+				if (Boolean(existingRow.is_open) === resolvedIsOpen && JSON.stringify(cleanRemoteRecords) === JSON.stringify(mergedRecords)) {
+					this.recordSignature(sigKey, initialRow);
+					return true;
+				}
 			}
 			const sessionToEncode = {
 				...session,
@@ -35898,7 +35997,6 @@ var SupabaseService = class {
 				opened_by: encodeAttendanceOpenedBy(sessionToEncode),
 				records: mergedRecords
 			};
-			const sigKey = `att:${session.id}`;
 			const { error } = await supabase.from("attendance_sessions").upsert(row, { onConflict: "id" });
 			if (!error) {
 				this.recordSignature(sigKey, row);
@@ -37604,8 +37702,8 @@ var ClassroomDB = class {
 	}
 	static async syncAuditLogsFromCloud() {
 		try {
-			this.purgeExpiredAuditLogs(true);
-			const remoteLogs = await SupabaseService.getRemoteAuditLogs(300);
+			this.purgeExpiredAuditLogs(false);
+			const remoteLogs = await SupabaseService.getRemoteAuditLogs(250);
 			if (remoteLogs && remoteLogs.length > 0) {
 				const now = Date.now();
 				const localLogs = this.getItem(STORAGE_KEYS.AUDIT_LOGS, []);
@@ -39476,15 +39574,16 @@ var ClassroomDB = class {
 		const force = Boolean(options?.force);
 		const onlyProfiles = Boolean(options?.onlyProfiles);
 		const isBackground = Boolean(options?.background);
+		const targetTables = options?.tables && options.tables.length > 0 ? new Set(options.tables) : null;
 		const now = Date.now();
-		const COOLDOWN_MS = 15e3;
-		const CATALOG_TTL_MS = 45e3;
-		if (!force) {
+		const COOLDOWN_MS = 1e4;
+		const CATALOG_TTL_MS = 12e4;
+		if (!force && !targetTables) {
 			if (onlyProfiles && now - this.lastProfilePullAt < COOLDOWN_MS) return purgedLocalNotifs;
 			if (!onlyProfiles && now - this.lastFullPullAt < COOLDOWN_MS) return purgedLocalNotifs;
 		}
 		if (this.activePullPromise) {
-			if (force) try {
+			if (force || targetTables) try {
 				await this.activePullPromise;
 			} catch {}
 			else return this.activePullPromise;
@@ -39496,10 +39595,20 @@ var ClassroomDB = class {
 				const newlyDiscoveredRemoteDeletions = [];
 				const newlyDeletedUsernames = [];
 				const newlyDeletedEmails = [];
+				const loggedUser = this.getCurrentUser();
+				const isStudentLightweight = Boolean(loggedUser && loggedUser.role === "student");
+				const knownAvatars = /* @__PURE__ */ new Map();
+				this.getAllUsers().forEach((u) => {
+					if (u.id && u.role === "admin" && u.avatar) knownAvatars.set(u.id, u.avatar);
+				});
 				if (onlyProfiles) {
 					this.lastProfilePullAt = Date.now();
 					this.savePullTimestampsToCache();
-					const remoteProfiles = await SupabaseService.getRemoteProfiles(force);
+					const remoteProfiles = await SupabaseService.getRemoteProfiles(force, {
+						studentLightweight: Boolean(isStudentLightweight && loggedUser),
+						currentUserId: loggedUser?.id,
+						knownAvatars
+					});
 					if (!remoteProfiles || remoteProfiles.length === 0) return purgedLocalNotifs;
 					try {
 						localStorage.setItem(STORAGE_KEYS.CLOUD_SYNCED, "true");
@@ -39509,7 +39618,7 @@ var ClassroomDB = class {
 					const prevJson = JSON.stringify(localUsers);
 					const userMap = /* @__PURE__ */ new Map();
 					localUsers.forEach((u) => {
-						if (remoteProfileIds.has(u.id) || this.isRecentLocalWrite(u.id)) userMap.set(u.id, u);
+						if (remoteProfileIds.has(u.id) || this.isRecentLocalWrite(u.id) || isStudentLightweight && u.role === "student" && u.id !== loggedUser?.id) userMap.set(u.id, u);
 						else {
 							newlyDiscoveredRemoteDeletions.push(u.id);
 							deletedSet.add(u.id);
@@ -39524,6 +39633,9 @@ var ClassroomDB = class {
 						userMap.set(ru.id, {
 							...existing,
 							...ru,
+							activeDeviceId: ru.activeDeviceId,
+							activeSessionToken: ru.activeSessionToken,
+							sessionUpdatedAtMs: ru.sessionUpdatedAtMs,
 							rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
 							rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
 							avatar: resolvedAvatar,
@@ -39537,29 +39649,24 @@ var ClassroomDB = class {
 					const mergedUsers = Array.from(userMap.values());
 					if (JSON.stringify(mergedUsers) !== prevJson) {
 						this.setItem(STORAGE_KEYS.USERS, mergedUsers);
+						if (loggedUser && userMap.has(loggedUser.id)) this.setCurrentUser(userMap.get(loggedUser.id));
 						return true;
 					}
 					return purgedLocalNotifs;
 				}
-				this.lastFullPullAt = now;
-				const shouldFetchCatalog = !isBackground || force || now - this.lastCatalogPullAt >= CATALOG_TTL_MS;
-				if (shouldFetchCatalog) {
+				if (!targetTables) this.lastFullPullAt = now;
+				const shouldFetchCatalog = targetTables ? targetTables.has("profiles") || targetTables.has("assignments") || targetTables.has("quizzes") : !isBackground && force || now - this.lastCatalogPullAt >= CATALOG_TTL_MS;
+				if (shouldFetchCatalog && !targetTables) {
 					this.lastCatalogPullAt = now;
 					this.lastProfilePullAt = now;
 				}
 				this.savePullTimestampsToCache();
-				const loggedUser = this.getCurrentUser();
-				const isStudentLightweight = Boolean(loggedUser && loggedUser.role === "student");
 				const currentCourses = this.getItem(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter((c) => !deletedSet.has(c.id));
 				const enrolledIdsForStudent = loggedUser && loggedUser.role === "student" ? currentCourses.filter((c) => c.enrolledStudentIds.includes(loggedUser.id)).map((c) => c.id) : void 0;
 				let studentScopedCourseIds = enrolledIdsForStudent && enrolledIdsForStudent.length > 0 ? enrolledIdsForStudent : void 0;
 				const knownBanners = /* @__PURE__ */ new Map();
 				currentCourses.forEach((c) => {
 					if (c.id && c.bannerImage) knownBanners.set(c.id, c.bannerImage);
-				});
-				const knownAvatars = /* @__PURE__ */ new Map();
-				this.getAllUsers().forEach((u) => {
-					if (u.id && u.role === "admin" && u.avatar) knownAvatars.set(u.id, u.avatar);
 				});
 				const currentPosts = this.getItem(STORAGE_KEYS.POSTS, INITIAL_POSTS).filter((p) => !deletedSet.has(p.id));
 				const knownPostsMap = /* @__PURE__ */ new Map();
@@ -39587,19 +39694,26 @@ var ClassroomDB = class {
 					});
 				});
 				const isAlreadyCloudSynced = typeof window !== "undefined" && localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) === "true";
+				const wantProfiles = targetTables ? targetTables.has("profiles") : shouldFetchCatalog;
+				const wantCourses = targetTables ? targetTables.has("courses") : true;
+				const wantPosts = targetTables ? targetTables.has("posts") : true;
+				const wantAssignments = targetTables ? targetTables.has("assignments") : shouldFetchCatalog;
+				const wantQuizzes = targetTables ? targetTables.has("quizzes") : shouldFetchCatalog;
+				const wantAttendance = targetTables ? targetTables.has("attendance") : true;
+				const wantNotifications = targetTables ? targetTables.has("notifications") : true;
 				const [remoteProfiles, remoteCourses, initialRemotePosts, remoteAssignments, remoteQuizzes, initialRemoteAttendance, remoteNotifications, singleLoggedProfile] = await Promise.all([
-					shouldFetchCatalog || isStudentLightweight ? SupabaseService.getRemoteProfiles(force, {
+					wantProfiles ? SupabaseService.getRemoteProfiles(force, {
 						studentLightweight: Boolean(isStudentLightweight && loggedUser),
 						currentUserId: loggedUser?.id,
 						knownAvatars: isAlreadyCloudSynced || isBackground ? knownAvatars : void 0
 					}) : Promise.resolve(null),
-					SupabaseService.getRemoteCourses(knownBanners),
-					SupabaseService.getRemotePosts(studentScopedCourseIds, isAlreadyCloudSynced || isBackground ? knownPostsMap : void 0),
-					shouldFetchCatalog ? SupabaseService.getRemoteAssignments(force) : Promise.resolve(null),
-					shouldFetchCatalog ? SupabaseService.getRemoteQuizzes(force) : Promise.resolve(null),
-					SupabaseService.getRemoteAttendanceSessions(studentScopedCourseIds, knownAttendanceMap),
-					loggedUser ? SupabaseService.getRemoteNotifications(loggedUser.id) : Promise.resolve(null),
-					!shouldFetchCatalog && !isStudentLightweight && loggedUser ? SupabaseService.getRemoteProfileByIdentifier(loggedUser.username || loggedUser.email, true) : Promise.resolve(null)
+					wantCourses ? SupabaseService.getRemoteCourses(knownBanners) : Promise.resolve(null),
+					wantPosts ? SupabaseService.getRemotePosts(studentScopedCourseIds, isAlreadyCloudSynced || isBackground ? knownPostsMap : void 0) : Promise.resolve(null),
+					wantAssignments ? SupabaseService.getRemoteAssignments(force) : Promise.resolve(null),
+					wantQuizzes ? SupabaseService.getRemoteQuizzes(force) : Promise.resolve(null),
+					wantAttendance ? SupabaseService.getRemoteAttendanceSessions(studentScopedCourseIds, knownAttendanceMap) : Promise.resolve(null),
+					wantNotifications && loggedUser ? SupabaseService.getRemoteNotifications(loggedUser.id) : Promise.resolve(null),
+					!wantProfiles && !targetTables && loggedUser && loggedUser.role === "student" ? SupabaseService.getRemoteProfileByIdentifier(loggedUser.username || loggedUser.email, true) : Promise.resolve(null)
 				]);
 				let remotePosts = initialRemotePosts;
 				let remoteAttendance = initialRemoteAttendance;
@@ -39768,10 +39882,12 @@ var ClassroomDB = class {
 						const isInQueriedScope = !scopedCourseSet || scopedCourseSet.has(p.courseId);
 						const isInitialDemo = /^post-\d{3}$/.test(p.id || "");
 						const wasConfirmedInCloud = confirmedCloudPosts.has(p.id);
+						const isRecentWrite = this.isRecentLocalWrite(p.id);
 						if (remotePostIds.has(p.id)) postMap.set(p.id, p);
-						else if (!cloudActive || !isInQueriedScope || this.isRecentLocalWrite(p.id) || !wasConfirmedInCloud && !isInitialDemo) {
+						else if (!isInQueriedScope) postMap.set(p.id, p);
+						else if (!cloudActive || isRecentWrite || !wasConfirmedInCloud && !isInitialDemo && !isStudentLightweight) {
 							postMap.set(p.id, p);
-							if (!isInitialDemo) postsToPushToCloud.push(p);
+							if (isRecentWrite && !isInitialDemo) postsToPushToCloud.push(p);
 						} else {
 							newlyDiscoveredRemoteDeletions.push(p.id);
 							deletedSet.add(p.id);
@@ -39828,7 +39944,7 @@ var ClassroomDB = class {
 							}) : existing?.attachments || []
 						};
 						postMap.set(rp.id, mergedPost);
-						if (wasAlreadyPublishedLocally || isRpScheduleDueNow || isLocalRecent || hadExpiredRemoteComments) postsToPushToCloud.push(mergedPost);
+						if (isLocalRecent || !isStudentLightweight && (wasAlreadyPublishedLocally || isRpScheduleDueNow || hadExpiredRemoteComments)) postsToPushToCloud.push(mergedPost);
 					});
 					const merged = Array.from(postMap.values()).sort((a, b) => this.getPostSortTimestamp(b) - this.getPostSortTimestamp(a));
 					if (JSON.stringify(merged) !== prevJson) {
@@ -39929,10 +40045,6 @@ var ClassroomDB = class {
 					if (newlyDeletedUsernames.length > 0 || newlyDeletedEmails.length > 0) this.recordDeletedUserMeta(newlyDeletedUsernames, newlyDeletedEmails);
 					updated = true;
 				}
-				if (loggedUser && loggedUser.role === "admin" && shouldFetchCatalog) {
-					const prevAuditCount = this.getAuditLogs().length;
-					if ((await this.syncAuditLogsFromCloud()).length !== prevAuditCount) updated = true;
-				}
 				return updated;
 			} catch {
 				return purgedLocalNotifs;
@@ -39949,6 +40061,8 @@ var ClassroomDB = class {
 	* - Merges per-student check-in records without losing concurrent check-ins.
 	*/
 	static reconcileRemoteAttendanceSessions(remoteAttendance, studentScopedCourseIds, cloudActive = true, externalDeletedSet, externalNewDeletions) {
+		const loggedUserForAtt = this.getCurrentUser();
+		const isInstructorForAtt = Boolean(loggedUserForAtt && (loggedUserForAtt.role === "admin" || loggedUserForAtt.role === "co_admin"));
 		const deletedSet = externalDeletedSet || new Set(this.getDeletedIds());
 		const newlyDiscoveredRemoteDeletions = externalNewDeletions || [];
 		const remoteAttIds = new Set(remoteAttendance.map((ratt) => ratt.id));
@@ -39963,10 +40077,12 @@ var ClassroomDB = class {
 			const isInQueriedScope = !scopedCourseSet || scopedCourseSet.has(att.courseId);
 			const isInitialDemo = /^att-sess-\d{1,4}$/.test(att.id || "");
 			const wasConfirmedInCloud = confirmedCloudAtt.has(att.id);
+			const isRecentAttWrite = this.isRecentLocalWrite(att.id, 2e4);
 			if (remoteAttIds.has(att.id)) attMap.set(att.id, att);
-			else if (!cloudActive || !isInQueriedScope || this.isRecentLocalWrite(att.id, 3e4) || !wasConfirmedInCloud && !isInitialDemo) {
+			else if (!isInQueriedScope) attMap.set(att.id, att);
+			else if (!cloudActive || isRecentAttWrite || !wasConfirmedInCloud && !isInitialDemo && isInstructorForAtt) {
 				attMap.set(att.id, att);
-				if (!isInitialDemo) attToPushToCloud.push(att);
+				if (isRecentAttWrite && isInstructorForAtt && !isInitialDemo) attToPushToCloud.push(att);
 			} else {
 				newlyDiscoveredRemoteDeletions.push(att.id);
 				deletedSet.add(att.id);
@@ -43628,26 +43744,6 @@ var MapPin = createLucideIcon("map-pin", [["path", {
 * This source code is licensed under the ISC license.
 * See the LICENSE file in the root directory of this source tree.
 */
-var Menu = createLucideIcon("menu", [
-	["path", {
-		d: "M4 5h16",
-		key: "1tepv9"
-	}],
-	["path", {
-		d: "M4 12h16",
-		key: "1lakjw"
-	}],
-	["path", {
-		d: "M4 19h16",
-		key: "1djgab"
-	}]
-]);
-/**
-* @license lucide-react v0.546.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
 var MessageSquare = createLucideIcon("message-square", [["path", {
 	d: "M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z",
 	key: "18887p"
@@ -44987,7 +45083,7 @@ var PWAInstallButton = ({ variant = "navbar" }) => {
 };
 //#endregion
 //#region src/utils/appUpdater.ts
-var APP_VERSION_LABEL = "v20.4 (Free-Plan Eco & Fast Update)";
+var APP_VERSION_LABEL = "v20.5";
 /**
 * Performs a fast, non-destructive live update of both Classroom Cloud Data (Supabase)
 * and checks for any new Service Worker / Application Bundle updates.
@@ -45073,10 +45169,6 @@ var LoginView = ({ onLoginSuccess, theme, onToggleTheme }) => {
 			localStorage.removeItem("classroom_custom_academy_logo_v2");
 			const kickReason = ClassroomDB.consumeKickReason();
 			if (kickReason) setErrorMessage(kickReason);
-			ClassroomDB.pullFromSupabase({
-				force: true,
-				onlyProfiles: true
-			}).catch(() => {});
 		} catch {}
 	}, []);
 	const handleSwitchTab = (role) => {
@@ -46166,11 +46258,9 @@ var EditUserAccountModal = ({ user, isOpen, onClose, onSuccess, courses }) => {
 var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, onLogout, onOpenArchitecture, onOpenStudentDirectory, onOpenAuditLog, onOpenRules, onResetData: _onResetData, onNavigateHome, notifications, onRefreshNotifications, onSelectNotificationCourse, theme, onToggleTheme, onUpdateCurrentUser }) => {
 	const [showUserDropdown, setShowUserDropdown] = (0, import_react.useState)(false);
 	const [showNotifications, setShowNotifications] = (0, import_react.useState)(false);
-	const [isMobileMenuOpen, setIsMobileMenuOpen] = (0, import_react.useState)(false);
 	const [showProfilePictureModal, setShowProfilePictureModal] = (0, import_react.useState)(false);
 	const [showEditMyAccountModal, setShowEditMyAccountModal] = (0, import_react.useState)(false);
 	const [showPasswordModal, setShowPasswordModal] = (0, import_react.useState)(false);
-	useBackHandler(isMobileMenuOpen, () => setIsMobileMenuOpen(false));
 	useBackHandler(showNotifications, () => setShowNotifications(false));
 	useBackHandler(showUserDropdown, () => setShowUserDropdown(false));
 	useBackHandler(showProfilePictureModal, () => setShowProfilePictureModal(false));
@@ -46215,30 +46305,33 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 		} else setPwdError(res.error || "စကားဝှက် ပြောင်းလဲရာတွင် အမှားဖြစ်ပေါ်ခဲ့ပါသည်။");
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
-		className: "sticky top-0 z-40 w-full px-3 sm:px-6 pt-3",
+		className: "sticky top-0 z-40 w-full max-w-full px-2 sm:px-6 pt-2 sm:pt-3",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "max-w-7xl mx-auto neu-raised rounded-2xl px-3.5 sm:px-6 h-16 flex items-center justify-between gap-3 sm:gap-6",
+				className: "max-w-7xl mx-auto neu-raised rounded-2xl px-2.5 sm:px-5 h-14 sm:h-16 flex items-center justify-between gap-1.5 sm:gap-4 min-w-0 w-full",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex items-center gap-2.5 sm:gap-3 shrink-0",
+						className: "flex items-center gap-2 sm:gap-3 min-w-0 flex-1 sm:flex-initial sm:shrink-0",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 							onClick: () => {
 								onNavigateHome();
-								setIsMobileMenuOpen(false);
+								setShowUserDropdown(false);
 							},
-							className: "text-base sm:text-lg font-extrabold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer text-left flex items-center gap-2.5",
+							className: "text-sm sm:text-base lg:text-lg font-extrabold tracking-tight text-slate-900 dark:text-slate-100 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer text-left flex items-center gap-2 min-w-0 max-w-full",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "neu-inset-sm p-1.5 rounded-xl shrink-0",
+								className: "neu-inset-sm p-1 sm:p-1.5 rounded-xl shrink-0",
 								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AcademyLogo, { size: "sm" })
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "SwanArh Classroom" })]
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "truncate",
+								children: "SwanArh Classroom"
+							})]
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 hidden xs:inline-block",
+							className: "text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 hidden xl:inline-block shrink-0",
 							children: ["· ", currentUser.role === "admin" ? "Lead Mentor (Admin)" : currentUser.role === "co_admin" ? "Co-Admin (တွဲဖက်)" : "Student (ကျောင်းသား)"]
 						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
-						className: "hidden lg:flex items-center gap-5 xl:gap-6 text-xs sm:text-sm font-semibold text-slate-600 dark:text-slate-300",
+						className: "hidden lg:flex items-center gap-4 xl:gap-6 text-xs sm:text-sm font-semibold text-slate-600 dark:text-slate-300 shrink-0",
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								onClick: onNavigateHome,
@@ -46262,25 +46355,28 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 						]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex items-center gap-2 sm:gap-2.5 shrink-0",
+						className: "flex items-center gap-1.5 sm:gap-2 shrink-0 min-w-0",
 						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PWAInstallButton, { variant: "navbar" }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "hidden md:block shrink-0",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PWAInstallButton, { variant: "navbar" })
+							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								onClick: onToggleTheme,
-								className: "neu-btn p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl cursor-pointer",
+								className: "hidden sm:flex neu-btn p-2 sm:p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl cursor-pointer shrink-0",
 								title: theme === "dark" ? "Switch to Light Mode (အလင်းရောင်)" : "Switch to Dark Mode (အမှောင်ရောင်)",
 								"aria-label": "Toggle color mode",
 								children: theme === "dark" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sun, { className: "w-4 h-4 sm:w-4.5 sm:h-4.5 text-amber-400 animate-in spin-in-90 duration-200" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Moon, { className: "w-4 h-4 sm:w-4.5 sm:h-4.5 text-slate-600 animate-in spin-in-90 duration-200" })
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "relative",
+								className: "relative shrink-0",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 									onClick: () => {
 										setShowNotifications(!showNotifications);
 										setShowUserDropdown(false);
 									},
-									className: "neu-btn p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl relative cursor-pointer",
+									className: "neu-btn p-2 sm:p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl relative cursor-pointer",
 									"aria-label": "View notifications",
 									title: "အတန်းတွင်း အသိပေးချက်များ (Classroom Notifications)",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bell, { className: `w-4 h-4 sm:w-4.5 sm:h-4.5 ${unreadCount > 0 ? "text-indigo-600 dark:text-indigo-400" : ""}` }), unreadCount > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -46288,14 +46384,14 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 										children: unreadCount > 9 ? "9+" : unreadCount
 									})]
 								}), showNotifications && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "neu-card fixed left-3 right-3 top-20 sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-3 sm:w-96 rounded-2xl p-4 z-50",
+									className: "neu-card fixed left-2.5 right-2.5 top-16 sm:absolute sm:left-auto sm:right-0 sm:top-full sm:mt-2.5 sm:w-96 max-w-[calc(100vw-1.25rem)] max-h-[calc(100dvh-4.75rem)] overflow-y-auto overflow-x-hidden rounded-2xl p-3.5 sm:p-4 z-50",
 									children: [
 										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-											className: "flex items-center justify-between pb-3 border-b border-slate-200/60 dark:border-slate-800",
+											className: "flex items-center justify-between gap-2 pb-3 border-b border-slate-200/60 dark:border-slate-800",
 											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-												className: "flex items-center gap-2",
-												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bell, { className: "w-4 h-4 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-													className: "text-xs sm:text-sm font-extrabold text-slate-900 dark:text-slate-100",
+												className: "flex items-center gap-2 min-w-0",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bell, { className: "w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+													className: "text-xs sm:text-sm font-extrabold text-slate-900 dark:text-slate-100 truncate",
 													children: [
 														"အသိပေးချက်များ (",
 														unreadCount,
@@ -46303,7 +46399,7 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 													]
 												})]
 											}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-												className: "flex items-center gap-2",
+												className: "flex items-center gap-2 shrink-0",
 												children: [typeof window !== "undefined" && "Notification" in window && Notification.permission === "default" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 													type: "button",
 													onClick: () => {
@@ -46320,14 +46416,17 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 											})]
 										}),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-											className: "mt-2 px-2.5 py-1.5 rounded-lg bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[10px] text-amber-800 dark:text-amber-300 font-medium flex items-center justify-between",
-											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "⏱ ပို့စ်တင်ပြီး ၃၀ မိနစ်ကြာလျှင် အလိုအလျောက် ပျက်ပါမည်" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "font-mono font-bold",
+											className: "mt-2 px-2.5 py-1.5 rounded-lg bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[10px] text-amber-800 dark:text-amber-300 font-medium flex items-center justify-between gap-2",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "truncate",
+												children: "⏱ ပို့စ်တင်ပြီး ၃၀ မိနစ်ကြာလျှင် အလိုအလျောက် ပျက်ပါမည်"
+											}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "font-mono font-bold shrink-0",
 												children: "30m Auto-Delete"
 											})]
 										}),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-											className: "space-y-2.5 max-h-80 overflow-y-auto mt-2.5 pr-0.5",
+											className: "space-y-2.5 max-h-72 overflow-y-auto mt-2.5 pr-0.5",
 											children: notifications.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 												className: "neu-inset-sm p-5 rounded-xl text-center text-xs text-slate-500 dark:text-slate-400",
 												children: "လက်ရှိတွင် အသိပေးချက် အသစ် မရှိသေးပါ။"
@@ -46347,18 +46446,18 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 														/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 															className: "flex items-start justify-between gap-2",
 															children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-																className: "font-bold text-slate-900 dark:text-slate-100 leading-snug",
+																className: "font-bold text-slate-900 dark:text-slate-100 leading-snug break-words min-w-0",
 																children: notif.title
 															}), !notif.isRead && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "w-2 h-2 rounded-full bg-indigo-600 dark:bg-indigo-400 shrink-0 mt-1" })]
 														}),
 														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-															className: "text-slate-600 dark:text-slate-300 text-[11px] mt-1 leading-relaxed",
+															className: "text-slate-600 dark:text-slate-300 text-[11px] mt-1 leading-relaxed break-words",
 															children: notif.message
 														}),
 														/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-															className: "flex items-center justify-between mt-2 pt-1.5 border-t border-slate-200/40 dark:border-slate-700/40 text-[10px]",
+															className: "flex items-center justify-between gap-2 mt-2 pt-1.5 border-t border-slate-200/40 dark:border-slate-700/40 text-[10px]",
 															children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-																className: "text-slate-400 font-mono",
+																className: "text-slate-400 font-mono truncate",
 																children: [notif.createdAt, remainingMins !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 																	className: "ml-1.5 text-amber-600 dark:text-amber-400 font-semibold",
 																	children: [
@@ -46368,8 +46467,8 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 																	]
 																})]
 															}), notif.courseId && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-																className: "font-bold text-indigo-600 dark:text-indigo-400",
-																children: "အတန်းသို့ ဝင်ကြည့်မည် →"
+																className: "font-bold text-indigo-600 dark:text-indigo-400 shrink-0",
+																children: "အတန်းသို့ →"
 															})]
 														})
 													]
@@ -46380,15 +46479,16 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 								})]
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "relative",
+								className: "relative min-w-0 shrink",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 									onClick: () => {
 										setShowUserDropdown(!showUserDropdown);
 										setShowNotifications(false);
 									},
-									className: "neu-btn flex items-center gap-1.5 sm:gap-2 px-2 sm:px-2.5 py-1.5 rounded-xl cursor-pointer",
+									className: "neu-btn flex items-center gap-1.5 sm:gap-2 px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-xl cursor-pointer min-w-0 max-w-[160px] sm:max-w-[200px] md:max-w-[230px]",
+									title: `${currentUser.name} (@${currentUser.username}) — Menu & Account Settings`,
 									children: [
-										currentUser.role === "admin" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+										currentUser.role === "admin" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
 											src: resolveAvatarUrl(currentUser.avatar),
 											alt: currentUser.name,
 											referrerPolicy: "no-referrer",
@@ -46396,251 +46496,209 @@ var Navbar = ({ currentUser, allUsers: _allUsers, onSelectUser: _onSelectUser, o
 												e.target.src = DEFAULT_AVATAR_SVG;
 											},
 											className: "w-7 h-7 sm:w-8 sm:h-8 rounded-full object-contain bg-white p-0.5 shrink-0 ring-2 ring-indigo-500/30 dark:ring-indigo-400/40 shadow-2xs"
+										}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+											className: `w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center font-extrabold text-xs shrink-0 border ${currentUser.role === "co_admin" ? "bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800" : "bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800"}`,
+											children: currentUser.role === "co_admin" ? "👥" : "🎓"
 										}),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-											className: "text-left pr-0.5 sm:pr-1 max-w-[96px] xs:max-w-[125px] sm:max-w-[160px] md:max-w-[190px]",
+											className: "text-left min-w-0 flex-1 overflow-hidden",
 											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-												className: "text-xs font-bold text-slate-900 dark:text-slate-100 truncate flex items-center gap-1",
-												children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-													className: "truncate",
-													children: currentUser.name
-												})
+												className: "text-[11px] sm:text-xs font-bold text-slate-900 dark:text-slate-100 truncate",
+												children: currentUser.name
 											}), currentUser.role === "student" && currentUser.rulesAccepted ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-												className: "text-[10px] font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-0.5 truncate",
+												className: "text-[9px] sm:text-[10px] font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-0.5 truncate",
 												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleCheck, { className: "w-2.5 h-2.5 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 													className: "truncate",
 													children: "သိရှိ လိုက်နာပါမည်"
 												})]
 											}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-												className: "text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold truncate",
+												className: "text-[9px] sm:text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold truncate",
 												children: currentUser.role === "admin" ? "Lead Mentor (Admin)" : currentUser.role === "co_admin" ? "Co-Admin" : "Student"
 											})]
 										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChevronDown, { className: "w-3.5 h-3.5 text-slate-400 shrink-0" })
+										showUserDropdown ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(X, { className: "w-3.5 h-3.5 text-slate-500 dark:text-slate-300 shrink-0" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChevronDown, { className: "w-3.5 h-3.5 text-slate-400 shrink-0" })
 									]
 								}), showUserDropdown && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "neu-card fixed left-3 right-3 top-20 sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-3 sm:w-80 rounded-2xl p-3 z-50 space-y-2",
-									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "neu-inset-sm p-3 rounded-xl flex items-center gap-3",
-										children: [currentUser.role === "admin" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
-											src: resolveAvatarUrl(currentUser.avatar),
-											alt: currentUser.name,
-											referrerPolicy: "no-referrer",
-											onError: (e) => {
-												e.target.src = DEFAULT_AVATAR_SVG;
-											},
-											className: "w-11 h-11 rounded-full object-contain bg-white p-0.5 shrink-0 ring-2 ring-indigo-500/30 dark:ring-indigo-400/40 shadow-xs"
-										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-											className: "min-w-0 flex-1",
-											children: [
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-													className: "text-xs font-extrabold text-slate-900 dark:text-slate-100 truncate",
-													children: currentUser.name
-												}),
-												/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-													className: "text-[11px] font-mono text-emerald-700 dark:text-emerald-400 truncate",
-													children: ["@", currentUser.username]
-												}),
-												currentUser.role === "student" && currentUser.rulesAccepted && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-													className: "mt-1 inline-flex items-center gap-1 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold",
-													children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleCheck, { className: "w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "သိရှိ လိုက်နာပါမည်" })]
-												}),
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-													className: "text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5",
-													children: currentUser.email
-												})
-											]
-										})]
+									className: "neu-card fixed left-2.5 right-2.5 top-16 sm:absolute sm:left-auto sm:right-0 sm:top-full sm:mt-2.5 sm:w-88 max-w-[calc(100vw-1.25rem)] max-h-[calc(100dvh-4.75rem)] overflow-y-auto overflow-x-hidden rounded-2xl p-3 z-50 space-y-2 animate-in fade-in zoom-in-95 duration-150",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+										className: "neu-inset-sm p-3 rounded-xl flex items-center justify-between gap-2.5 min-w-0",
+										children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+											className: "flex items-center gap-2.5 min-w-0 flex-1",
+											children: [currentUser.role === "admin" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
+												src: resolveAvatarUrl(currentUser.avatar),
+												alt: currentUser.name,
+												referrerPolicy: "no-referrer",
+												onError: (e) => {
+													e.target.src = DEFAULT_AVATAR_SVG;
+												},
+												className: "w-11 h-11 rounded-full object-contain bg-white p-0.5 shrink-0 ring-2 ring-indigo-500/30 dark:ring-indigo-400/40 shadow-xs"
+											}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+												className: `w-11 h-11 rounded-2xl flex items-center justify-center text-base font-extrabold shrink-0 border ${currentUser.role === "co_admin" ? "bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800" : "bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800"}`,
+												children: currentUser.role === "co_admin" ? "👥" : "🎓"
+											}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+												className: "min-w-0 flex-1 overflow-hidden",
+												children: [
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+														className: "text-xs font-extrabold text-slate-900 dark:text-slate-100 truncate",
+														children: currentUser.name
+													}),
+													/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+														className: "text-[11px] font-mono text-emerald-700 dark:text-emerald-400 truncate",
+														children: ["@", currentUser.username]
+													}),
+													currentUser.role === "student" && currentUser.rulesAccepted ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+														className: "mt-0.5 inline-flex items-center gap-1 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold",
+														children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleCheck, { className: "w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "သိရှိ လိုက်နာပါမည်" })]
+													}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+														className: "text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 truncate",
+														children: currentUser.role === "admin" ? "Lead Mentor (Admin)" : currentUser.role === "co_admin" ? "Co-Admin (တွဲဖက် အက်ဒမင်)" : "Student (ကျောင်းသား)"
+													}),
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+														className: "text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5",
+														children: currentUser.email
+													})
+												]
+											})]
+										})
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 										className: "space-y-1",
 										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PWAInstallButton, { variant: "mobile-drawer" }),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+												type: "button",
+												onClick: onToggleTheme,
+												className: "w-full flex items-center justify-between gap-2 p-2.5 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-white/60 dark:hover:bg-slate-800/70 transition-colors cursor-pointer min-w-0",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+													className: "flex items-center gap-2.5 min-w-0",
+													children: [theme === "dark" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sun, { className: "w-3.5 h-3.5 text-amber-400 shrink-0" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Moon, { className: "w-3.5 h-3.5 text-slate-600 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+														className: "truncate",
+														children: ["Theme: ", theme === "dark" ? "Dark Mode (အမှောင်)" : "Light Mode (အလင်း)"]
+													})]
+												}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "text-[10px] px-2 py-0.5 rounded-md font-bold bg-slate-200/80 dark:bg-slate-700 text-slate-700 dark:text-slate-300 shrink-0",
+													children: "ပြောင်းမည်"
+												})]
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+												type: "button",
+												onClick: () => {
+													setShowUserDropdown(false);
+													onNavigateHome();
+												},
+												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-white/60 dark:hover:bg-slate-800/70 transition-colors cursor-pointer min-w-0",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BookOpen, { className: "w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "truncate",
+													children: "My Classes (သင်ခန်းစာ အတန်းများ)"
+												})]
+											}),
 											onOpenRules && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+												type: "button",
 												onClick: () => {
 													setShowUserDropdown(false);
 													onOpenRules();
 												},
-												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-emerald-700 dark:text-emerald-300 hover:bg-white/60 dark:hover:bg-slate-800/70 transition-colors cursor-pointer font-bold",
-												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollText, { className: "w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "သင်တန်းစည်းကမ်းချက်များ (Academy Rules)" })]
+												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-emerald-700 dark:text-emerald-300 bg-emerald-50/70 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors cursor-pointer font-bold min-w-0",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollText, { className: "w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "truncate",
+													children: "သင်တန်းစည်းကမ်းချက်များ (Academy Rules)"
+												})]
+											}),
+											(currentUser.role === "admin" || currentUser.role === "co_admin") && onOpenStudentDirectory && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+												type: "button",
+												onClick: () => {
+													setShowUserDropdown(false);
+													onOpenStudentDirectory();
+												},
+												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-indigo-700 dark:text-indigo-300 bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors cursor-pointer font-bold min-w-0",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Users, { className: "w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "truncate",
+													children: "Manage Users & Add Students (ကျောင်းသား စီမံရန်)"
+												})]
 											}),
 											(currentUser.role === "admin" || currentUser.role === "co_admin") && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+												type: "button",
 												onClick: () => {
 													setShowUserDropdown(false);
 													setShowEditMyAccountModal(true);
 												},
-												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-indigo-700 dark:text-indigo-300 bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors cursor-pointer font-bold",
-												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UserCog, { className: "w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "မိမိအကောင့် အချက်အလက်ပြင်ရန် (Edit My Info)" })]
+												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-indigo-700 dark:text-indigo-300 bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors cursor-pointer font-bold min-w-0",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UserCog, { className: "w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "truncate",
+													children: "မိမိအကောင့် အချက်အလက်ပြင်ရန် (Edit My Account)"
+												})]
 											}),
 											currentUser.role === "admin" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+												type: "button",
 												onClick: () => {
 													setShowUserDropdown(false);
 													setShowProfilePictureModal(true);
 												},
-												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-slate-700 dark:text-slate-200 hover:bg-white/60 dark:hover:bg-slate-800/70 transition-colors cursor-pointer font-semibold",
-												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Camera, { className: "w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Change Profile Picture (ဓာတ်ပုံ ပြောင်းမည်)" })]
+												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-slate-700 dark:text-slate-200 hover:bg-white/60 dark:hover:bg-slate-800/70 transition-colors cursor-pointer font-semibold min-w-0",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Camera, { className: "w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "truncate",
+													children: "Change Profile Picture (ပရိုဖိုင်ဓာတ်ပုံ ပြောင်းမည်)"
+												})]
 											}),
 											currentUser.role === "admin" && onOpenAuditLog && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+												type: "button",
 												onClick: () => {
 													setShowUserDropdown(false);
 													onOpenAuditLog();
 												},
-												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-amber-800 dark:text-amber-300 hover:bg-white/60 dark:hover:bg-slate-800/70 transition-colors cursor-pointer font-bold",
-												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Shield, { className: "w-3.5 h-3.5 text-amber-600 dark:text-amber-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Security Audit Log (လုပ်ဆောင်ချက် မှတ်တမ်း)" })]
+												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-amber-800 dark:text-amber-300 bg-amber-50/70 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-900/50 transition-colors cursor-pointer font-bold min-w-0",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Shield, { className: "w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "truncate",
+													children: "Security Audit Log (လုပ်ဆောင်ချက် မှတ်တမ်း)"
+												})]
 											}),
 											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+												type: "button",
 												onClick: () => {
 													setShowUserDropdown(false);
 													setShowPasswordModal(true);
 													setPwdError(null);
 													setPwdSuccess(null);
 												},
-												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-slate-700 dark:text-slate-200 hover:bg-white/60 dark:hover:bg-slate-800/70 transition-colors cursor-pointer font-semibold",
-												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Key, { className: "w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Change Password (စကားဝှက် ပြောင်းမည်)" })]
+												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-slate-700 dark:text-slate-200 hover:bg-white/60 dark:hover:bg-slate-800/70 transition-colors cursor-pointer font-semibold min-w-0",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Key, { className: "w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "truncate",
+													children: "Change Password (စကားဝှက် ပြောင်းမည်)"
+												})]
 											}),
 											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+												type: "button",
 												onClick: () => {
 													setShowUserDropdown(false);
 													performFullAppVersionUpdate(onRefreshNotifications);
 												},
-												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50/70 dark:hover:bg-indigo-950/40 transition-colors cursor-pointer font-bold",
-												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RotateCcw, { className: "w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Update App & Sync (ဗားရှင်းအသစ် ရယူရန်)" })]
+												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50/70 dark:hover:bg-indigo-950/40 transition-colors cursor-pointer font-bold min-w-0",
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RotateCcw, { className: "w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "truncate",
+													children: "Update App & Sync (ဗားရှင်းအသစ် ရယူရန်)"
+												})]
 											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-												onClick: () => {
-													setShowUserDropdown(false);
-													onLogout();
-												},
-												className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50/70 dark:hover:bg-rose-950/40 transition-colors cursor-pointer font-bold",
-												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LogOut, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Sign Out (အကောင့်မှ ထွက်ရန်)" })]
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+												className: "pt-1 border-t border-slate-200/60 dark:border-slate-800",
+												children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+													type: "button",
+													onClick: () => {
+														setShowUserDropdown(false);
+														onLogout();
+													},
+													className: "w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50/70 dark:hover:bg-rose-950/40 transition-colors cursor-pointer font-bold min-w-0",
+													children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LogOut, { className: "w-3.5 h-3.5 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+														className: "truncate",
+														children: "Sign Out (အကောင့်မှ ထွက်ရန်)"
+													})]
+												})
 											})
 										]
 									})]
 								})]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								onClick: () => setIsMobileMenuOpen(!isMobileMenuOpen),
-								className: "lg:hidden neu-btn p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl cursor-pointer",
-								"aria-label": "Toggle navigation menu",
-								children: isMobileMenuOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(X, { className: "w-5 h-5" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Menu, { className: "w-5 h-5" })
 							})
 						]
 					})
 				]
-			}),
-			isMobileMenuOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "lg:hidden max-w-7xl mx-auto mt-2 neu-card rounded-2xl px-4 py-3.5 space-y-2.5 animate-in slide-in-from-top-2 duration-150",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "p-3 rounded-xl neu-inset-sm mb-2 flex items-center justify-between gap-2",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "flex items-center gap-2.5 min-w-0",
-						children: [currentUser.role === "admin" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
-							src: resolveAvatarUrl(currentUser.avatar),
-							alt: currentUser.name,
-							referrerPolicy: "no-referrer",
-							onError: (e) => {
-								e.target.src = DEFAULT_AVATAR_SVG;
-							},
-							className: "w-9 h-9 rounded-full object-contain bg-white p-0.5 border border-indigo-200 dark:border-indigo-700 shrink-0"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5 flex-wrap",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: currentUser.name }), currentUser.role === "student" && currentUser.rulesAccepted && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-								className: "inline-flex items-center gap-1 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CircleCheck, { className: "w-2.5 h-2.5 text-emerald-600 dark:text-emerald-400 shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "သိရှိ လိုက်နာပါမည်" })]
-							})]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "text-[10px] text-slate-500 dark:text-slate-400 capitalize",
-							children: currentUser.role === "admin" ? "Lead Mentor (Admin)" : currentUser.role === "co_admin" ? "Co-Admin (တွဲဖက် အက်ဒမင်)" : "Student (ကျောင်းသား)"
-						})] })]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						onClick: () => {
-							setIsMobileMenuOpen(false);
-							onLogout();
-						},
-						className: "text-xs font-medium text-rose-600 dark:text-rose-400 hover:text-rose-700 px-2 py-1 rounded bg-rose-50 dark:bg-rose-950/50 cursor-pointer",
-						children: "Sign Out"
-					})]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "grid grid-cols-1 gap-1 text-xs font-medium",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PWAInstallButton, { variant: "mobile-drawer" }),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							onClick: onToggleTheme,
-							className: "w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-left cursor-pointer",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "flex items-center gap-2.5",
-								children: [theme === "dark" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sun, { className: "w-4 h-4 text-amber-400" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Moon, { className: "w-4 h-4 text-slate-600" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["Theme Mode: ", theme === "dark" ? "Dark Mode (အမှောင်)" : "Light Mode (အလင်း)"] })]
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "text-[10px] px-2 py-0.5 rounded-md font-semibold bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300",
-								children: "Change"
-							})]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							onClick: () => {
-								onNavigateHome();
-								setIsMobileMenuOpen(false);
-							},
-							className: "w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-left cursor-pointer",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BookOpen, { className: "w-4 h-4 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "My Classes (သင်ခန်းစာ အတန်းများ)" })]
-						}),
-						onOpenRules && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							onClick: () => {
-								onOpenRules();
-								setIsMobileMenuOpen(false);
-							},
-							className: "w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-emerald-700 dark:text-emerald-300 bg-emerald-50/70 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-left font-semibold cursor-pointer",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollText, { className: "w-4 h-4 text-emerald-600 dark:text-emerald-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "သင်တန်းစည်းကမ်းချက်များ (Academy Rules)" })]
-						}),
-						(currentUser.role === "admin" || currentUser.role === "co_admin") && onOpenStudentDirectory && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							onClick: () => {
-								onOpenStudentDirectory();
-								setIsMobileMenuOpen(false);
-							},
-							className: "w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-indigo-700 dark:text-indigo-300 bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-left font-semibold cursor-pointer",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Users, { className: "w-4 h-4 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Manage Users & Add Students (ကျောင်းသား စီမံရန်)" })]
-						}),
-						(currentUser.role === "admin" || currentUser.role === "co_admin") && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							onClick: () => {
-								setIsMobileMenuOpen(false);
-								setShowEditMyAccountModal(true);
-							},
-							className: "w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-indigo-700 dark:text-indigo-300 bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-left font-bold cursor-pointer",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UserCog, { className: "w-4 h-4 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "မိမိအကောင့် အချက်အလက်ပြင်ရန် (Edit My Account)" })]
-						}),
-						currentUser.role === "admin" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							onClick: () => {
-								setIsMobileMenuOpen(false);
-								setShowProfilePictureModal(true);
-							},
-							className: "w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-left cursor-pointer",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Camera, { className: "w-4 h-4 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Change Profile Picture (ပရိုဖိုင်ဓာတ်ပုံ ပြောင်းမည်)" })]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							onClick: () => {
-								setIsMobileMenuOpen(false);
-								setShowPasswordModal(true);
-								setPwdError(null);
-								setPwdSuccess(null);
-							},
-							className: "w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-left cursor-pointer",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Key, { className: "w-4 h-4 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Change Password (စကားဝှက် ပြောင်းမည်)" })]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							onClick: () => {
-								setIsMobileMenuOpen(false);
-								performFullAppVersionUpdate(onRefreshNotifications);
-							},
-							className: "w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-indigo-700 dark:text-indigo-300 bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-left font-bold cursor-pointer",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RotateCcw, { className: "w-4 h-4 text-indigo-600 dark:text-indigo-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Update App & Sync (ဗားရှင်းအသစ် ရယူရန်)" })]
-						}),
-						currentUser.role === "admin" && onOpenAuditLog && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							onClick: () => {
-								onOpenAuditLog();
-								setIsMobileMenuOpen(false);
-							},
-							className: "w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-amber-800 dark:text-amber-300 bg-amber-50/70 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-left font-semibold cursor-pointer",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Shield, { className: "w-4 h-4 text-amber-600 dark:text-amber-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Security Audit Log (လုပ်ဆောင်ချက် မှတ်တမ်း)" })]
-						})
-					]
-				})]
 			}),
 			showProfilePictureModal && currentUser.role === "admin" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProfilePictureModal, {
 				user: currentUser,
@@ -47058,10 +47116,10 @@ var LowBandwidthBar = ({ isLowBandwidth, onToggle, onRefreshData }) => {
 						className: "text-slate-300",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
 							className: "text-emerald-400 font-semibold",
-							children: "Free Plan Eco-Sync"
+							children: "Live Cloud Sync"
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "hidden md:inline",
-							children: [" · 98% Egress Saved · ", APP_VERSION_LABEL]
+							children: [" · ", APP_VERSION_LABEL]
 						})]
 					})
 				})]
@@ -50987,17 +51045,21 @@ var PeopleView = ({ course, currentUser, onRefresh }) => {
 	const [visibleStudentLimit, setVisibleStudentLimit] = (0, import_react.useState)(60);
 	(0, import_react.useEffect)(() => {
 		let mounted = true;
+		if (currentUser.role === "student") return () => {
+			mounted = false;
+		};
 		const knownIds = new Set(ClassroomDB.getAllUsers().map((u) => u.id));
-		if (course.enrolledStudentIds.some((id) => !knownIds.has(id)) && (typeof navigator === "undefined" || navigator.onLine !== false)) ClassroomDB.pullFromSupabase({
-			force: true,
-			onlyProfiles: true
-		}).then((updated) => {
+		if (course.enrolledStudentIds.some((id) => !knownIds.has(id)) && (typeof navigator === "undefined" || navigator.onLine !== false)) ClassroomDB.pullFromSupabase({ onlyProfiles: true }).then((updated) => {
 			if (mounted && updated) onRefresh();
 		});
 		return () => {
 			mounted = false;
 		};
-	}, [course.id, course.enrolledStudentIds.length]);
+	}, [
+		course.id,
+		course.enrolledStudentIds.length,
+		currentUser.role
+	]);
 	useBackHandler(showAddModal, () => setShowAddModal(false));
 	useBackHandler(!!studentToUnenroll, () => setStudentToUnenroll(null));
 	useBackHandler(!!editingAccountUser, () => setEditingAccountUser(null));
@@ -51360,7 +51422,7 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 			});
 		};
 		syncNow();
-		const timer = setInterval(syncNow, 15e3);
+		const timer = setInterval(syncNow, 2e4);
 		return () => {
 			mounted = false;
 			clearInterval(timer);
@@ -52497,9 +52559,14 @@ var CourseDetail = ({ course, currentUser, posts, onBack, onRefresh, onOpenCerti
 	const handleSwitchTab = (nextTab) => {
 		if (nextTab === activeTab) return;
 		setTabHistory((prev) => [...prev, nextTab]);
-		if (typeof navigator === "undefined" || navigator.onLine !== false) ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
-			if (updated) onRefresh();
-		});
+		if (typeof navigator === "undefined" || navigator.onLine !== false) {
+			if (nextTab === "attendance") ClassroomDB.syncAttendanceFromCloud().then((updated) => {
+				if (updated) onRefresh();
+			});
+			else ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
+				if (updated) onRefresh();
+			});
+		}
 	};
 	useBackHandler(tabHistory.length > 1, () => {
 		setTabHistory((prev) => prev.length > 1 ? prev.slice(0, -1) : prev);
@@ -55390,22 +55457,25 @@ var AdminStudentDirectoryModal = ({ isOpen, onClose, courses, onRefresh }) => {
 											children: "အတန်းအလိုက် ကျောင်းသားများ၏ Attendance (%) ကို Excel / CSV ဖိုင်ထုတ်ယူရန်"
 										})] })]
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "flex flex-col sm:flex-row items-stretch sm:items-center gap-2",
+										className: "flex flex-col sm:flex-row items-stretch sm:items-center gap-2 min-w-0",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
 											value: selectedCsvCourseId,
 											onChange: (e) => setSelectedCsvCourseId(e.target.value),
-											className: "flex-1 min-w-0 px-2.5 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-emerald-300 dark:border-emerald-700 rounded-lg text-slate-900 dark:text-white",
-											children: [courses.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
-												value: c.id,
-												children: [
-													c.code,
-													" — ",
-													c.title,
-													" (",
-													c.enrolledStudentIds.length,
-													" ဦး)"
-												]
-											}, c.id)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+											className: "flex-1 min-w-0 w-full max-w-full truncate px-2.5 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-emerald-300 dark:border-emerald-700 rounded-lg text-slate-900 dark:text-white",
+											children: [courses.map((c) => {
+												const shortTitle = c.title && c.title.length > 28 ? `${c.title.slice(0, 28)}...` : c.title;
+												return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
+													value: c.id,
+													children: [
+														c.code,
+														" — ",
+														shortTitle,
+														" (",
+														c.enrolledStudentIds.length,
+														" ဦး)"
+													]
+												}, c.id);
+											}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 												value: "all",
 												children: "All Classes Combined Report"
 											})]
@@ -55417,31 +55487,34 @@ var AdminStudentDirectoryModal = ({ isOpen, onClose, courses, onRefresh }) => {
 										})]
 									})]
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "p-3 rounded-xl border border-indigo-200 dark:border-indigo-800/60 bg-indigo-50/50 dark:bg-indigo-950/30 flex flex-col justify-between gap-2.5",
+									className: "p-3 rounded-xl border border-indigo-200 dark:border-indigo-800/60 bg-indigo-50/50 dark:bg-indigo-950/30 flex flex-col justify-between gap-2.5 min-w-0 overflow-hidden",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 										className: "flex items-start gap-2.5",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 											className: "p-2 rounded-lg bg-indigo-600 text-white shrink-0",
 											children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldCheck, { className: "w-4 h-4" })
-										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", {
-											className: "text-xs font-bold text-slate-900 dark:text-white",
-											children: [
-												"Export Rules Acceptance Audit (",
-												acceptedStudentsCount,
-												"/",
-												studentUsers.length,
-												" Accepted)"
-											]
-										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-											className: "text-[11px] text-slate-600 dark:text-slate-300 mt-0.5",
-											children: "စည်းကမ်းချက် ၁၄ ချက်ကို “သိရှိ လိုက်နာပါမည်” အတည်ပြုပြီးသူများ စာရင်းထုတ်ယူရန်"
-										})] })]
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+											className: "min-w-0",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", {
+												className: "text-xs font-bold text-slate-900 dark:text-white",
+												children: [
+													"Export Rules Acceptance Audit (",
+													acceptedStudentsCount,
+													"/",
+													studentUsers.length,
+													" Accepted)"
+												]
+											}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+												className: "text-[11px] text-slate-600 dark:text-slate-300 mt-0.5",
+												children: "စည်းကမ်းချက် ၁၄ ချက်ကို “သိရှိ လိုက်နာပါမည်” အတည်ပြုပြီးသူများ စာရင်းထုတ်ယူရန်"
+											})]
+										})]
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "flex flex-col sm:flex-row items-stretch sm:items-center gap-2",
+										className: "flex flex-col sm:flex-row items-stretch sm:items-center gap-2 min-w-0",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
 											value: auditFilterMode,
 											onChange: (e) => setAuditFilterMode(e.target.value),
-											className: "flex-1 min-w-0 px-2.5 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700 rounded-lg text-slate-900 dark:text-white",
+											className: "flex-1 min-w-0 w-full max-w-full truncate px-2.5 py-1.5 text-xs font-semibold bg-white dark:bg-slate-800 border border-indigo-300 dark:border-indigo-700 rounded-lg text-slate-900 dark:text-white",
 											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
 												value: "accepted_only",
 												children: [
@@ -56289,9 +56362,9 @@ var AdminStudentDirectoryModal = ({ isOpen, onClose, courses, onRefresh }) => {
 								]
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "p-3 bg-white dark:bg-slate-800/80 rounded-2xl border border-slate-200/80 dark:border-slate-800 space-y-2.5 shadow-2xs",
+								className: "p-3 bg-white dark:bg-slate-800/80 rounded-2xl border border-slate-200/80 dark:border-slate-800 space-y-2.5 shadow-2xs min-w-0 overflow-hidden",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "flex flex-col md:flex-row md:items-center justify-between gap-2.5",
+									className: "flex flex-col md:flex-row md:items-center justify-between gap-2.5 min-w-0",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 										className: "relative flex-1 min-w-0",
 										children: [
@@ -56314,9 +56387,9 @@ var AdminStudentDirectoryModal = ({ isOpen, onClose, courses, onRefresh }) => {
 											})
 										]
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-										className: "flex items-center gap-2 w-full md:w-auto md:max-w-[320px] lg:max-w-[380px] min-w-0",
+										className: "flex items-center gap-2 w-full md:w-72 lg:w-80 min-w-0 max-w-full overflow-hidden shrink-0",
 										children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-											className: "relative w-full min-w-0",
+											className: "relative w-full min-w-0 max-w-full overflow-hidden",
 											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BookOpen, { className: "w-3.5 h-3.5 text-indigo-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
 												value: courseFilterId,
 												onChange: (e) => {
@@ -56324,12 +56397,12 @@ var AdminStudentDirectoryModal = ({ isOpen, onClose, courses, onRefresh }) => {
 													if (e.target.value !== "all") setRoleFilter("student");
 													setVisibleLimit(60);
 												},
-												className: "w-full max-w-full truncate pl-8 pr-7 py-2 text-xs font-bold bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 cursor-pointer focus:outline-none focus:border-indigo-500",
+												className: "block w-full min-w-0 max-w-full truncate pl-8 pr-7 py-2 text-xs font-bold bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 cursor-pointer focus:outline-none focus:border-indigo-500",
 												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 													value: "all",
 													children: "အတန်းအားလုံး (All Classes)"
 												}), courses.map((c) => {
-													const shortTitle = c.title && c.title.length > 40 ? `${c.title.slice(0, 40)}...` : c.title;
+													const shortTitle = c.title && c.title.length > 26 ? `${c.title.slice(0, 26)}...` : c.title;
 													return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
 														value: c.id,
 														children: [
@@ -56443,11 +56516,11 @@ var AdminStudentDirectoryModal = ({ isOpen, onClose, courses, onRefresh }) => {
 									const normalizedGender = user.gender?.toLowerCase();
 									const enrolledCount = user.role === "student" ? courses.filter((c) => c.enrolledStudentIds.includes(user.id)).length : courses.length;
 									return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "p-3.5 sm:p-4 rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-800/90 hover:border-indigo-300 dark:hover:border-slate-700 transition-all shadow-2xs space-y-3",
+										className: "p-3.5 sm:p-4 rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-slate-800/90 hover:border-indigo-300 dark:hover:border-slate-700 transition-all shadow-2xs space-y-3 min-w-0 overflow-hidden",
 										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-											className: "flex flex-col lg:flex-row lg:items-center justify-between gap-3",
+											className: "flex flex-col lg:flex-row lg:items-center justify-between gap-3 min-w-0",
 											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-												className: "flex items-start gap-3 min-w-0",
+												className: "flex items-start gap-3 min-w-0 flex-1",
 												children: [user.role === "admin" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 													className: "relative group/avatar shrink-0",
 													children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
@@ -56903,7 +56976,7 @@ var SupabaseModal = ({ isOpen, onClose }) => {
 		setConnectionStatus({
 			tested: true,
 			connected: res.success,
-			message: `📉 Egress < 5.5 GB Slimming ပြီးမြောက်ပါပြီ! Supabase Cloud ရှိ ပိုလျှံနေသော Base64 ပုံ/Data အတန်း (${res.slimmedRows}) ခုနှင့် မလိုအပ်တော့သော Orphaned Data (${res.cleanedOrphans}) ခုကို ချက်ချင်း ချုံ့ပြီး ရှင်းလင်းပေးလိုက်ပါပြီ။`
+			message: `📉 Database Slimming ပြီးမြောက်ပါပြီ! Supabase Cloud ရှိ ပိုလျှံနေသော Base64 ပုံ/Data အတန်း (${res.slimmedRows}) ခုနှင့် မလိုအပ်တော့သော Orphaned Data (${res.cleanedOrphans}) ခုကို ချက်ချင်း ချုံ့ပြီး ရှင်းလင်းပေးလိုက်ပါပြီ။`
 		});
 	};
 	const handleSyncAllNow = async () => {
@@ -56985,7 +57058,7 @@ var SupabaseModal = ({ isOpen, onClose }) => {
 												disabled: isSlimming || isCleaning || isSyncing,
 												className: "px-2.5 py-1 text-xs font-semibold rounded-lg bg-rose-600 hover:bg-rose-700 text-white transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-xs",
 												title: "Supabase Database ထဲရှိ Base64 ပုံဟောင်းများနှင့် Egress စားနေသော Data များကို ချက်ချင်း ချုံ့ပေးမည်",
-												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RefreshCw, { className: `w-3.5 h-3.5 ${isSlimming ? "animate-spin" : ""}` }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: isSlimming ? "Slimming..." : "📉 Egress < 5.5 GB လျှော့ချမည်" })]
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RefreshCw, { className: `w-3.5 h-3.5 ${isSlimming ? "animate-spin" : ""}` }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: isSlimming ? "Slimming..." : "📉 Optimize Egress & Storage" })]
 											}),
 											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 												type: "button",
@@ -57142,7 +57215,7 @@ var SupabaseModal = ({ isOpen, onClose }) => {
 											className: "flex flex-wrap items-center justify-between gap-2",
 											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 												className: "text-xs font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5",
-												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sparkles, { className: "w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Client-Side Caching & Sub-5.5GB Egress Guard (Active)" })]
+												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sparkles, { className: "w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Client-Side Caching & High-Speed Sync" })]
 											}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 												className: "flex items-center gap-1.5",
 												children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
@@ -57221,17 +57294,11 @@ var SupabaseModal = ({ isOpen, onClose }) => {
 											children: [
 												"• ",
 												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Persistent Client-Side Asset & Query Cache" }),
-												": Course Banner ပုံများ၊ Lead Mentor (Admin) Profile ပုံ၊ Posts၊ Quizzes နှင့် Assignments များကို Browser ၏ LocalStorage Cache တွင် သိမ်းဆည်းထားသဖြင့် Page Refresh လုပ်ချိန်တိုင်း Supabase မှ အစအဆုံး ပြန်ဆွဲရန် မလိုတော့ပါ (0 Bytes Egress on Cache Hit)။",
+												": Course Banner ပုံများ၊ Lead Mentor (Admin) Profile ပုံ၊ Posts၊ Quizzes နှင့် Assignments များကို Browser ၏ LocalStorage Cache တွင် သိမ်းဆည်းထားပါသည်။",
 												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
 												"• ",
 												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Write-Through Cache Invalidation & Delta Sync" }),
-												": ဆရာ သို့မဟုတ် ကျောင်းသားတစ်ဦးမှ Post အသစ်တင်ခြင်း၊ Comment ပေးခြင်း၊ Attendance ဖွင့်/ပိတ်ခြင်း ပြုလုပ်မှသာ ပြောင်းလဲသွားသော Row အသစ်ကို ကွက်၍ ဆွဲယူပေးပါသည်။",
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
-												"• ",
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "1-Click Database Slimmer" }),
-												": အထက်ပါ ",
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "\"📉 Egress < 5.5 GB လျှော့ချမည်\"" }),
-												" ခလုတ်ကို နှိပ်ရုံဖြင့် Supabase ထဲရှိ ပုံဟောင်း/Data အပိုများအားလုံးကို ချက်ချင်း ဖယ်ရှားချုံ့ပေးပါသည်။"
+												": ဆရာ သို့မဟုတ် ကျောင်းသားတစ်ဦးမှ Post အသစ်တင်ခြင်း၊ Comment ပေးခြင်း၊ Attendance ဖွင့်/ပိတ်ခြင်း ပြုလုပ်သည့်အခါ ပြောင်းလဲသွားသော Data အသစ်ကို ချက်ချင်း ဆွဲယူပေးပါသည်။"
 											]
 										})
 									]
@@ -57803,7 +57870,7 @@ var AdminAuditLogModal = ({ isOpen, onClose, currentUser, allUsers, courses }) =
 	const handleSyncLogs = async () => {
 		setIsSyncing(true);
 		try {
-			ClassroomDB.purgeExpiredAuditLogs(true);
+			ClassroomDB.purgeExpiredAuditLogs(false);
 			const synced = await ClassroomDB.syncAuditLogsFromCloud();
 			setLogs(synced);
 		} finally {
@@ -57812,7 +57879,7 @@ var AdminAuditLogModal = ({ isOpen, onClose, currentUser, allUsers, courses }) =
 	};
 	(0, import_react.useEffect)(() => {
 		if (!isOpen || currentUser.role !== "admin") return;
-		ClassroomDB.purgeExpiredAuditLogs(true);
+		ClassroomDB.purgeExpiredAuditLogs(false);
 		setLogs(ClassroomDB.getAuditLogs());
 		handleSyncLogs();
 		const timer = setInterval(() => {
@@ -58583,7 +58650,7 @@ function App() {
 		const initTimer = setTimeout(() => {
 			ClassroomDB.init();
 			ClassroomDB.purgeExpiredComments();
-			ClassroomDB.purgeExpiredAuditLogs(true);
+			ClassroomDB.purgeExpiredAuditLogs(false);
 			refreshData();
 			if (ClassroomDB.getCurrentUser()) ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
 				if (updated || !ClassroomDB.getCurrentUser()) refreshData();
@@ -58592,7 +58659,56 @@ function App() {
 		const unsubscribeRealtime = SupabaseService.subscribeToRealtimeChanges((payload) => {
 			if (ClassroomDB.applyRemoteDeletions(payload)) refreshData();
 			if (navigator.onLine === false) return;
-			if (ClassroomDB.getCurrentUser()) ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
+			const loggedUser = ClassroomDB.getCurrentUser();
+			if (!loggedUser) return;
+			const kinds = payload?.kinds && payload.kinds.length > 0 ? payload.kinds : payload?.kind ? [payload.kind] : ["all"];
+			if (kinds.length === 1 && kinds[0] === "attendance") {
+				ClassroomDB.syncAttendanceFromCloud(true).then((attChanged) => {
+					if (attChanged) refreshData();
+				});
+				return;
+			}
+			if (kinds.length === 1 && kinds[0] === "profile") {
+				if (loggedUser.role === "student" && payload?.targetUserIds && payload.targetUserIds.length > 0 && !payload.targetUserIds.includes(loggedUser.id)) return;
+				ClassroomDB.pullFromSupabase({
+					force: true,
+					onlyProfiles: true
+				}).then((updated) => {
+					if (updated || !ClassroomDB.getCurrentUser()) refreshData();
+				});
+				return;
+			}
+			if (kinds.length === 1 && kinds[0] === "delete" && payload?.deletedIds?.length) return;
+			if (!kinds.includes("all") && !kinds.includes("delete")) {
+				const tableSet = /* @__PURE__ */ new Set();
+				for (const k of kinds) if (k === "post") {
+					tableSet.add("posts");
+					tableSet.add("notifications");
+				} else if (k === "course") {
+					tableSet.add("courses");
+					tableSet.add("notifications");
+				} else if (k === "notification") tableSet.add("notifications");
+				else if (k === "assignment" || k === "submission") {
+					tableSet.add("assignments");
+					tableSet.add("courses");
+					tableSet.add("notifications");
+				} else if (k === "quiz" || k === "quiz_submission") {
+					tableSet.add("quizzes");
+					tableSet.add("courses");
+					tableSet.add("notifications");
+				} else if (k === "attendance") tableSet.add("attendance");
+				else if (k === "profile") tableSet.add("profiles");
+				if (tableSet.size > 0) {
+					ClassroomDB.pullFromSupabase({
+						force: true,
+						tables: Array.from(tableSet)
+					}).then((updated) => {
+						if (updated || !ClassroomDB.getCurrentUser()) refreshData();
+					});
+					return;
+				}
+			}
+			ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
 				if (updated || !ClassroomDB.getCurrentUser()) refreshData();
 			});
 		});
@@ -58602,7 +58718,7 @@ function App() {
 		window.addEventListener("storage", handleStorageChange);
 		let lastUserInteractionAt = Date.now();
 		const markUserActive = () => {
-			const wasIdle = Date.now() - lastUserInteractionAt > 6e4;
+			const wasIdle = Date.now() - lastUserInteractionAt > 9e4;
 			lastUserInteractionAt = Date.now();
 			if (wasIdle && document.visibilityState === "visible" && navigator.onLine !== false) {
 				if (ClassroomDB.getCurrentUser()) ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
@@ -58624,12 +58740,9 @@ function App() {
 				ClassroomDB.checkAndPublishDueScheduledPosts();
 				refreshData();
 				if (ClassroomDB.getCurrentUser() && navigator.onLine !== false && !isLowBandwidthRef.current) {
-					ClassroomDB.syncAttendanceFromCloud().then((attChanged) => {
-						if (attChanged) refreshData();
-					});
-					if (now - lastWakeUpPullAt >= 5e3) {
+					if (now - lastWakeUpPullAt >= 8e3) {
 						lastWakeUpPullAt = now;
-						ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
+						ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
 							if (updated || !ClassroomDB.getCurrentUser()) refreshData();
 						});
 					}
@@ -58645,16 +58758,10 @@ function App() {
 					if (updated || !ClassroomDB.getCurrentUser()) refreshData();
 				});
 			}
-		}, 3e4);
-		let attendanceTickCounter = 0;
+		}, 45e3);
 		const scheduledPostsInterval = setInterval(() => {
 			if (ClassroomDB.checkAndPublishDueScheduledPosts()) refreshData();
-			attendanceTickCounter++;
-			const isUserActive = Date.now() - lastUserInteractionAt <= 36e4;
-			if ((ClassroomDB.getAttendanceSessions().some((s) => s.isOpen) && attendanceTickCounter % 2 === 0 || attendanceTickCounter % 6 === 0) && isUserActive && document.visibilityState === "visible" && navigator.onLine !== false && !isLowBandwidthRef.current && ClassroomDB.getCurrentUser()) ClassroomDB.syncAttendanceFromCloud().then((attChanged) => {
-				if (attChanged) refreshData();
-			});
-		}, 1e4);
+		}, 15e3);
 		const notifCleanupInterval = setInterval(() => {
 			const publishedDue = ClassroomDB.checkAndPublishDueScheduledPosts();
 			const purgedComments = ClassroomDB.purgeExpiredComments();
@@ -58754,7 +58861,7 @@ function App() {
 		})
 	})] });
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "min-h-screen neu-canvas text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-300",
+		className: "min-h-screen w-full max-w-full overflow-x-hidden neu-canvas text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-300",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_react.Suspense, {
 				fallback: null,
@@ -58785,7 +58892,7 @@ function App() {
 				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
-				className: "flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-5 sm:py-8",
+				className: "flex-1 max-w-7xl w-full min-w-0 mx-auto px-2.5 sm:px-6 py-4 sm:py-8",
 				children: [
 					currentUser.role === "student" && notifications.some((n) => !n.isRead && n.type === "post") && (() => {
 						const latestPostNotif = notifications.find((n) => !n.isRead && n.type === "post");
@@ -58871,11 +58978,11 @@ function App() {
 							onOpenCertificate: (cert) => setActiveCertificate(cert)
 						})
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "space-y-7 sm:space-y-9",
+						className: "space-y-6 sm:space-y-9 min-w-0",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "neu-card rounded-3xl p-4 sm:p-6 lg:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-4 sm:gap-6",
+							className: "neu-card rounded-3xl p-4 sm:p-6 lg:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-4 sm:gap-6 min-w-0 overflow-hidden",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "flex items-start sm:items-center gap-3.5 sm:gap-4 min-w-0",
+								className: "flex items-start sm:items-center gap-3 sm:gap-4 min-w-0 flex-1",
 								children: [currentUser.role === "admin" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
 									src: resolveAvatarUrl(currentUser.avatar),
 									alt: currentUser.name,
@@ -58883,21 +58990,24 @@ function App() {
 									onError: (e) => {
 										e.target.src = DEFAULT_AVATAR_SVG;
 									},
-									className: "w-12 h-12 sm:w-14 sm:h-14 rounded-full object-contain bg-white p-1 border-2 border-indigo-200 dark:border-indigo-700 shadow-sm shrink-0"
+									className: "w-11 h-11 sm:w-14 sm:h-14 rounded-full object-contain bg-white p-1 border-2 border-indigo-200 dark:border-indigo-700 shadow-sm shrink-0"
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "space-y-1.5 sm:space-y-2 min-w-0 flex-1",
+									className: "space-y-1.5 sm:space-y-2 min-w-0 flex-1 overflow-hidden",
 									children: [
 										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-											className: "flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-mono text-slate-600 dark:text-slate-400",
+											className: "flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-mono text-slate-600 dark:text-slate-400 min-w-0",
 											children: [
-												/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
-													"Logged in as:",
-													" ",
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
-														className: "text-slate-900 dark:text-white",
-														children: currentUser.name
-													})
-												] }),
+												/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+													className: "truncate max-w-full",
+													children: [
+														"Logged in as:",
+														" ",
+														/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
+															className: "text-slate-900 dark:text-white",
+															children: currentUser.name
+														})
+													]
+												}),
 												currentUser.role === "student" && currentUser.rulesAccepted && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 													"aria-hidden": "true",
 													children: "·"

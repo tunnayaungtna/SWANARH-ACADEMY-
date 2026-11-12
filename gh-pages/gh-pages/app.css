@@ -608,6 +608,10 @@
     top: calc(var(--spacing) * 12);
   }
 
+  .top-16 {
+    top: calc(var(--spacing) * 16);
+  }
+
   .top-20 {
     top: calc(var(--spacing) * 20);
   }
@@ -666,6 +670,10 @@
 
   .left-2 {
     left: calc(var(--spacing) * 2);
+  }
+
+  .left-2\.5 {
+    left: calc(var(--spacing) * 2.5);
   }
 
   .left-3 {
@@ -1064,6 +1072,10 @@
     max-height: calc(var(--spacing) * 64);
   }
 
+  .max-h-72 {
+    max-height: calc(var(--spacing) * 72);
+  }
+
   .max-h-80 {
     max-height: calc(var(--spacing) * 80);
   }
@@ -1106,6 +1118,10 @@
 
   .max-h-\[460px\] {
     max-height: 460px;
+  }
+
+  .max-h-\[calc\(100dvh-4\.75rem\)\] {
+    max-height: calc(100dvh - 4.75rem);
   }
 
   .min-h-0 {
@@ -1252,12 +1268,20 @@
     max-width: 130px;
   }
 
+  .max-w-\[160px\] {
+    max-width: 160px;
+  }
+
   .max-w-\[170px\] {
     max-width: 170px;
   }
 
   .max-w-\[240px\] {
     max-width: 240px;
+  }
+
+  .max-w-\[calc\(100vw-1\.25rem\)\] {
+    max-width: calc(100vw - 1.25rem);
   }
 
   .max-w-\[calc\(100vw-32px\)\] {
@@ -1310,6 +1334,10 @@
 
   .flex-1 {
     flex: 1;
+  }
+
+  .shrink {
+    flex-shrink: 1;
   }
 
   .shrink-0 {
@@ -1630,6 +1658,10 @@
 
   .overflow-x-auto {
     overflow-x: auto;
+  }
+
+  .overflow-x-hidden {
+    overflow-x: hidden;
   }
 
   .overflow-y-auto {
@@ -5036,6 +5068,10 @@
       top: auto;
     }
 
+    .sm\:top-full {
+      top: 100%;
+    }
+
     .sm\:right-0 {
       right: 0;
     }
@@ -5070,6 +5106,10 @@
 
     .sm\:mt-0 {
       margin-top: 0;
+    }
+
+    .sm\:mt-2\.5 {
+      margin-top: calc(var(--spacing) * 2.5);
     }
 
     .sm\:mt-3 {
@@ -5110,6 +5150,10 @@
 
     .sm\:h-14 {
       height: calc(var(--spacing) * 14);
+    }
+
+    .sm\:h-16 {
+      height: calc(var(--spacing) * 16);
     }
 
     .sm\:h-24 {
@@ -5168,6 +5212,10 @@
       width: calc(var(--spacing) * 80);
     }
 
+    .sm\:w-88 {
+      width: calc(var(--spacing) * 88);
+    }
+
     .sm\:w-96 {
       width: calc(var(--spacing) * 96);
     }
@@ -5180,12 +5228,20 @@
       max-width: 160px;
     }
 
+    .sm\:max-w-\[175px\] {
+      max-width: 175px;
+    }
+
     .sm\:max-w-\[200px\] {
       max-width: 200px;
     }
 
     .sm\:flex-initial {
       flex: 0 auto;
+    }
+
+    .sm\:shrink-0 {
+      flex-shrink: 0;
     }
 
     .sm\:grid-cols-2 {
@@ -5297,6 +5353,14 @@
       border-top-width: 0;
     }
 
+    .sm\:p-1\.5 {
+      padding: calc(var(--spacing) * 1.5);
+    }
+
+    .sm\:p-2\.5 {
+      padding: calc(var(--spacing) * 2.5);
+    }
+
     .sm\:p-3 {
       padding: calc(var(--spacing) * 3);
     }
@@ -5389,6 +5453,10 @@
       padding-top: 0;
     }
 
+    .sm\:pt-3 {
+      padding-top: calc(var(--spacing) * 3);
+    }
+
     .sm\:pr-1 {
       padding-right: var(--spacing);
     }
@@ -5432,6 +5500,10 @@
       line-height: var(--tw-leading, var(--text-xs--line-height));
     }
 
+    .sm\:text-\[10px\] {
+      font-size: 10px;
+    }
+
     .sm\:text-\[11px\] {
       font-size: 11px;
     }
@@ -5458,6 +5530,10 @@
       grid-column: span 5 / span 5;
     }
 
+    .md\:block {
+      display: block;
+    }
+
     .md\:inline {
       display: inline;
     }
@@ -5472,6 +5548,14 @@
 
     .md\:max-w-\[190px\] {
       max-width: 190px;
+    }
+
+    .md\:max-w-\[210px\] {
+      max-width: 210px;
+    }
+
+    .md\:max-w-\[230px\] {
+      max-width: 230px;
     }
 
     .md\:max-w-\[320px\] {
@@ -5550,6 +5634,10 @@
 
     .lg\:inline-flex {
       display: inline-flex;
+    }
+
+    .lg\:w-80 {
+      width: calc(var(--spacing) * 80);
     }
 
     .lg\:w-auto {
@@ -5634,9 +5722,18 @@
       font-size: var(--text-4xl);
       line-height: var(--tw-leading, var(--text-4xl--line-height));
     }
+
+    .lg\:text-lg {
+      font-size: var(--text-lg);
+      line-height: var(--tw-leading, var(--text-lg--line-height));
+    }
   }
 
   @media (min-width: 80rem) {
+    .xl\:inline-block {
+      display: inline-block;
+    }
+
     .xl\:grid-cols-3 {
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
@@ -7674,6 +7771,17 @@ html.dark .neu-btn-indigo {
 html.dark .neu-btn-indigo:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 7px 7px 16px #070a0f, -5px -5px 12px #242f42, inset 1px 1px 2px #ffffff59;
+}
+
+html, body, #root {
+  -webkit-text-size-adjust: 100%;
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+select {
+  max-width: 100%;
 }
 
 @property --tw-translate-x {

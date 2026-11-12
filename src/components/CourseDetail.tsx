@@ -33,11 +33,15 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
     if (nextTab === activeTab) return;
     setTabHistory((prev) => [...prev, nextTab]);
     if (typeof navigator === 'undefined' || navigator.onLine !== false) {
-      ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
-        if (updated) {
-          onRefresh();
-        }
-      });
+      if (nextTab === 'attendance') {
+        ClassroomDB.syncAttendanceFromCloud().then((updated) => {
+          if (updated) onRefresh();
+        });
+      } else {
+        ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
+          if (updated) onRefresh();
+        });
+      }
     }
   };
 

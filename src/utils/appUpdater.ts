@@ -1,6 +1,6 @@
 import { ClassroomDB } from '../services/storage';
 
-export const APP_VERSION_LABEL = 'v20.4 (Free-Plan Eco & Fast Update)';
+export const APP_VERSION_LABEL = 'v20.5';
 export const ACTIVE_SW_CACHE_NAME = 'swanarh-classroom-v20';
 
 /**
