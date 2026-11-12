@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Course, CoursePost, User, CertificateData } from '../types/classroom';
 import { CourseStream } from './CourseStream';
 import { PeopleView } from './PeopleView';
@@ -29,12 +29,33 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
   const [tabHistory, setTabHistory] = useState<ClassroomTab[]>(['stream']);
   const activeTab = tabHistory[tabHistory.length - 1] || 'stream';
 
+  // Live lightweight 0.3KB delta attendance sync while inside any classroom tab (Stream, Attendance, People)
+  // Guarantees that when Admin/Co-Admin opens or closes Attendance, all student screens update within seconds!
+  useEffect(() => {
+    let mounted = true;
+    const syncCourseAttendance = () => {
+      if (document.visibilityState === 'visible' && navigator.onLine !== false) {
+        ClassroomDB.syncAttendanceFromCloud().then((changed) => {
+          if (mounted && changed) {
+            onRefresh();
+          }
+        });
+      }
+    };
+    syncCourseAttendance();
+    const timer = setInterval(syncCourseAttendance, 8_000);
+    return () => {
+      mounted = false;
+      clearInterval(timer);
+    };
+  }, [course.id]);
+
   const handleSwitchTab = (nextTab: ClassroomTab) => {
     if (nextTab === activeTab) return;
     setTabHistory((prev) => [...prev, nextTab]);
     if (typeof navigator === 'undefined' || navigator.onLine !== false) {
       if (nextTab === 'attendance') {
-        ClassroomDB.syncAttendanceFromCloud().then((updated) => {
+        ClassroomDB.syncAttendanceFromCloud(true).then((updated) => {
           if (updated) onRefresh();
         });
       } else {

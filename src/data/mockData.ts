@@ -543,9 +543,9 @@ export const INITIAL_ATTENDANCE_SESSIONS: AttendanceSession[] = [
     date: '2026-10-26',
     displayDate: 'Oct 26, 2026',
     title: 'Lecture 03: Distributed Caching & Live Q&A Check-in',
-    isOpen: true,
+    isOpen: false,
     openedBy: 'Dr. Kyaw Swar',
-    createdAt: 'Today · 09:00 AM',
+    createdAt: 'Oct 26, 2026 · 09:00 AM',
     records: {
       'user-student-1': {
         studentId: 'user-student-1',

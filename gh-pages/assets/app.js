@@ -33617,12 +33617,13 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Ensure gender, address, password & rules_accepted columns exist if table was created earlier
+-- Ensure gender, address, password, rules_accepted & updated_at columns exist if table was created earlier
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS gender TEXT DEFAULT 'male';
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS address TEXT;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS password TEXT DEFAULT 'student123';
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS rules_accepted BOOLEAN DEFAULT FALSE;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS rules_accepted_at TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
 
 -- Enable Row Level Security (RLS)
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
@@ -33808,11 +33809,12 @@ CREATE TABLE IF NOT EXISTS public.attendance_sessions (
   date TEXT NOT NULL,
   display_date TEXT NOT NULL,
   title TEXT NOT NULL,
-  is_open BOOLEAN DEFAULT TRUE,
+  is_open BOOLEAN DEFAULT FALSE,
   opened_by TEXT NOT NULL,
   records JSONB DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE public.attendance_sessions ALTER COLUMN is_open SET DEFAULT FALSE;
 
 ALTER TABLE public.attendance_sessions ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Attendance sessions full access" ON public.attendance_sessions;
@@ -33885,7 +33887,9 @@ CREATE INDEX IF NOT EXISTS idx_notifications_post_id ON public.notifications (po
 CREATE INDEX IF NOT EXISTS idx_profiles_username_lower ON public.profiles (lower(username));
 CREATE INDEX IF NOT EXISTS idx_profiles_email_lower ON public.profiles (lower(email));
 CREATE INDEX IF NOT EXISTS idx_posts_course_id ON public.posts (course_id);
+CREATE INDEX IF NOT EXISTS idx_posts_course_created ON public.posts (course_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_attendance_course_id ON public.attendance_sessions (course_id);
+CREATE INDEX IF NOT EXISTS idx_attendance_course_created ON public.attendance_sessions (course_id, created_at DESC);
 
 -- Automatic Orphaned Data Cleanup & Egress Slimming (< 5.5 GB Free Plan Guard)
 DELETE FROM public.posts WHERE course_id NOT IN (SELECT id FROM public.courses);
@@ -33928,8 +33932,10 @@ var ATT_STATE_MARKER_PREFIX = "||ATT_STATE:";
 function encodeAttendanceOpenedBy(session) {
 	const cleanOpenedBy = (session.openedBy || "Instructor").split(ATT_STATE_MARKER_PREFIX)[0].trim() || "Instructor";
 	const ts = typeof session.statusUpdatedAtMs === "number" && Number.isFinite(session.statusUpdatedAtMs) && session.statusUpdatedAtMs > 0 ? Math.round(session.statusUpdatedAtMs) : Date.now();
-	const recCount = session.records ? Object.keys(session.records).length : 0;
-	return `${cleanOpenedBy}${ATT_STATE_MARKER_PREFIX}${session.isOpen ? "1" : "0"}~${ts}~R${recCount}`;
+	const recordsObj = session.records || {};
+	const recCount = Object.keys(recordsObj).length;
+	const recHash = computeFastStringHash(JSON.stringify(recordsObj));
+	return `${cleanOpenedBy}${ATT_STATE_MARKER_PREFIX}${session.isOpen ? "1" : "0"}~${ts}~R${recCount}_${recHash}`;
 }
 function decodeAttendanceOpenedBy(rawOpenedBy, rawIsOpen) {
 	const str = String(rawOpenedBy || "Instructor");
@@ -33938,13 +33944,21 @@ function decodeAttendanceOpenedBy(rawOpenedBy, rawIsOpen) {
 		const [cleanName, stateRaw] = str.split(ATT_STATE_MARKER_PREFIX);
 		const [flagStr, tsRaw, recRaw] = (stateRaw || "").trim().split("~");
 		const parsedTs = Number(tsRaw);
-		const parsedRecCount = recRaw && recRaw.startsWith("R") ? Number(recRaw.slice(1)) : void 0;
+		let parsedRecCount;
+		let parsedRecHash;
+		if (recRaw && recRaw.startsWith("R")) {
+			const [cntPart, hashPart] = recRaw.slice(1).split("_");
+			const n = Number(cntPart);
+			if (Number.isFinite(n) && n >= 0) parsedRecCount = n;
+			if (hashPart) parsedRecHash = hashPart;
+		}
 		const resolvedOpen = flagStr === "0" ? false : flagStr === "1" ? true : colIsOpen;
 		return {
 			openedBy: (cleanName || "Instructor").trim() || "Instructor",
 			isOpen: resolvedOpen && colIsOpen,
 			statusUpdatedAtMs: Number.isFinite(parsedTs) && parsedTs > 0 ? parsedTs : void 0,
-			recordCount: typeof parsedRecCount === "number" && Number.isFinite(parsedRecCount) && parsedRecCount >= 0 ? parsedRecCount : void 0
+			recordCount: parsedRecCount,
+			recordHash: parsedRecHash
 		};
 	}
 	return {
@@ -34766,10 +34780,14 @@ var SupabaseService = class {
 		const isStudentLite = Boolean(options?.studentLightweight && options?.currentUserId);
 		const useAvatarLite = mergedKnownAvatars.size > 0;
 		const cacheKey = `${isStudentLite ? `profiles:student:${options?.currentUserId}` : "profiles:all"}:${useAvatarLite ? "lite" : "full"}`;
+		if (!skipDedupe) {
+			const cached = this.getCachedQuery(cacheKey);
+			if (cached) return cached;
+		}
 		const fetcher = async () => {
 			try {
-				const liteCols = this.profileSchemaMode === "core" ? "id,name,username,email,role,phone,title,created_at,updated_at" : this.profileSchemaMode === "no_password" ? "id,name,username,email,role,phone,title,gender,address,rules_accepted,rules_accepted_at,created_at,updated_at" : "id,name,username,email,role,phone,title,gender,address,password,rules_accepted,rules_accepted_at,created_at,updated_at";
-				const fullCols = this.profileSchemaMode === "core" ? "id,name,username,email,role,phone,avatar,title,created_at,updated_at" : this.profileSchemaMode === "no_password" ? "id,name,username,email,role,phone,avatar,title,gender,address,rules_accepted,rules_accepted_at,created_at,updated_at" : "id,name,username,email,role,phone,avatar,title,gender,address,password,rules_accepted,rules_accepted_at,created_at,updated_at";
+				const liteCols = this.profileSchemaMode === "core" ? "id,name,username,email,role,phone,title" : this.profileSchemaMode === "no_password" ? "id,name,username,email,role,phone,title,gender,address" : "id,name,username,email,role,phone,title,gender,address,password";
+				const fullCols = this.profileSchemaMode === "core" ? "id,name,username,email,role,phone,avatar,title" : this.profileSchemaMode === "no_password" ? "id,name,username,email,role,phone,avatar,title,gender,address" : "id,name,username,email,role,phone,avatar,title,gender,address,password";
 				const selectedCols = useAvatarLite ? liteCols : fullCols;
 				let query = supabase.from("profiles").select(selectedCols);
 				if (isStudentLite && options?.currentUserId) {
@@ -34780,7 +34798,9 @@ var SupabaseService = class {
 				let rows = !primaryRes.error && Array.isArray(primaryRes.data) ? primaryRes.data : null;
 				let error = primaryRes.error;
 				if (error) {
-					let fbQuery = supabase.from("profiles").select("id,name,username,email,role,phone,avatar,title");
+					if (this.profileSchemaMode !== "core") this.profileSchemaMode = "core";
+					const coreFallbackCols = useAvatarLite ? "id,name,username,email,role,phone,title" : "id,name,username,email,role,phone,avatar,title";
+					let fbQuery = supabase.from("profiles").select(coreFallbackCols);
 					if (isStudentLite && options?.currentUserId) {
 						const safeUid = options.currentUserId.replace(/[,()"'\\]/g, "").trim();
 						fbQuery = fbQuery.or(`id.eq.${safeUid},role.in.(admin,co_admin)`).limit(25);
@@ -34833,6 +34853,7 @@ var SupabaseService = class {
 					return userObj;
 				});
 				if (avatarCacheChanged) this.persistAssetCache();
+				this.setCachedQuery(cacheKey, mapped, isStudentLite ? 25e3 : 15e3);
 				return mapped;
 			} catch {
 				return null;
@@ -34853,7 +34874,10 @@ var SupabaseService = class {
 			if (k && v) mergedBanners.set(k, v);
 		});
 		const useLiteColumns = mergedBanners.size > 0;
-		return this.dedupeGet(useLiteColumns ? "courses:lite" : "courses:all", async () => {
+		const cacheKey = useLiteColumns ? "courses:lite" : "courses:all";
+		const cached = this.getCachedQuery(cacheKey);
+		if (cached) return cached;
+		return this.dedupeGet(cacheKey, async () => {
 			try {
 				const selectCols = useLiteColumns ? "id,code,title,section,batch,description,instructor_name,instructor_email,theme_color,enrolled_student_ids,total_lessons,total_assignments,total_quizzes,created_at" : "id,code,title,section,batch,description,instructor_name,instructor_email,banner_image,theme_color,enrolled_student_ids,total_lessons,total_assignments,total_quizzes,created_at";
 				const { data, error } = await supabase.from("courses").select(selectCols).limit(200);
@@ -34913,6 +34937,7 @@ var SupabaseService = class {
 					};
 				});
 				if (bannerCacheChanged) this.persistAssetCache();
+				this.setCachedQuery(cacheKey, mappedCourses, 15e3);
 				return mappedCourses;
 			} catch {
 				return null;
@@ -35163,11 +35188,13 @@ var SupabaseService = class {
 					const idsNeedingRecords = [];
 					for (const row of rows) {
 						const sId = String(row.id || "");
-						const rowIsOpen = Boolean(row.is_open);
 						const decodedState = decodeAttendanceOpenedBy(row.opened_by, row.is_open);
+						const rowIsOpen = Boolean(row.is_open) && decodedState.isOpen;
 						const localKnown = knownSessions.get(sId);
-						const localRecCount = localKnown?.records ? Object.keys(localKnown.records).length : 0;
-						if (!localKnown || localKnown.isOpen !== rowIsOpen || decodedState.statusUpdatedAtMs && localKnown.statusUpdatedAtMs !== decodedState.statusUpdatedAtMs || decodedState.recordCount !== void 0 && localRecCount !== decodedState.recordCount || rowIsOpen && !decodedState.statusUpdatedAtMs) idsNeedingRecords.push(sId);
+						const localRecObj = localKnown?.records || {};
+						const localRecCount = Object.keys(localRecObj).length;
+						const localRecHash = computeFastStringHash(JSON.stringify(localRecObj));
+						if (!localKnown || localKnown.isOpen !== rowIsOpen || decodedState.statusUpdatedAtMs && localKnown.statusUpdatedAtMs !== decodedState.statusUpdatedAtMs || decodedState.recordCount !== void 0 && localRecCount !== decodedState.recordCount || decodedState.recordHash !== void 0 && localRecHash !== decodedState.recordHash || rowIsOpen && !decodedState.statusUpdatedAtMs) idsNeedingRecords.push(sId);
 					}
 					if (idsNeedingRecords.length > 0) {
 						const { data: recRows } = await supabase.from("attendance_sessions").select("id,records").in("id", idsNeedingRecords);
@@ -35182,6 +35209,7 @@ var SupabaseService = class {
 				return rows.map((row) => {
 					const sId = String(row.id || "");
 					const decodedState = decodeAttendanceOpenedBy(row.opened_by, row.is_open);
+					const resolvedOpenState = Boolean(row.is_open) && decodedState.isOpen;
 					let cleanRecords = {};
 					if (fetchedRecordsById.has(sId)) cleanRecords = fetchedRecordsById.get(sId);
 					else if (row.records && typeof row.records === "object") {
@@ -35194,7 +35222,7 @@ var SupabaseService = class {
 						date: String(row.date || ""),
 						displayDate: String(row.display_date || row.date || ""),
 						title: String(row.title || "Class Attendance"),
-						isOpen: Boolean(row.is_open),
+						isOpen: resolvedOpenState,
 						openedBy: decodedState.openedBy,
 						createdAt: String(row.created_at || (/* @__PURE__ */ new Date()).toISOString()),
 						statusUpdatedAtMs: decodedState.statusUpdatedAtMs,
@@ -35700,6 +35728,7 @@ var SupabaseService = class {
 				error: error.message
 			};
 			this.recordSignature(sigKey, row);
+			this.invalidateClientCache("courses");
 			this.notifyRealtimePeers("course");
 			return { success: true };
 		} catch (err) {
@@ -35715,6 +35744,7 @@ var SupabaseService = class {
 	static async deleteCourse(courseId) {
 		try {
 			this.lastUpsertSignatures.delete(`course:${courseId}`);
+			this.invalidateClientCache("courses");
 			const [assRes, quizRes] = await Promise.allSettled([supabase.from("assignments").select("id").eq("course_id", courseId), supabase.from("quizzes").select("id").eq("course_id", courseId)]);
 			const assIds = assRes.status === "fulfilled" && Array.isArray(assRes.value.data) ? assRes.value.data.map((r) => String(r.id)) : [];
 			const quizIds = quizRes.status === "fulfilled" && Array.isArray(quizRes.value.data) ? quizRes.value.data.map((r) => String(r.id)) : [];
@@ -36040,8 +36070,11 @@ var SupabaseService = class {
 				};
 				if (options?.preserveRemoteOpenState) resolvedIsOpen = Boolean(existingRow.is_open);
 				const decodedExisting = decodeAttendanceOpenedBy(existingRow.opened_by, existingRow.is_open);
-				resolvedStatusMs = Math.max(session.statusUpdatedAtMs || Date.now(), decodedExisting.statusUpdatedAtMs || 0);
-				if (Boolean(existingRow.is_open) === resolvedIsOpen && JSON.stringify(cleanRemoteRecords) === JSON.stringify(mergedRecords)) {
+				if (options?.preserveRemoteOpenState) {
+					resolvedIsOpen = Boolean(existingRow.is_open) && decodedExisting.isOpen;
+					resolvedStatusMs = decodedExisting.statusUpdatedAtMs || session.statusUpdatedAtMs || Date.now();
+				} else resolvedStatusMs = Math.max(session.statusUpdatedAtMs || Date.now(), (decodedExisting.statusUpdatedAtMs || 0) + 1e3);
+				if (!options?.onlyUpdateOpenState && !options?.force && Boolean(existingRow.is_open) === resolvedIsOpen && decodedExisting.isOpen === resolvedIsOpen && JSON.stringify(cleanRemoteRecords) === JSON.stringify(mergedRecords)) {
 					this.recordSignature(sigKey, initialRow);
 					return true;
 				}
@@ -36062,23 +36095,26 @@ var SupabaseService = class {
 				opened_by: encodeAttendanceOpenedBy(sessionToEncode),
 				records: mergedRecords
 			};
+			for (const k of Array.from(this.inflightGetRequests.keys())) if (k.startsWith("attendance:")) this.inflightGetRequests.delete(k);
+			let writeOk = false;
 			const { error } = await supabase.from("attendance_sessions").upsert(row, { onConflict: "id" });
-			if (!error) {
-				this.recordSignature(sigKey, row);
-				this.notifyRealtimePeers("attendance");
-				return true;
-			}
-			if (existingRow) {
+			if (!error) writeOk = true;
+			else if (existingRow) {
 				const { error: updErr } = await supabase.from("attendance_sessions").update({
 					is_open: resolvedIsOpen,
 					opened_by: encodeAttendanceOpenedBy(sessionToEncode),
 					records: mergedRecords
 				}).eq("id", session.id);
-				if (!updErr) {
-					this.recordSignature(sigKey, row);
-					this.notifyRealtimePeers("attendance");
-					return true;
-				}
+				if (!updErr) writeOk = true;
+			}
+			if (writeOk && options?.onlyUpdateOpenState && session.courseId) {
+				if (!resolvedIsOpen) await supabase.from("attendance_sessions").update({ is_open: false }).eq("course_id", session.courseId).neq("id", session.id).eq("is_open", true);
+				else await supabase.from("attendance_sessions").update({ is_open: false }).eq("course_id", session.courseId).neq("id", session.id).eq("is_open", true);
+			}
+			if (writeOk) {
+				this.recordSignature(sigKey, row);
+				this.notifyRealtimePeers("attendance");
+				return true;
 			}
 			return false;
 		} catch {
@@ -36088,10 +36124,10 @@ var SupabaseService = class {
 	/**
 	* Atomic-style Student Check-In Sync:
 	* - Fetches the latest remote attendance session row from Supabase first.
-	* - If an Admin or Co-Admin has already closed the session (`is_open === false`), rejects the check-in
-	*   and returns `closedRemotely: true` so the student's browser never re-opens a closed session!
+	* - If an Admin or Co-Admin has already closed the session (`is_open === false` or `decodedRemote.isOpen === false`),
+	*   rejects the check-in and returns `closedRemotely: true` so the student's browser never checks in to or re-opens a closed session!
 	* - Updates ONLY the `records` column (merging this student's check-in with all other students' remote records)
-	*   without ever overwriting `is_open`!
+	*   and preserves the instructor's `statusUpdatedAtMs` so student phone clocks never interfere with Open/Close timestamps!
 	*/
 	static async syncStudentCheckInToCloud(sessionId, studentId, record, fallbackSession) {
 		try {
@@ -36101,7 +36137,7 @@ var SupabaseService = class {
 				const remoteRecords = existingRow.records && typeof existingRow.records === "object" ? existingRow.records : {};
 				const cleanRemoteRecords = {};
 				for (const [k, v] of Object.entries(remoteRecords)) if (k !== "__session_meta__" && v && typeof v === "object" && "status" in v) cleanRemoteRecords[k] = v;
-				if (!existingRow.is_open) return {
+				if (!existingRow.is_open || !decodedRemote.isOpen) return {
 					success: false,
 					closedRemotely: true,
 					remoteIsOpen: false,
@@ -36111,27 +36147,33 @@ var SupabaseService = class {
 				const nextRecords = { ...cleanRemoteRecords };
 				if (record === null) delete nextRecords[studentId];
 				else nextRecords[studentId] = record;
-				const nextStatusMs = Date.now();
+				const preservedStatusMs = decodedRemote.statusUpdatedAtMs || fallbackSession.statusUpdatedAtMs || Date.now();
 				const encodedMarker = encodeAttendanceOpenedBy({
 					...fallbackSession,
 					openedBy: decodedRemote.openedBy,
 					isOpen: true,
-					statusUpdatedAtMs: nextStatusMs,
+					statusUpdatedAtMs: preservedStatusMs,
 					records: nextRecords
 				});
 				const { error: updateErr } = await supabase.from("attendance_sessions").update({
 					records: nextRecords,
 					opened_by: encodedMarker
-				}).eq("id", sessionId);
+				}).eq("id", sessionId).eq("is_open", true);
 				if (!updateErr) this.notifyRealtimePeers("attendance");
 				return {
 					success: !updateErr,
 					remoteIsOpen: true,
-					remoteStatusUpdatedAtMs: nextStatusMs,
+					remoteStatusUpdatedAtMs: preservedStatusMs,
 					mergedRecords: nextRecords
 				};
 			}
-			return { success: await this.upsertAttendanceSession(fallbackSession, { preserveRemoteOpenState: true }) };
+			if (!fetchErr && !existingRow) return {
+				success: false,
+				closedRemotely: true,
+				remoteIsOpen: false,
+				remoteStatusUpdatedAtMs: Date.now()
+			};
+			return { success: false };
 		} catch {
 			return { success: false };
 		}
@@ -37155,9 +37197,9 @@ var INITIAL_ATTENDANCE_SESSIONS = [
 		date: "2026-10-26",
 		displayDate: "Oct 26, 2026",
 		title: "Lecture 03: Distributed Caching & Live Q&A Check-in",
-		isOpen: true,
+		isOpen: false,
 		openedBy: "Dr. Kyaw Swar",
-		createdAt: "Today · 09:00 AM",
+		createdAt: "Oct 26, 2026 · 09:00 AM",
 		records: { "user-student-1": {
 			studentId: "user-student-1",
 			studentName: "Aung Min",
@@ -39977,7 +40019,7 @@ var ClassroomDB = class {
 							rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
 							rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
 							avatar: resolvedAvatar,
-							password: encryptPassword(this.isRecentLocalWrite(ru.id) ? existing?.password || ru.password : ru.password || existing?.password, ru.role, ru.id)
+							password: loggedUser && loggedUser.role === "student" && ru.id !== loggedUser.id ? void 0 : encryptPassword(this.isRecentLocalWrite(ru.id) ? existing?.password || ru.password : ru.password || existing?.password, ru.role, ru.id)
 						};
 						userMap.set(ru.id, mergedProfile);
 						latestAvatarByUserId.set(ru.id, resolvedAvatar);
@@ -40273,11 +40315,21 @@ var ClassroomDB = class {
 			const isInitialDemo = /^att-sess-\d{1,4}$/.test(att.id || "");
 			const wasConfirmedInCloud = confirmedCloudAtt.has(att.id);
 			const isRecentAttWrite = this.isRecentLocalWrite(att.id, 2e4);
-			if (remoteAttIds.has(att.id)) attMap.set(att.id, att);
-			else if (!isInQueriedScope) attMap.set(att.id, att);
-			else if (!cloudActive || isRecentAttWrite || !wasConfirmedInCloud && !isInitialDemo && isInstructorForAtt) {
-				attMap.set(att.id, att);
-				if (isRecentAttWrite && isInstructorForAtt && !isInitialDemo) attToPushToCloud.push(att);
+			const normalizedLocalAtt = isInitialDemo && !remoteAttIds.has(att.id) && att.isOpen ? {
+				...att,
+				isOpen: false
+			} : att;
+			if (remoteAttIds.has(att.id)) attMap.set(att.id, normalizedLocalAtt);
+			else if (!isInQueriedScope) attMap.set(att.id, !isInstructorForAtt && normalizedLocalAtt.isOpen ? {
+				...normalizedLocalAtt,
+				isOpen: false
+			} : normalizedLocalAtt);
+			else if (!cloudActive || isInstructorForAtt && (isRecentAttWrite || !wasConfirmedInCloud && !isInitialDemo)) {
+				attMap.set(att.id, !isInstructorForAtt && normalizedLocalAtt.isOpen ? {
+					...normalizedLocalAtt,
+					isOpen: false
+				} : normalizedLocalAtt);
+				if (isRecentAttWrite && isInstructorForAtt && !isInitialDemo) attToPushToCloud.push(normalizedLocalAtt);
 			} else {
 				newlyDiscoveredRemoteDeletions.push(att.id);
 				deletedSet.add(att.id);
@@ -40285,41 +40337,42 @@ var ClassroomDB = class {
 		});
 		remoteAttendance.forEach((ratt) => {
 			if (deletedSet.has(ratt.id) || deletedSet.has(ratt.courseId)) {
-				if (!this.purgedRemoteIds.has(ratt.id)) {
+				if (isInstructorForAtt && !this.purgedRemoteIds.has(ratt.id)) {
 					this.purgedRemoteIds.add(ratt.id);
 					SupabaseService.deleteAttendanceSession(ratt.id).catch(() => {});
 				}
 				return;
 			}
 			const existing = attMap.get(ratt.id);
-			const isRecentOpenToggle = this.isRecentLocalWrite(`att-open:${ratt.id}`, 8e3);
+			const isRecentOpenToggle = isInstructorForAtt && this.isRecentLocalWrite(`att-open:${ratt.id}`, 1e4);
 			const localStatusMs = existing?.statusUpdatedAtMs || 0;
 			const remoteStatusMs = ratt.statusUpdatedAtMs || 0;
-			let resolvedIsOpen = ratt.isOpen;
-			let resolvedStatusMs = remoteStatusMs || localStatusMs || void 0;
-			if (existing) {
-				if (isRecentOpenToggle && localStatusMs >= remoteStatusMs) {
-					resolvedIsOpen = existing.isOpen;
-					resolvedStatusMs = localStatusMs || Date.now();
-					if (existing.isOpen !== ratt.isOpen) attToPushToCloud.push({
-						...existing,
-						statusUpdatedAtMs: resolvedStatusMs
-					});
-				} else if (localStatusMs > 0 && remoteStatusMs > 0 && localStatusMs > remoteStatusMs) {
-					resolvedIsOpen = existing.isOpen;
-					resolvedStatusMs = localStatusMs;
-					if (existing.isOpen !== ratt.isOpen) attToPushToCloud.push({
-						...existing,
-						statusUpdatedAtMs: resolvedStatusMs
-					});
-				}
+			let resolvedIsOpen = Boolean(ratt.isOpen);
+			let resolvedStatusMs = Math.max(remoteStatusMs, localStatusMs) || void 0;
+			if (isInstructorForAtt && existing && isRecentOpenToggle) {
+				resolvedIsOpen = Boolean(existing.isOpen);
+				resolvedStatusMs = Math.max(localStatusMs, remoteStatusMs + 1e3, Date.now());
+				if (Boolean(existing.isOpen) !== Boolean(ratt.isOpen)) attToPushToCloud.push({
+					...existing,
+					isOpen: resolvedIsOpen,
+					statusUpdatedAtMs: resolvedStatusMs
+				});
 			}
 			const mergedRecords = { ...ratt.records || {} };
-			if (existing?.records) {
-				for (const [stuId, localRec] of Object.entries(existing.records)) if (this.isRecentLocalWrite(`att-rec:${ratt.id}:${stuId}`, 15e3)) mergedRecords[stuId] = localRec;
-			}
 			const loggedUser = this.getCurrentUser();
-			if (loggedUser && loggedUser.role === "student" && this.isRecentLocalWrite(`att-clear:${ratt.id}:${loggedUser.id}`, 15e3)) delete mergedRecords[loggedUser.id];
+			if (!resolvedIsOpen) {
+				if (loggedUser && loggedUser.role === "student") {
+					this.clearLocalWrite(`att-rec:${ratt.id}:${loggedUser.id}`);
+					this.clearLocalWrite(`att-clear:${ratt.id}:${loggedUser.id}`);
+				} else if (isInstructorForAtt && existing?.records) {
+					for (const [stuId, localRec] of Object.entries(existing.records)) if (this.isRecentLocalWrite(`att-rec:${ratt.id}:${stuId}`, 15e3)) mergedRecords[stuId] = localRec;
+				}
+			} else {
+				if (existing?.records) {
+					for (const [stuId, localRec] of Object.entries(existing.records)) if (this.isRecentLocalWrite(`att-rec:${ratt.id}:${stuId}`, 15e3)) mergedRecords[stuId] = localRec;
+				}
+				if (loggedUser && loggedUser.role === "student" && this.isRecentLocalWrite(`att-clear:${ratt.id}:${loggedUser.id}`, 15e3)) delete mergedRecords[loggedUser.id];
+			}
 			attMap.set(ratt.id, {
 				...existing,
 				...ratt,
@@ -40330,8 +40383,11 @@ var ClassroomDB = class {
 		});
 		if (!externalNewDeletions && newlyDiscoveredRemoteDeletions.length > 0) this.recordDeletedIds(newlyDiscoveredRemoteDeletions);
 		const merged = Array.from(attMap.values()).sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
-		if (attToPushToCloud.length > 0) Array.from(new Map(attToPushToCloud.map((a) => [a.id, a])).values()).forEach((sess) => {
-			SupabaseService.upsertAttendanceSession(sess, { force: true }).then((ok) => {
+		if (isInstructorForAtt && attToPushToCloud.length > 0) Array.from(new Map(attToPushToCloud.map((a) => [a.id, a])).values()).forEach((sess) => {
+			SupabaseService.upsertAttendanceSession(sess, {
+				force: true,
+				onlyUpdateOpenState: true
+			}).then((ok) => {
 				if (ok) this.markAttendanceCloudConfirmed(sess.id);
 			}).catch(() => {});
 		});
@@ -41331,16 +41387,17 @@ var ClassroomDB = class {
 			day: "numeric",
 			year: "numeric"
 		});
-		const nowMs = Date.now();
+		const maxExistingStatusMs = sessions.reduce((max, s) => Math.max(max, s.statusUpdatedAtMs || 0), 0);
+		const nowMs = Math.max(Date.now(), maxExistingStatusMs + 1e3);
 		const newSession = {
-			id: `att-sess-${nowMs}`,
+			id: `att-sess-${Date.now()}`,
 			courseId,
 			date,
 			displayDate,
 			title: title.trim() || `Daily Class Check-in (${displayDate})`,
 			isOpen,
 			openedBy: currentUser.name,
-			createdAt: new Date(nowMs).toLocaleTimeString([], {
+			createdAt: (/* @__PURE__ */ new Date()).toLocaleTimeString([], {
 				hour: "2-digit",
 				minute: "2-digit"
 			}),
@@ -41355,6 +41412,7 @@ var ClassroomDB = class {
 					isOpen: false,
 					statusUpdatedAtMs: nowMs
 				};
+				this.markLocalWrite(closedOld.id);
 				this.markLocalWrite(`att-open:${closedOld.id}`);
 				autoClosedSessions.push(closedOld);
 				return closedOld;
@@ -41400,7 +41458,8 @@ var ClassroomDB = class {
 		if (!currentLogged || currentLogged.role !== "admin" && currentLogged.role !== "co_admin") return null;
 		const sessions = this.getItem(STORAGE_KEYS.ATTENDANCE, INITIAL_ATTENDANCE_SESSIONS);
 		const targetCourseId = sessions.find((s) => s.id === sessionId)?.courseId;
-		const nowMs = Date.now();
+		const maxExistingStatusMs = sessions.reduce((max, s) => Math.max(max, s.statusUpdatedAtMs || 0), 0);
+		const nowMs = Math.max(Date.now(), maxExistingStatusMs + 1e3);
 		let updatedSession = null;
 		const otherModifiedSessions = [];
 		const updated = sessions.map((s) => {
@@ -41418,6 +41477,7 @@ var ClassroomDB = class {
 					isOpen: false,
 					statusUpdatedAtMs: nowMs
 				};
+				this.markLocalWrite(closedOther.id);
 				this.markLocalWrite(`att-open:${closedOther.id}`);
 				otherModifiedSessions.push(closedOther);
 				return closedOther;
@@ -41468,7 +41528,8 @@ var ClassroomDB = class {
 		const currentLogged = actorUser || this.getCurrentUser();
 		if (!currentLogged || currentLogged.role !== "admin" && currentLogged.role !== "co_admin") return 0;
 		const sessions = this.getItem(STORAGE_KEYS.ATTENDANCE, INITIAL_ATTENDANCE_SESSIONS);
-		const nowMs = Date.now();
+		const maxExistingStatusMs = sessions.reduce((max, s) => Math.max(max, s.statusUpdatedAtMs || 0), 0);
+		const nowMs = Math.max(Date.now(), maxExistingStatusMs + 1e3);
 		const closedList = [];
 		const updated = sessions.map((s) => {
 			if (s.courseId === courseId && s.isOpen) {
@@ -41546,6 +41607,10 @@ var ClassroomDB = class {
 		return true;
 	}
 	static studentCheckIn(sessionId, student, status = "present", note) {
+		if (!student || student.role !== "student") return {
+			success: false,
+			error: "ကျောင်းသားအကောင့်ဖြင့်သာ Self Check-in ပြုလုပ်နိုင်ပါသည်။"
+		};
 		const rateCheck = this.checkRateLimit("attendance_checkin", student.id, 30, 60);
 		if (!rateCheck.allowed) return {
 			success: false,
@@ -41559,12 +41624,13 @@ var ClassroomDB = class {
 		};
 		if (!target.isOpen) return {
 			success: false,
-			error: "ဤအတန်းချိန်အတွက် Attendance ပိတ်သွားပြီဖြစ်သောကြောင့် ပြင်ဆင်၍ မရနိုင်တော့ပါ။"
+			error: "🔒 ဤအတန်းချိန်အတွက် Attendance ပိတ်သွားပြီဖြစ်သောကြောင့် နှိပ်၍ မရနိုင်တော့ပါ။ (Admin / Co-Admin ဖွင့်ပေးထားချိန်မှသာ နှိပ်နိုင်ပါသည်)"
 		};
 		if (!this.getCourseById(target.courseId, student).course) return {
 			success: false,
 			error: "သင်သည် ဤအတန်းတွင် စာရင်းသွင်းထားခြင်း မရှိပါ။"
 		};
+		const previousRecordForStudent = target.records ? target.records[student.id] : void 0;
 		const nowTime = (/* @__PURE__ */ new Date()).toLocaleTimeString([], {
 			hour: "2-digit",
 			minute: "2-digit"
@@ -41619,16 +41685,29 @@ var ClassroomDB = class {
 						this.clearLocalWrite(`att-rec:${sessionId}:${student.id}`);
 						this.clearLocalWrite(`att-clear:${sessionId}:${student.id}`);
 						const syncedClosed = this.getItem(STORAGE_KEYS.ATTENDANCE, INITIAL_ATTENDANCE_SESSIONS).map((cs) => {
-							if (cs.id === sessionId) return {
-								...cs,
-								isOpen: false,
-								statusUpdatedAtMs: res.remoteStatusUpdatedAtMs || Date.now(),
-								records: res.mergedRecords || cs.records
-							};
+							if (cs.id === sessionId) {
+								const revertedRecords = res.mergedRecords ? { ...res.mergedRecords } : { ...cs.records };
+								if (!res.mergedRecords) {
+									if (previousRecordForStudent) revertedRecords[student.id] = previousRecordForStudent;
+									else delete revertedRecords[student.id];
+								}
+								return {
+									...cs,
+									isOpen: false,
+									statusUpdatedAtMs: res.remoteStatusUpdatedAtMs || Date.now(),
+									records: revertedRecords
+								};
+							}
 							return cs;
 						});
 						this.setItem(STORAGE_KEYS.ATTENDANCE, syncedClosed);
-						if (typeof window !== "undefined") window.dispatchEvent(new Event("storage"));
+						if (typeof window !== "undefined") {
+							window.dispatchEvent(new CustomEvent("attendance-closed-remotely", { detail: {
+								sessionId,
+								courseId: target.courseId
+							} }));
+							window.dispatchEvent(new Event("storage"));
+						}
 					} else if (res.success && res.mergedRecords) this.markAttendanceCloudConfirmed(sessionId);
 				}).catch(() => {});
 			} catch {}
@@ -45278,7 +45357,7 @@ var PWAInstallButton = ({ variant = "navbar" }) => {
 };
 //#endregion
 //#region src/utils/appUpdater.ts
-var APP_VERSION_LABEL = "v20.7";
+var APP_VERSION_LABEL = "v20.8";
 /**
 * Performs a fast, non-destructive live update of both Classroom Cloud Data (Supabase)
 * and checks for any new Service Worker / Application Bundle updates.
@@ -48595,13 +48674,38 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, onOpenAttendance })
 	const pinnedPosts = posts.filter((p) => p.isPinned && p.status !== "scheduled").sort((a, b) => (a.pinOrder || 99) - (b.pinOrder || 99));
 	const scheduledPosts = posts.filter((p) => p.status === "scheduled");
 	const currentPinnedCount = posts.filter((p) => p.isPinned).length;
-	const openAttendanceSessions = ClassroomDB.getAttendanceSessions(course.id).filter((s) => s.isOpen);
+	const openAttendanceSessions = ClassroomDB.getAttendanceSessions(course.id).filter((s) => Boolean(s.isOpen));
 	const [editingStreamAttIds, setEditingStreamAttIds] = (0, import_react.useState)({});
+	(0, import_react.useEffect)(() => {
+		const handleRemoteAttendanceClosed = () => {
+			setEditingStreamAttIds({});
+			setSuccessToast(null);
+			setRateLimitError("🔒 ဆရာ (Admin / Co-Admin) မှ Attendance ပိတ်လိုက်ပြီဖြစ်သောကြောင့် နှိပ်၍ မရနိုင်တော့ပါ။");
+			setTimeout(() => setRateLimitError(null), 4500);
+			onRefresh();
+		};
+		window.addEventListener("attendance-closed-remotely", handleRemoteAttendanceClosed);
+		return () => {
+			window.removeEventListener("attendance-closed-remotely", handleRemoteAttendanceClosed);
+		};
+	}, [course.id]);
+	const handleStreamCloseAllAttendance = () => {
+		if (ClassroomDB.closeAllOpenAttendanceForCourse(course.id, currentUser) > 0) {
+			setSuccessToast("🔒 Attendance ပိတ်လိုက်ပါပြီ! ကျောင်းသားအကောင့်များ အားလုံးတွင် Attendance နှိပ်၍ မရတော့ပါ။");
+			setTimeout(() => setSuccessToast(null), 3500);
+			onRefresh();
+		}
+	};
 	const handleStreamStudentAttendance = (sessionId, status = "present") => {
 		const res = ClassroomDB.studentCheckIn(sessionId, currentUser, status);
 		if (!res.success && res.error) {
+			setEditingStreamAttIds((prev) => ({
+				...prev,
+				[sessionId]: false
+			}));
 			setRateLimitError(res.error);
 			setTimeout(() => setRateLimitError(null), 4e3);
+			onRefresh();
 			return;
 		}
 		setEditingStreamAttIds((prev) => ({
@@ -49041,6 +49145,38 @@ var CourseStream = ({ course, currentUser, posts, onRefresh, onOpenAttendance })
 							})
 						]
 					})
+				})]
+			}),
+			isInstructor && openAttendanceSessions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "neu-card rounded-3xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ring-2 ring-emerald-400/50",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "space-y-1",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-bold text-xs sm:text-sm flex-wrap",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+							"🟢 လက်ရှိ Attendance ဖွင့်ထားဆဲ (",
+							openAttendanceSessions[0]?.displayDate,
+							" — ",
+							openAttendanceSessions[0]?.title,
+							")"
+						] })]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "text-[11px] text-slate-500 dark:text-slate-400",
+						children: "ကျောင်းသားများ ယခုချိန်တွင် Attendance နှိပ်နိုင်ပါသည်။ ပိတ်လိုပါက ညာဘက်ရှိ ခလုတ်ကို နှိပ်ပါ။"
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "flex flex-wrap items-center gap-2 shrink-0",
+					children: [onOpenAttendance && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						onClick: onOpenAttendance,
+						className: "px-3 py-2 rounded-xl bg-white dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 text-xs font-bold transition-all cursor-pointer",
+						children: "Roll Call စာရင်းကြည့်ရန် →"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						onClick: handleStreamCloseAllAttendance,
+						className: "px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Lock, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "🔒 Attendance ပိတ်မည် (Close Now)" })]
+					})]
 				})]
 			}),
 			!isInstructor && openAttendanceSessions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -51694,11 +51830,19 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 				if (mounted && changed) onRefresh();
 			});
 		};
+		const handleRemoteClosed = () => {
+			if (!mounted) return;
+			setEditingStudentSessionIds({});
+			showToast("🔒 ဆရာ (Admin / Co-Admin) မှ Attendance ပိတ်လိုက်ပြီဖြစ်သောကြောင့် နှိပ်၍ မရနိုင်တော့ပါ။");
+			onRefresh();
+		};
 		syncNow();
-		const timer = setInterval(syncNow, 2e4);
+		const timer = setInterval(syncNow, 8e3);
+		window.addEventListener("attendance-closed-remotely", handleRemoteClosed);
 		return () => {
 			mounted = false;
 			clearInterval(timer);
+			window.removeEventListener("attendance-closed-remotely", handleRemoteClosed);
 		};
 	}, [course.id]);
 	const activeSession = sessions.find((s) => s.id === selectedSessionId) || sessions.find((s) => s.isOpen) || sessions[0];
@@ -51716,9 +51860,18 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 	};
 	const handleToggleOpen = (session) => {
 		const nextState = !session.isOpen;
-		ClassroomDB.toggleAttendanceSessionOpen(session.id, nextState, currentUser);
-		showToast(nextState ? `"${session.title}" အား Open Attendance ဖွင့်ပေးလိုက်ပါပြီ။` : `"${session.title}" အား Attendance ပိတ်လိုက်ပါပြီ။`);
+		if (!nextState) {
+			ClassroomDB.closeAllOpenAttendanceForCourse(course.id, currentUser);
+			ClassroomDB.toggleAttendanceSessionOpen(session.id, false, currentUser);
+		} else ClassroomDB.toggleAttendanceSessionOpen(session.id, true, currentUser);
+		showToast(nextState ? `🟢 "${session.title}" အား Open Attendance ဖွင့်ပေးလိုက်ပါပြီ။ ကျောင်းသားများ နှိပ်နိုင်ပါပြီ။` : `🔒 "${session.title}" အား Attendance ပိတ်လိုက်ပါပြီ။ ကျောင်းသားအကောင့်များ အားလုံးတွင် ပိတ်သွားပါပြီ။`);
 		onRefresh();
+	};
+	const handleCloseAllOpenAttendance = () => {
+		if (ClassroomDB.closeAllOpenAttendanceForCourse(course.id, currentUser) > 0) {
+			showToast("🔒 ဖွင့်ထားသော Attendance အားလုံးကို ပိတ်လိုက်ပါပြီ! ကျောင်းသားအကောင့်များ အားလုံးတွင် နှိပ်၍ မရတော့ပါ။");
+			onRefresh();
+		}
 	};
 	const handleDeleteSession = (session) => {
 		setSessionToDelete(session);
@@ -51738,7 +51891,12 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 	const handleStudentCheckIn = (sessionId, status = "present") => {
 		const res = ClassroomDB.studentCheckIn(sessionId, currentUser, status);
 		if (!res.success && res.error) {
+			setEditingStudentSessionIds((prev) => ({
+				...prev,
+				[sessionId]: false
+			}));
 			showToast(res.error);
+			onRefresh();
 			return;
 		}
 		setEditingStudentSessionIds((prev) => ({
@@ -51951,7 +52109,7 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 							})]
 						})]
 					}),
-					openSessions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					openSessions.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "neu-card rounded-3xl p-4 sm:p-5 space-y-3 ring-2 ring-emerald-400/50",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "flex items-center justify-between gap-2 flex-wrap",
@@ -52070,6 +52228,27 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 								}, sess.id);
 							})
 						})]
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "neu-card rounded-3xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-slate-200/70 dark:border-slate-800",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "flex items-start sm:items-center gap-3",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "p-2.5 rounded-2xl bg-slate-200/80 dark:bg-slate-800 text-slate-600 dark:text-slate-300 shrink-0",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Lock, { className: "w-5 h-5" })
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "flex items-center gap-2 flex-wrap",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+									className: "text-xs sm:text-sm font-extrabold text-slate-800 dark:text-slate-100",
+									children: "🔒 လက်ရှိတွင် Attendance ပိတ်ထားပါသည် (Attendance Check-in Closed)"
+								})
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5",
+								children: "Admin / Co-Admin များမှ Attendance ဖွင့်ပေးထားသည့် အချိန်တွင်သာ ကျောင်းသားများ ကိုယ်တိုင် Attendance နှိပ်နိုင်ပါသည်။"
+							})] })]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "self-start sm:self-center text-[11px] font-bold px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shrink-0",
+							children: "🔒 Attendance ပိတ်ထားဆဲ"
+						})]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "neu-card rounded-3xl overflow-hidden",
@@ -52101,9 +52280,12 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 												className: "text-xs font-mono font-semibold text-indigo-600 dark:text-indigo-400",
 												children: sess.displayDate
-											}), sess.isOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											}), sess.isOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 												className: "text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300",
-												children: "Open Now"
+												children: "🟢 Open Now"
+											}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400",
+												children: "🔒 ပိတ်ထားပြီ (Closed)"
 											})]
 										}),
 										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -52171,6 +52353,34 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 			isInstructor && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "space-y-6",
 				children: [
+					openSessions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "neu-card rounded-3xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ring-2 ring-emerald-400/60",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "space-y-1",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-extrabold text-xs sm:text-sm flex-wrap",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+									"🟢 လက်ရှိတွင် Attendance ဖွင့်ထားဆဲဖြစ်ပါသည် (",
+									openSessions[0]?.displayDate,
+									" — ",
+									openSessions[0]?.title,
+									")"
+								] })]
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+								className: "text-xs text-slate-600 dark:text-slate-300",
+								children: [
+									"ကျောင်းသားများ ယခုချိန်တွင် မိမိတို့အကောင့်မှ Attendance နှိပ်နိုင်ပါသည်။ ပိတ်လိုပါက ညာဘက်ရှိ ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "\"Attendance ပိတ်မည်\"" }),
+									" ခလုတ်ကို နှိပ်ပါ။"
+								]
+							})]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							type: "button",
+							onClick: handleCloseAllOpenAttendance,
+							className: "px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs sm:text-sm font-extrabold shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Lock, { className: "w-4 h-4" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "🔒 Attendance ပိတ်မည် (Close For All Students)" })]
+						})]
+					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "neu-card rounded-3xl p-5 sm:p-6",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -52267,9 +52477,9 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 										type: "button",
 										onClick: () => handleToggleOpen(activeSession),
-										className: `px-3 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer ${activeSession.isOpen ? "bg-emerald-50 dark:bg-emerald-950/70 border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300" : "bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-emerald-50"}`,
+										className: `px-3.5 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer ${activeSession.isOpen ? "bg-rose-600 hover:bg-rose-700 border-rose-600 text-white shadow-xs" : "bg-emerald-600 hover:bg-emerald-700 border-emerald-600 text-white shadow-xs"}`,
 										title: "Toggle student self check-in",
-										children: activeSession.isOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LockOpen, { className: "w-3.5 h-3.5 text-emerald-600" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Attendance Open (ပိတ်ရန်နှိပ်ပါ)" })] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Lock, { className: "w-3.5 h-3.5 text-slate-500" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Closed (ပြန်ဖွင့်ရန်နှိပ်ပါ)" })] })
+										children: activeSession.isOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Lock, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "🔒 Attendance ပိတ်မည် (Close Attendance)" })] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LockOpen, { className: "w-3.5 h-3.5" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "🔓 Attendance ပြန်ဖွင့်မည် (Open Attendance)" })] })
 									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 										type: "button",
@@ -52829,11 +53039,25 @@ var AttendanceView = ({ course, currentUser, onRefresh, onOpenCertificate }) => 
 var CourseDetail = ({ course, currentUser, posts, onBack, onRefresh, onOpenCertificate }) => {
 	const [tabHistory, setTabHistory] = (0, import_react.useState)(["stream"]);
 	const activeTab = tabHistory[tabHistory.length - 1] || "stream";
+	(0, import_react.useEffect)(() => {
+		let mounted = true;
+		const syncCourseAttendance = () => {
+			if (document.visibilityState === "visible" && navigator.onLine !== false) ClassroomDB.syncAttendanceFromCloud().then((changed) => {
+				if (mounted && changed) onRefresh();
+			});
+		};
+		syncCourseAttendance();
+		const timer = setInterval(syncCourseAttendance, 8e3);
+		return () => {
+			mounted = false;
+			clearInterval(timer);
+		};
+	}, [course.id]);
 	const handleSwitchTab = (nextTab) => {
 		if (nextTab === activeTab) return;
 		setTabHistory((prev) => [...prev, nextTab]);
 		if (typeof navigator === "undefined" || navigator.onLine !== false) {
-			if (nextTab === "attendance") ClassroomDB.syncAttendanceFromCloud().then((updated) => {
+			if (nextTab === "attendance") ClassroomDB.syncAttendanceFromCloud(true).then((updated) => {
 				if (updated) onRefresh();
 			});
 			else ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {

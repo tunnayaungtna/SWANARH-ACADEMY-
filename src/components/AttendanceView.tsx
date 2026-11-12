@@ -72,7 +72,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
     setTimeout(() => setToastMsg(null), 3200);
   };
 
-  // Real-time multi-device Attendance synchronization (polls 0.3KB delta metadata every 15s)
+  // Real-time multi-device Attendance synchronization (polls 0.3KB delta metadata every 8s)
   useEffect(() => {
     let mounted = true;
     const syncNow = () => {
@@ -84,11 +84,21 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
         });
       }
     };
+    const handleRemoteClosed = () => {
+      if (!mounted) return;
+      setEditingStudentSessionIds({});
+      showToast(
+        '🔒 ဆရာ (Admin / Co-Admin) မှ Attendance ပိတ်လိုက်ပြီဖြစ်သောကြောင့် နှိပ်၍ မရနိုင်တော့ပါ။'
+      );
+      onRefresh();
+    };
     syncNow();
-    const timer = setInterval(syncNow, 20000);
+    const timer = setInterval(syncNow, 8000);
+    window.addEventListener('attendance-closed-remotely', handleRemoteClosed);
     return () => {
       mounted = false;
       clearInterval(timer);
+      window.removeEventListener('attendance-closed-remotely', handleRemoteClosed);
     };
   }, [course.id]);
 
@@ -129,13 +139,28 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
 
   const handleToggleOpen = (session: AttendanceSession) => {
     const nextState = !session.isOpen;
-    ClassroomDB.toggleAttendanceSessionOpen(session.id, nextState, currentUser);
+    if (!nextState) {
+      ClassroomDB.closeAllOpenAttendanceForCourse(course.id, currentUser);
+      ClassroomDB.toggleAttendanceSessionOpen(session.id, false, currentUser);
+    } else {
+      ClassroomDB.toggleAttendanceSessionOpen(session.id, true, currentUser);
+    }
     showToast(
       nextState
-        ? `"${session.title}" အား Open Attendance ဖွင့်ပေးလိုက်ပါပြီ။`
-        : `"${session.title}" အား Attendance ပိတ်လိုက်ပါပြီ။`
+        ? `🟢 "${session.title}" အား Open Attendance ဖွင့်ပေးလိုက်ပါပြီ။ ကျောင်းသားများ နှိပ်နိုင်ပါပြီ။`
+        : `🔒 "${session.title}" အား Attendance ပိတ်လိုက်ပါပြီ။ ကျောင်းသားအကောင့်များ အားလုံးတွင် ပိတ်သွားပါပြီ။`
     );
     onRefresh();
+  };
+
+  const handleCloseAllOpenAttendance = () => {
+    const count = ClassroomDB.closeAllOpenAttendanceForCourse(course.id, currentUser);
+    if (count > 0) {
+      showToast(
+        '🔒 ဖွင့်ထားသော Attendance အားလုံးကို ပိတ်လိုက်ပါပြီ! ကျောင်းသားအကောင့်များ အားလုံးတွင် နှိပ်၍ မရတော့ပါ။'
+      );
+      onRefresh();
+    }
   };
 
   const handleDeleteSession = (session: AttendanceSession) => {
@@ -161,7 +186,9 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   ) => {
     const res = ClassroomDB.studentCheckIn(sessionId, currentUser, status);
     if (!res.success && res.error) {
+      setEditingStudentSessionIds((prev) => ({ ...prev, [sessionId]: false }));
       showToast(res.error);
+      onRefresh();
       return;
     }
     setEditingStudentSessionIds((prev) => ({ ...prev, [sessionId]: false }));
@@ -438,7 +465,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
           </div>
 
           {/* Open Daily Check-in Banner for Students */}
-          {openSessions.length > 0 && (
+          {openSessions.length > 0 ? (
             <div className="neu-card rounded-3xl p-4 sm:p-5 space-y-3 ring-2 ring-emerald-400/50">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-bold text-xs sm:text-sm">
@@ -586,6 +613,27 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                 })}
               </div>
             </div>
+          ) : (
+            <div className="neu-card rounded-3xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-slate-200/70 dark:border-slate-800">
+              <div className="flex items-start sm:items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-slate-200/80 dark:bg-slate-800 text-slate-600 dark:text-slate-300 shrink-0">
+                  <Lock className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h4 className="text-xs sm:text-sm font-extrabold text-slate-800 dark:text-slate-100">
+                      🔒 လက်ရှိတွင် Attendance ပိတ်ထားပါသည် (Attendance Check-in Closed)
+                    </h4>
+                  </div>
+                  <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Admin / Co-Admin များမှ Attendance ဖွင့်ပေးထားသည့် အချိန်တွင်သာ ကျောင်းသားများ ကိုယ်တိုင် Attendance နှိပ်နိုင်ပါသည်။
+                  </p>
+                </div>
+              </div>
+              <span className="self-start sm:self-center text-[11px] font-bold px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shrink-0">
+                🔒 Attendance ပိတ်ထားဆဲ
+              </span>
+            </div>
           )}
 
           {/* Student Session-by-Session History */}
@@ -617,9 +665,13 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                           <span className="text-xs font-mono font-semibold text-indigo-600 dark:text-indigo-400">
                             {sess.displayDate}
                           </span>
-                          {sess.isOpen && (
+                          {sess.isOpen ? (
                             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300">
-                              Open Now
+                              🟢 Open Now
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400">
+                              🔒 ပိတ်ထားပြီ (Closed)
                             </span>
                           )}
                         </div>
@@ -701,6 +753,31 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       {/* ===================================================================== */}
       {isInstructor && (
         <div className="space-y-6">
+          {/* Active Open Attendance Quick-Close Banner for Admin / Co-Admin */}
+          {openSessions.length > 0 && (
+            <div className="neu-card rounded-3xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ring-2 ring-emerald-400/60">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-extrabold text-xs sm:text-sm flex-wrap">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                  <span>
+                    🟢 လက်ရှိတွင် Attendance ဖွင့်ထားဆဲဖြစ်ပါသည် ({openSessions[0]?.displayDate} — {openSessions[0]?.title})
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-300">
+                  ကျောင်းသားများ ယခုချိန်တွင် မိမိတို့အကောင့်မှ Attendance နှိပ်နိုင်ပါသည်။ ပိတ်လိုပါက ညာဘက်ရှိ <strong>"Attendance ပိတ်မည်"</strong> ခလုတ်ကို နှိပ်ပါ။
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseAllOpenAttendance}
+                className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs sm:text-sm font-extrabold shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0"
+              >
+                <Lock className="w-4 h-4" />
+                <span>🔒 Attendance ပိတ်မည် (Close For All Students)</span>
+              </button>
+            </div>
+          )}
+
           {/* 1. Open New Daily Attendance Card */}
           <div className="neu-card rounded-3xl p-5 sm:p-6">
             <div className="flex items-center justify-between gap-2 mb-4">
@@ -804,22 +881,22 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                       <button
                         type="button"
                         onClick={() => handleToggleOpen(activeSession)}
-                        className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer ${
+                        className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer ${
                           activeSession.isOpen
-                            ? 'bg-emerald-50 dark:bg-emerald-950/70 border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300'
-                            : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-emerald-50'
+                            ? 'bg-rose-600 hover:bg-rose-700 border-rose-600 text-white shadow-xs'
+                            : 'bg-emerald-600 hover:bg-emerald-700 border-emerald-600 text-white shadow-xs'
                         }`}
                         title="Toggle student self check-in"
                       >
                         {activeSession.isOpen ? (
                           <>
-                            <Unlock className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>Attendance Open (ပိတ်ရန်နှိပ်ပါ)</span>
+                            <Lock className="w-3.5 h-3.5" />
+                            <span>🔒 Attendance ပိတ်မည် (Close Attendance)</span>
                           </>
                         ) : (
                           <>
-                            <Lock className="w-3.5 h-3.5 text-slate-500" />
-                            <span>Closed (ပြန်ဖွင့်ရန်နှိပ်ပါ)</span>
+                            <Unlock className="w-3.5 h-3.5" />
+                            <span>🔓 Attendance ပြန်ဖွင့်မည် (Open Attendance)</span>
                           </>
                         )}
                       </button>

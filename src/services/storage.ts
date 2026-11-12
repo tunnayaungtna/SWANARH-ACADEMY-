@@ -4272,13 +4272,16 @@ export class ClassroomDB {
               rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
               rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
               avatar: resolvedAvatar,
-              password: encryptPassword(
-                this.isRecentLocalWrite(ru.id)
-                  ? existing?.password || ru.password
-                  : ru.password || existing?.password,
-                ru.role,
-                ru.id
-              ),
+              password:
+                loggedUser && loggedUser.role === 'student' && ru.id !== loggedUser.id
+                  ? undefined
+                  : encryptPassword(
+                      this.isRecentLocalWrite(ru.id)
+                        ? existing?.password || ru.password
+                        : ru.password || existing?.password,
+                      ru.role,
+                      ru.id
+                    ),
             };
             userMap.set(ru.id, mergedProfile);
             latestAvatarByUserId.set(ru.id, resolvedAvatar);
@@ -4762,20 +4765,33 @@ export class ClassroomDB {
       const isInitialDemo = /^att-sess-\d{1,4}$/.test(att.id || '');
       const wasConfirmedInCloud = confirmedCloudAtt.has(att.id);
       const isRecentAttWrite = this.isRecentLocalWrite(att.id, 20_000);
+      const normalizedLocalAtt =
+        isInitialDemo && !remoteAttIds.has(att.id) && att.isOpen
+          ? { ...att, isOpen: false }
+          : att;
 
       if (remoteAttIds.has(att.id)) {
-        attMap.set(att.id, att);
+        attMap.set(att.id, normalizedLocalAtt);
       } else if (!isInQueriedScope) {
-        // Out of student's queried course scope: keep locally without ever re-uploading to Supabase!
-        attMap.set(att.id, att);
+        // Out of student's queried course scope: keep locally (always closed for students) without ever re-uploading to Supabase!
+        attMap.set(
+          att.id,
+          !isInstructorForAtt && normalizedLocalAtt.isOpen
+            ? { ...normalizedLocalAtt, isOpen: false }
+            : normalizedLocalAtt
+        );
       } else if (
         !cloudActive ||
-        isRecentAttWrite ||
-        (!wasConfirmedInCloud && !isInitialDemo && isInstructorForAtt)
+        (isInstructorForAtt && (isRecentAttWrite || (!wasConfirmedInCloud && !isInitialDemo)))
       ) {
-        attMap.set(att.id, att);
+        attMap.set(
+          att.id,
+          !isInstructorForAtt && normalizedLocalAtt.isOpen
+            ? { ...normalizedLocalAtt, isOpen: false }
+            : normalizedLocalAtt
+        );
         if (isRecentAttWrite && isInstructorForAtt && !isInitialDemo) {
-          attToPushToCloud.push(att);
+          attToPushToCloud.push(normalizedLocalAtt);
         }
       } else {
         newlyDiscoveredRemoteDeletions.push(att.id);
@@ -4785,7 +4801,7 @@ export class ClassroomDB {
 
     remoteAttendance.forEach((ratt) => {
       if (deletedSet.has(ratt.id) || deletedSet.has(ratt.courseId)) {
-        if (!this.purgedRemoteIds.has(ratt.id)) {
+        if (isInstructorForAtt && !this.purgedRemoteIds.has(ratt.id)) {
           this.purgedRemoteIds.add(ratt.id);
           SupabaseService.deleteAttendanceSession(ratt.id).catch(() => {});
         }
@@ -4793,61 +4809,67 @@ export class ClassroomDB {
       }
 
       const existing = attMap.get(ratt.id);
-      const isRecentOpenToggle = this.isRecentLocalWrite(`att-open:${ratt.id}`, 8_000);
+      const isRecentOpenToggle =
+        isInstructorForAtt && this.isRecentLocalWrite(`att-open:${ratt.id}`, 10_000);
       const localStatusMs = existing?.statusUpdatedAtMs || 0;
       const remoteStatusMs = ratt.statusUpdatedAtMs || 0;
 
-      // Resolve isOpen authoritatively:
-      // 1. If this device toggled Open/Close in the last 8 seconds AND its timestamp is >= remote, keep local isOpen.
-      // 2. If both have explicit statusUpdatedAtMs timestamps and local is strictly newer, keep local isOpen and push to cloud.
-      // 3. Otherwise, ALWAYS accept remote `ratt.isOpen` immediately!
-      let resolvedIsOpen = ratt.isOpen;
-      let resolvedStatusMs = remoteStatusMs || localStatusMs || undefined;
+      // Authoritative Open/Close Resolution:
+      // - Students (`!isInstructorForAtt`) MUST ALWAYS accept `Boolean(ratt.isOpen)` from Supabase unconditionally!
+      //   A student browser can NEVER override `ratt.isOpen` or push an attendance session back to Supabase.
+      // - Instructors (`isInstructorForAtt`) only keep local `existing.isOpen` if THIS specific device toggled Open/Close
+      //   within the last 10 seconds (`isRecentOpenToggle`); otherwise `Boolean(ratt.isOpen)` from Supabase always wins!
+      let resolvedIsOpen = Boolean(ratt.isOpen);
+      let resolvedStatusMs = Math.max(remoteStatusMs, localStatusMs) || undefined;
 
-      if (existing) {
-        if (isRecentOpenToggle && localStatusMs >= remoteStatusMs) {
-          resolvedIsOpen = existing.isOpen;
-          resolvedStatusMs = localStatusMs || Date.now();
-          if (existing.isOpen !== ratt.isOpen) {
-            attToPushToCloud.push({
-              ...existing,
-              statusUpdatedAtMs: resolvedStatusMs,
-            });
-          }
-        } else if (localStatusMs > 0 && remoteStatusMs > 0 && localStatusMs > remoteStatusMs) {
-          resolvedIsOpen = existing.isOpen;
-          resolvedStatusMs = localStatusMs;
-          if (existing.isOpen !== ratt.isOpen) {
-            attToPushToCloud.push({
-              ...existing,
-              statusUpdatedAtMs: resolvedStatusMs,
-            });
-          }
+      if (isInstructorForAtt && existing && isRecentOpenToggle) {
+        resolvedIsOpen = Boolean(existing.isOpen);
+        resolvedStatusMs = Math.max(localStatusMs, remoteStatusMs + 1000, Date.now());
+        if (Boolean(existing.isOpen) !== Boolean(ratt.isOpen)) {
+          attToPushToCloud.push({
+            ...existing,
+            isOpen: resolvedIsOpen,
+            statusUpdatedAtMs: resolvedStatusMs,
+          });
         }
       }
 
       // Reconcile student check-in records:
-      // Start with authoritative remote records, then overlay any student record modified on this device within the last 15s
+      // Start with authoritative remote records.
       const mergedRecords: Record<string, AttendanceRecord> = {
         ...(ratt.records || {}),
       };
 
-      if (existing?.records) {
-        for (const [stuId, localRec] of Object.entries(existing.records)) {
-          if (this.isRecentLocalWrite(`att-rec:${ratt.id}:${stuId}`, 15_000)) {
-            mergedRecords[stuId] = localRec;
+      const loggedUser = this.getCurrentUser();
+      if (!resolvedIsOpen) {
+        // Session is CLOSED: if a student had any pending local check-in/clear markers, clear them immediately
+        // unless an instructor just marked attendance on this instructor device.
+        if (loggedUser && loggedUser.role === 'student') {
+          this.clearLocalWrite(`att-rec:${ratt.id}:${loggedUser.id}`);
+          this.clearLocalWrite(`att-clear:${ratt.id}:${loggedUser.id}`);
+        } else if (isInstructorForAtt && existing?.records) {
+          for (const [stuId, localRec] of Object.entries(existing.records)) {
+            if (this.isRecentLocalWrite(`att-rec:${ratt.id}:${stuId}`, 15_000)) {
+              mergedRecords[stuId] = localRec;
+            }
           }
         }
-      }
-
-      // If a student just cleared/undid their check-in on this device within the last 15s, keep it cleared
-      const loggedUser = this.getCurrentUser();
-      if (
-        loggedUser &&
-        loggedUser.role === 'student' &&
-        this.isRecentLocalWrite(`att-clear:${ratt.id}:${loggedUser.id}`, 15_000)
-      ) {
-        delete mergedRecords[loggedUser.id];
+      } else {
+        if (existing?.records) {
+          for (const [stuId, localRec] of Object.entries(existing.records)) {
+            if (this.isRecentLocalWrite(`att-rec:${ratt.id}:${stuId}`, 15_000)) {
+              mergedRecords[stuId] = localRec;
+            }
+          }
+        }
+        // If a student just cleared/undid their check-in on this device within the last 15s while open, keep it cleared
+        if (
+          loggedUser &&
+          loggedUser.role === 'student' &&
+          this.isRecentLocalWrite(`att-clear:${ratt.id}:${loggedUser.id}`, 15_000)
+        ) {
+          delete mergedRecords[loggedUser.id];
+        }
       }
 
       attMap.set(ratt.id, {
@@ -4867,10 +4889,13 @@ export class ClassroomDB {
       (a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)
     );
 
-    if (attToPushToCloud.length > 0) {
+    if (isInstructorForAtt && attToPushToCloud.length > 0) {
       const uniqueToPush = Array.from(new Map(attToPushToCloud.map((a) => [a.id, a])).values());
       uniqueToPush.forEach((sess) => {
-        SupabaseService.upsertAttendanceSession(sess, { force: true })
+        SupabaseService.upsertAttendanceSession(sess, {
+          force: true,
+          onlyUpdateOpenState: true,
+        })
           .then((ok) => {
             if (ok) this.markAttendanceCloudConfirmed(sess.id);
           })
@@ -6291,16 +6316,20 @@ export class ClassroomDB {
           year: 'numeric',
         });
 
-    const nowMs = Date.now();
+    const maxExistingStatusMs = sessions.reduce(
+      (max, s) => Math.max(max, s.statusUpdatedAtMs || 0),
+      0
+    );
+    const nowMs = Math.max(Date.now(), maxExistingStatusMs + 1000);
     const newSession: AttendanceSession = {
-      id: `att-sess-${nowMs}`,
+      id: `att-sess-${Date.now()}`,
       courseId,
       date,
       displayDate,
       title: title.trim() || `Daily Class Check-in (${displayDate})`,
       isOpen,
       openedBy: currentUser.name,
-      createdAt: new Date(nowMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       statusUpdatedAtMs: nowMs,
       records: {},
     };
@@ -6315,6 +6344,7 @@ export class ClassroomDB {
           isOpen: false,
           statusUpdatedAtMs: nowMs,
         };
+        this.markLocalWrite(closedOld.id);
         this.markLocalWrite(`att-open:${closedOld.id}`);
         autoClosedSessions.push(closedOld);
         return closedOld;
@@ -6380,7 +6410,11 @@ export class ClassroomDB {
       INITIAL_ATTENDANCE_SESSIONS
     );
     const targetCourseId = sessions.find((s) => s.id === sessionId)?.courseId;
-    const nowMs = Date.now();
+    const maxExistingStatusMs = sessions.reduce(
+      (max, s) => Math.max(max, s.statusUpdatedAtMs || 0),
+      0
+    );
+    const nowMs = Math.max(Date.now(), maxExistingStatusMs + 1000);
     let updatedSession: AttendanceSession | null = null;
     const otherModifiedSessions: AttendanceSession[] = [];
 
@@ -6401,6 +6435,7 @@ export class ClassroomDB {
           isOpen: false,
           statusUpdatedAtMs: nowMs,
         };
+        this.markLocalWrite(closedOther.id);
         this.markLocalWrite(`att-open:${closedOther.id}`);
         otherModifiedSessions.push(closedOther);
         return closedOther;
@@ -6469,7 +6504,11 @@ export class ClassroomDB {
       STORAGE_KEYS.ATTENDANCE,
       INITIAL_ATTENDANCE_SESSIONS
     );
-    const nowMs = Date.now();
+    const maxExistingStatusMs = sessions.reduce(
+      (max, s) => Math.max(max, s.statusUpdatedAtMs || 0),
+      0
+    );
+    const nowMs = Math.max(Date.now(), maxExistingStatusMs + 1000);
     const closedList: AttendanceSession[] = [];
     const updated = sessions.map((s) => {
       if (s.courseId === courseId && s.isOpen) {
@@ -6572,6 +6611,13 @@ export class ClassroomDB {
     status: AttendanceStatus | 'clear' = 'present',
     note?: string
   ): { success: boolean; error?: string } {
+    if (!student || student.role !== 'student') {
+      return {
+        success: false,
+        error: 'ကျောင်းသားအကောင့်ဖြင့်သာ Self Check-in ပြုလုပ်နိုင်ပါသည်။',
+      };
+    }
+
     const rateCheck = this.checkRateLimit('attendance_checkin', student.id, 30, 60);
     if (!rateCheck.allowed) {
       return {
@@ -6591,7 +6637,7 @@ export class ClassroomDB {
     if (!target.isOpen) {
       return {
         success: false,
-        error: 'ဤအတန်းချိန်အတွက် Attendance ပိတ်သွားပြီဖြစ်သောကြောင့် ပြင်ဆင်၍ မရနိုင်တော့ပါ။',
+        error: '🔒 ဤအတန်းချိန်အတွက် Attendance ပိတ်သွားပြီဖြစ်သောကြောင့် နှိပ်၍ မရနိုင်တော့ပါ။ (Admin / Co-Admin ဖွင့်ပေးထားချိန်မှသာ နှိပ်နိုင်ပါသည်)',
       };
     }
 
@@ -6601,6 +6647,7 @@ export class ClassroomDB {
       return { success: false, error: 'သင်သည် ဤအတန်းတွင် စာရင်းသွင်းထားခြင်း မရှိပါ။' };
     }
 
+    const previousRecordForStudent = target.records ? target.records[student.id] : undefined;
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     let updatedSession: AttendanceSession | null = null;
     let studentRecordToSync: AttendanceRecord | null = null;
@@ -6669,17 +6716,32 @@ export class ClassroomDB {
               );
               const syncedClosed = currentSessions.map((cs) => {
                 if (cs.id === sessionId) {
+                  const revertedRecords = res.mergedRecords
+                    ? { ...res.mergedRecords }
+                    : { ...cs.records };
+                  if (!res.mergedRecords) {
+                    if (previousRecordForStudent) {
+                      revertedRecords[student.id] = previousRecordForStudent;
+                    } else {
+                      delete revertedRecords[student.id];
+                    }
+                  }
                   return {
                     ...cs,
                     isOpen: false,
                     statusUpdatedAtMs: res.remoteStatusUpdatedAtMs || Date.now(),
-                    records: res.mergedRecords || cs.records,
+                    records: revertedRecords,
                   };
                 }
                 return cs;
               });
               this.setItem(STORAGE_KEYS.ATTENDANCE, syncedClosed);
               if (typeof window !== 'undefined') {
+                window.dispatchEvent(
+                  new CustomEvent('attendance-closed-remotely', {
+                    detail: { sessionId, courseId: target.courseId },
+                  })
+                );
                 window.dispatchEvent(new Event('storage'));
               }
             } else if (res.success && res.mergedRecords) {

@@ -415,12 +415,13 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Ensure gender, address, password & rules_accepted columns exist if table was created earlier
+-- Ensure gender, address, password, rules_accepted & updated_at columns exist if table was created earlier
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS gender TEXT DEFAULT 'male';
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS address TEXT;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS password TEXT DEFAULT 'student123';
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS rules_accepted BOOLEAN DEFAULT FALSE;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS rules_accepted_at TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
 
 -- Enable Row Level Security (RLS)
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
@@ -606,11 +607,12 @@ CREATE TABLE IF NOT EXISTS public.attendance_sessions (
   date TEXT NOT NULL,
   display_date TEXT NOT NULL,
   title TEXT NOT NULL,
-  is_open BOOLEAN DEFAULT TRUE,
+  is_open BOOLEAN DEFAULT FALSE,
   opened_by TEXT NOT NULL,
   records JSONB DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE public.attendance_sessions ALTER COLUMN is_open SET DEFAULT FALSE;
 
 ALTER TABLE public.attendance_sessions ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Attendance sessions full access" ON public.attendance_sessions;
@@ -683,7 +685,9 @@ CREATE INDEX IF NOT EXISTS idx_notifications_post_id ON public.notifications (po
 CREATE INDEX IF NOT EXISTS idx_profiles_username_lower ON public.profiles (lower(username));
 CREATE INDEX IF NOT EXISTS idx_profiles_email_lower ON public.profiles (lower(email));
 CREATE INDEX IF NOT EXISTS idx_posts_course_id ON public.posts (course_id);
+CREATE INDEX IF NOT EXISTS idx_posts_course_created ON public.posts (course_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_attendance_course_id ON public.attendance_sessions (course_id);
+CREATE INDEX IF NOT EXISTS idx_attendance_course_created ON public.attendance_sessions (course_id, created_at DESC);
 
 -- Automatic Orphaned Data Cleanup & Egress Slimming (< 5.5 GB Free Plan Guard)
 DELETE FROM public.posts WHERE course_id NOT IN (SELECT id FROM public.courses);
@@ -749,8 +753,10 @@ function encodeAttendanceOpenedBy(session: AttendanceSession): string {
     session.statusUpdatedAtMs > 0
       ? Math.round(session.statusUpdatedAtMs)
       : Date.now();
-  const recCount = session.records ? Object.keys(session.records).length : 0;
-  return `${cleanOpenedBy}${ATT_STATE_MARKER_PREFIX}${session.isOpen ? '1' : '0'}~${ts}~R${recCount}`;
+  const recordsObj = session.records || {};
+  const recCount = Object.keys(recordsObj).length;
+  const recHash = computeFastStringHash(JSON.stringify(recordsObj));
+  return `${cleanOpenedBy}${ATT_STATE_MARKER_PREFIX}${session.isOpen ? '1' : '0'}~${ts}~R${recCount}_${recHash}`;
 }
 
 function decodeAttendanceOpenedBy(
@@ -761,6 +767,7 @@ function decodeAttendanceOpenedBy(
   isOpen: boolean;
   statusUpdatedAtMs?: number;
   recordCount?: number;
+  recordHash?: string;
 } {
   const str = String(rawOpenedBy || 'Instructor');
   const colIsOpen = Boolean(rawIsOpen);
@@ -768,18 +775,26 @@ function decodeAttendanceOpenedBy(
     const [cleanName, stateRaw] = str.split(ATT_STATE_MARKER_PREFIX);
     const [flagStr, tsRaw, recRaw] = (stateRaw || '').trim().split('~');
     const parsedTs = Number(tsRaw);
-    const parsedRecCount =
-      recRaw && recRaw.startsWith('R') ? Number(recRaw.slice(1)) : undefined;
+    let parsedRecCount: number | undefined;
+    let parsedRecHash: string | undefined;
+    if (recRaw && recRaw.startsWith('R')) {
+      const [cntPart, hashPart] = recRaw.slice(1).split('_');
+      const n = Number(cntPart);
+      if (Number.isFinite(n) && n >= 0) {
+        parsedRecCount = n;
+      }
+      if (hashPart) {
+        parsedRecHash = hashPart;
+      }
+    }
     const resolvedOpen =
       flagStr === '0' ? false : flagStr === '1' ? true : colIsOpen;
     return {
       openedBy: (cleanName || 'Instructor').trim() || 'Instructor',
       isOpen: resolvedOpen && colIsOpen,
       statusUpdatedAtMs: Number.isFinite(parsedTs) && parsedTs > 0 ? parsedTs : undefined,
-      recordCount:
-        typeof parsedRecCount === 'number' && Number.isFinite(parsedRecCount) && parsedRecCount >= 0
-          ? parsedRecCount
-          : undefined,
+      recordCount: parsedRecCount,
+      recordHash: parsedRecHash,
     };
   }
   return {
@@ -1972,21 +1987,26 @@ export class SupabaseService {
       isStudentLite ? `profiles:student:${options?.currentUserId}` : 'profiles:all'
     }:${useAvatarLite ? 'lite' : 'full'}`;
 
+    if (!skipDedupe) {
+      const cached = this.getCachedQuery<User[]>(cacheKey);
+      if (cached) return cached;
+    }
+
     const fetcher = async () => {
       try {
         const liteCols =
           this.profileSchemaMode === 'core'
-            ? 'id,name,username,email,role,phone,title,created_at,updated_at'
+            ? 'id,name,username,email,role,phone,title'
             : this.profileSchemaMode === 'no_password'
-            ? 'id,name,username,email,role,phone,title,gender,address,rules_accepted,rules_accepted_at,created_at,updated_at'
-            : 'id,name,username,email,role,phone,title,gender,address,password,rules_accepted,rules_accepted_at,created_at,updated_at';
+            ? 'id,name,username,email,role,phone,title,gender,address'
+            : 'id,name,username,email,role,phone,title,gender,address,password';
 
         const fullCols =
           this.profileSchemaMode === 'core'
-            ? 'id,name,username,email,role,phone,avatar,title,created_at,updated_at'
+            ? 'id,name,username,email,role,phone,avatar,title'
             : this.profileSchemaMode === 'no_password'
-            ? 'id,name,username,email,role,phone,avatar,title,gender,address,rules_accepted,rules_accepted_at,created_at,updated_at'
-            : 'id,name,username,email,role,phone,avatar,title,gender,address,password,rules_accepted,rules_accepted_at,created_at,updated_at';
+            ? 'id,name,username,email,role,phone,avatar,title,gender,address'
+            : 'id,name,username,email,role,phone,avatar,title,gender,address,password';
 
         const selectedCols: string = useAvatarLite ? liteCols : fullCols;
         let query = supabase
@@ -2009,7 +2029,12 @@ export class SupabaseService {
 
         // Fallback to core explicit columns if optional columns are missing on an older schema
         if (error) {
-          const coreFallbackCols = 'id,name,username,email,role,phone,avatar,title';
+          if (this.profileSchemaMode !== 'core') {
+            this.profileSchemaMode = 'core';
+          }
+          const coreFallbackCols = useAvatarLite
+            ? 'id,name,username,email,role,phone,title'
+            : 'id,name,username,email,role,phone,avatar,title';
           let fbQuery = supabase.from('profiles').select(coreFallbackCols);
           if (isStudentLite && options?.currentUserId) {
             const safeUid = options.currentUserId.replace(/[,()"'\\]/g, '').trim();
@@ -2092,6 +2117,7 @@ export class SupabaseService {
         if (avatarCacheChanged) {
           this.persistAssetCache();
         }
+        this.setCachedQuery(cacheKey, mapped, isStudentLite ? 25_000 : 15_000);
         return mapped;
       } catch {
         return null;
@@ -2118,7 +2144,11 @@ export class SupabaseService {
       });
     }
     const useLiteColumns = mergedBanners.size > 0;
-    return this.dedupeGet(useLiteColumns ? 'courses:lite' : 'courses:all', async () => {
+    const cacheKey = useLiteColumns ? 'courses:lite' : 'courses:all';
+    const cached = this.getCachedQuery<Course[]>(cacheKey);
+    if (cached) return cached;
+
+    return this.dedupeGet(cacheKey, async () => {
       try {
         const selectCols = useLiteColumns
           ? 'id,code,title,section,batch,description,instructor_name,instructor_email,theme_color,enrolled_student_ids,total_lessons,total_assignments,total_quizzes,created_at'
@@ -2220,6 +2250,7 @@ export class SupabaseService {
         if (bannerCacheChanged) {
           this.persistAssetCache();
         }
+        this.setCachedQuery(cacheKey, mappedCourses, 15_000);
         return mappedCourses;
       } catch {
         return null;
@@ -2642,18 +2673,20 @@ export class SupabaseService {
           const idsNeedingRecords: string[] = [];
           for (const row of rows) {
             const sId = String(row.id || '');
-            const rowIsOpen = Boolean(row.is_open);
             const decodedState = decodeAttendanceOpenedBy(
               row.opened_by as string | null,
               row.is_open
             );
+            const rowIsOpen = Boolean(row.is_open) && decodedState.isOpen;
             const localKnown = knownSessions.get(sId);
-            const localRecCount = localKnown?.records ? Object.keys(localKnown.records).length : 0;
+            const localRecObj = localKnown?.records || {};
+            const localRecCount = Object.keys(localRecObj).length;
+            const localRecHash = computeFastStringHash(JSON.stringify(localRecObj));
 
             // Fetch full `records` JSONB ONLY if:
             // 1. Session is not in local storage yet (`!localKnown`)
             // 2. Session's Open/Close state (`isOpen`) changed
-            // 3. Session's `statusUpdatedAtMs` timestamp or `recordCount` changed (updated whenever any student checks in or Admin toggles Open/Close)
+            // 3. Session's `statusUpdatedAtMs` timestamp, `recordCount`, or `recordHash` changed
             // 4. Legacy open session without `statusUpdatedAtMs` metadata
             if (
               !localKnown ||
@@ -2662,6 +2695,8 @@ export class SupabaseService {
                 localKnown.statusUpdatedAtMs !== decodedState.statusUpdatedAtMs) ||
               (decodedState.recordCount !== undefined &&
                 localRecCount !== decodedState.recordCount) ||
+              (decodedState.recordHash !== undefined &&
+                localRecHash !== decodedState.recordHash) ||
               (rowIsOpen && !decodedState.statusUpdatedAtMs)
             ) {
               idsNeedingRecords.push(sId);
@@ -2698,6 +2733,7 @@ export class SupabaseService {
             row.opened_by as string | null,
             row.is_open
           );
+          const resolvedOpenState = Boolean(row.is_open) && decodedState.isOpen;
 
           let cleanRecords: Record<string, AttendanceRecord> = {};
           if (fetchedRecordsById.has(sId)) {
@@ -2719,7 +2755,7 @@ export class SupabaseService {
             date: String(row.date || ''),
             displayDate: String(row.display_date || row.date || ''),
             title: String(row.title || 'Class Attendance'),
-            isOpen: Boolean(row.is_open),
+            isOpen: resolvedOpenState,
             openedBy: decodedState.openedBy,
             createdAt: String(row.created_at || new Date().toISOString()),
             statusUpdatedAtMs: decodedState.statusUpdatedAtMs,
@@ -3459,6 +3495,7 @@ export class SupabaseService {
         return { success: false, error: error.message };
       }
       this.recordSignature(sigKey, row);
+      this.invalidateClientCache('courses');
       this.notifyRealtimePeers('course');
       return { success: true };
     } catch (err: unknown) {
@@ -3473,6 +3510,7 @@ export class SupabaseService {
   static async deleteCourse(courseId: string): Promise<boolean> {
     try {
       this.lastUpsertSignatures.delete(`course:${courseId}`);
+      this.invalidateClientCache('courses');
       // First lookup assignment IDs and quiz IDs belonging to this course so their submissions don't become orphans
       const [assRes, quizRes] = await Promise.allSettled([
         supabase.from('assignments').select('id').eq('course_id', courseId),
@@ -3948,15 +3986,23 @@ export class SupabaseService {
           existingRow.opened_by as string | null,
           existingRow.is_open
         );
-        // Preserve caller's statusUpdatedAtMs if already >= remote, avoiding artificial timestamp inflation loops
-        resolvedStatusMs = Math.max(
-          session.statusUpdatedAtMs || Date.now(),
-          decodedExisting.statusUpdatedAtMs || 0
-        );
+        if (options?.preserveRemoteOpenState) {
+          resolvedIsOpen = Boolean(existingRow.is_open) && decodedExisting.isOpen;
+          resolvedStatusMs = decodedExisting.statusUpdatedAtMs || session.statusUpdatedAtMs || Date.now();
+        } else {
+          // Strictly increment statusUpdatedAtMs above any existing remote value so clock skew between devices never blocks Open/Close!
+          resolvedStatusMs = Math.max(
+            session.statusUpdatedAtMs || Date.now(),
+            (decodedExisting.statusUpdatedAtMs || 0) + 1000
+          );
+        }
 
-        // If remote state + records are already identical to what we would write, skip the UPSERT & Realtime broadcast completely!
+        // If remote state + records are already identical to what we would write and not forcing an explicit Open/Close update, skip UPSERT
         if (
+          !options?.onlyUpdateOpenState &&
+          !options?.force &&
           Boolean(existingRow.is_open) === resolvedIsOpen &&
+          decodedExisting.isOpen === resolvedIsOpen &&
           JSON.stringify(cleanRemoteRecords) === JSON.stringify(mergedRecords)
         ) {
           this.recordSignature(sigKey, initialRow);
@@ -3982,17 +4028,21 @@ export class SupabaseService {
         records: mergedRecords,
       };
 
+      // Clear any in-flight attendance GET deduplication so subsequent reads immediately fetch the new state
+      for (const k of Array.from(this.inflightGetRequests.keys())) {
+        if (k.startsWith('attendance:')) {
+          this.inflightGetRequests.delete(k);
+        }
+      }
+
+      let writeOk = false;
       const { error } = await supabase
         .from('attendance_sessions')
         .upsert(row, { onConflict: 'id' });
       if (!error) {
-        this.recordSignature(sigKey, row);
-        this.notifyRealtimePeers('attendance');
-        return true;
-      }
-
-      // If only updating an existing row, try targeted .update() as fallback
-      if (existingRow) {
+        writeOk = true;
+      } else if (existingRow) {
+        // If only updating an existing row, try targeted .update() as fallback
         const { error: updErr } = await supabase
           .from('attendance_sessions')
           .update({
@@ -4002,10 +4052,34 @@ export class SupabaseService {
           })
           .eq('id', session.id);
         if (!updErr) {
-          this.recordSignature(sigKey, row);
-          this.notifyRealtimePeers('attendance');
-          return true;
+          writeOk = true;
         }
+      }
+
+      // Whenever an Admin/Co-Admin closes attendance (or opens a single session for a course),
+      // guarantee that NO OTHER session in the same course remains is_open = true in Supabase SQL!
+      if (writeOk && options?.onlyUpdateOpenState && session.courseId) {
+        if (!resolvedIsOpen) {
+          await supabase
+            .from('attendance_sessions')
+            .update({ is_open: false })
+            .eq('course_id', session.courseId)
+            .neq('id', session.id)
+            .eq('is_open', true);
+        } else {
+          await supabase
+            .from('attendance_sessions')
+            .update({ is_open: false })
+            .eq('course_id', session.courseId)
+            .neq('id', session.id)
+            .eq('is_open', true);
+        }
+      }
+
+      if (writeOk) {
+        this.recordSignature(sigKey, row);
+        this.notifyRealtimePeers('attendance');
+        return true;
       }
 
       return false;
@@ -4017,10 +4091,10 @@ export class SupabaseService {
   /**
    * Atomic-style Student Check-In Sync:
    * - Fetches the latest remote attendance session row from Supabase first.
-   * - If an Admin or Co-Admin has already closed the session (`is_open === false`), rejects the check-in
-   *   and returns `closedRemotely: true` so the student's browser never re-opens a closed session!
+   * - If an Admin or Co-Admin has already closed the session (`is_open === false` or `decodedRemote.isOpen === false`),
+   *   rejects the check-in and returns `closedRemotely: true` so the student's browser never checks in to or re-opens a closed session!
    * - Updates ONLY the `records` column (merging this student's check-in with all other students' remote records)
-   *   without ever overwriting `is_open`!
+   *   and preserves the instructor's `statusUpdatedAtMs` so student phone clocks never interfere with Open/Close timestamps!
    */
   static async syncStudentCheckInToCloud(
     sessionId: string,
@@ -4058,7 +4132,7 @@ export class SupabaseService {
         }
 
         // If Admin/Co-Admin already closed this attendance session on another device, do NOT allow check-in or overwrite is_open!
-        if (!existingRow.is_open) {
+        if (!existingRow.is_open || !decodedRemote.isOpen) {
           return {
             success: false,
             closedRemotely: true,
@@ -4075,23 +4149,26 @@ export class SupabaseService {
           nextRecords[studentId] = record;
         }
 
-        const nextStatusMs = Date.now();
+        // Preserve the Instructor's statusUpdatedAtMs so student device clocks never advance or skew Open/Close timestamps!
+        const preservedStatusMs =
+          decodedRemote.statusUpdatedAtMs || fallbackSession.statusUpdatedAtMs || Date.now();
         const encodedMarker = encodeAttendanceOpenedBy({
           ...fallbackSession,
           openedBy: decodedRemote.openedBy,
           isOpen: true,
-          statusUpdatedAtMs: nextStatusMs,
+          statusUpdatedAtMs: preservedStatusMs,
           records: nextRecords,
         });
 
-        // Update `records` and `opened_by` timestamp/recordCount marker (never changing `is_open`) so delta polls detect the check-in
+        // Update `records` and `opened_by` recordHash marker ONLY while `is_open` is still true in PostgreSQL!
         const { error: updateErr } = await supabase
           .from('attendance_sessions')
           .update({
             records: nextRecords,
             opened_by: encodedMarker,
           })
-          .eq('id', sessionId);
+          .eq('id', sessionId)
+          .eq('is_open', true);
 
         if (!updateErr) {
           this.notifyRealtimePeers('attendance');
@@ -4100,16 +4177,22 @@ export class SupabaseService {
         return {
           success: !updateErr,
           remoteIsOpen: true,
-          remoteStatusUpdatedAtMs: nextStatusMs,
+          remoteStatusUpdatedAtMs: preservedStatusMs,
           mergedRecords: nextRecords,
         };
       }
 
-      // Fallback if session was not in Supabase yet
-      const ok = await this.upsertAttendanceSession(fallbackSession, {
-        preserveRemoteOpenState: true,
-      });
-      return { success: ok };
+      // If row does not exist in Supabase (e.g., deleted or unseeded demo session), students must NEVER create or re-open it!
+      if (!fetchErr && !existingRow) {
+        return {
+          success: false,
+          closedRemotely: true,
+          remoteIsOpen: false,
+          remoteStatusUpdatedAtMs: Date.now(),
+        };
+      }
+
+      return { success: false };
     } catch {
       return { success: false };
     }

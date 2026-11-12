@@ -126,9 +126,37 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   const scheduledPosts = posts.filter((p) => p.status === 'scheduled');
   const currentPinnedCount = posts.filter((p) => p.isPinned).length;
   const openAttendanceSessions = ClassroomDB.getAttendanceSessions(course.id).filter(
-    (s) => s.isOpen
+    (s) => Boolean(s.isOpen)
   );
   const [editingStreamAttIds, setEditingStreamAttIds] = useState<Record<string, boolean>>({});
+
+  // Immediately close student check-in editing UI & notify student if Admin/Co-Admin closes attendance remotely
+  useEffect(() => {
+    const handleRemoteAttendanceClosed = () => {
+      setEditingStreamAttIds({});
+      setSuccessToast(null);
+      setRateLimitError(
+        '🔒 ဆရာ (Admin / Co-Admin) မှ Attendance ပိတ်လိုက်ပြီဖြစ်သောကြောင့် နှိပ်၍ မရနိုင်တော့ပါ။'
+      );
+      setTimeout(() => setRateLimitError(null), 4500);
+      onRefresh();
+    };
+    window.addEventListener('attendance-closed-remotely', handleRemoteAttendanceClosed);
+    return () => {
+      window.removeEventListener('attendance-closed-remotely', handleRemoteAttendanceClosed);
+    };
+  }, [course.id]);
+
+  const handleStreamCloseAllAttendance = () => {
+    const closedCount = ClassroomDB.closeAllOpenAttendanceForCourse(course.id, currentUser);
+    if (closedCount > 0) {
+      setSuccessToast(
+        '🔒 Attendance ပိတ်လိုက်ပါပြီ! ကျောင်းသားအကောင့်များ အားလုံးတွင် Attendance နှိပ်၍ မရတော့ပါ။'
+      );
+      setTimeout(() => setSuccessToast(null), 3500);
+      onRefresh();
+    }
+  };
 
   const handleStreamStudentAttendance = (
     sessionId: string,
@@ -136,8 +164,10 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   ) => {
     const res = ClassroomDB.studentCheckIn(sessionId, currentUser, status);
     if (!res.success && res.error) {
+      setEditingStreamAttIds((prev) => ({ ...prev, [sessionId]: false }));
       setRateLimitError(res.error);
       setTimeout(() => setRateLimitError(null), 4000);
+      onRefresh();
       return;
     }
     setEditingStreamAttIds((prev) => ({ ...prev, [sessionId]: false }));
@@ -645,7 +675,43 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
         </div>
       </div>
 
-      {/* Live Open Attendance Banner in Stream (Students can Mark or Edit before session closes) */}
+      {/* Instructor Live Open Attendance Status & Quick-Close Banner in Stream */}
+      {isInstructor && openAttendanceSessions.length > 0 && (
+        <div className="neu-card rounded-3xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ring-2 ring-emerald-400/50">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-bold text-xs sm:text-sm flex-wrap">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+              <span>
+                🟢 လက်ရှိ Attendance ဖွင့်ထားဆဲ ({openAttendanceSessions[0]?.displayDate} — {openAttendanceSessions[0]?.title})
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              ကျောင်းသားများ ယခုချိန်တွင် Attendance နှိပ်နိုင်ပါသည်။ ပိတ်လိုပါက ညာဘက်ရှိ ခလုတ်ကို နှိပ်ပါ။
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {onOpenAttendance && (
+              <button
+                type="button"
+                onClick={onOpenAttendance}
+                className="px-3 py-2 rounded-xl bg-white dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 text-xs font-bold transition-all cursor-pointer"
+              >
+                Roll Call စာရင်းကြည့်ရန် →
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleStreamCloseAllAttendance}
+              className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              <span>🔒 Attendance ပိတ်မည် (Close Now)</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Live Open Attendance Banner in Stream (Students can Mark or Edit ONLY while session is open) */}
       {!isInstructor && openAttendanceSessions.length > 0 && (
         <div className="neu-card rounded-3xl p-4 sm:p-5 space-y-3 ring-2 ring-emerald-400/50">
           <div className="flex items-center justify-between gap-2 flex-wrap">
