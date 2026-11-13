@@ -93,14 +93,29 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       onRefresh();
     };
     syncNow();
-    const timer = setInterval(syncNow, 25_000);
+    const hasOpenNow = sessions.some((s) => s.isOpen);
+    const pollIntervalMs = isInstructor && hasOpenNow ? 20_000 : 90_000;
+    const timer = setInterval(syncNow, pollIntervalMs);
     window.addEventListener('attendance-closed-remotely', handleRemoteClosed);
     return () => {
       mounted = false;
       clearInterval(timer);
       window.removeEventListener('attendance-closed-remotely', handleRemoteClosed);
     };
-  }, [course.id]);
+  }, [course.id, isInstructor, sessions.some((s) => s.isOpen)]);
+
+  // Open sessions where student can self check-in
+  const openSessions = sessions.filter((s) => s.isOpen);
+
+  // Automatically switch selectedSessionId to the active open session when one opens
+  useEffect(() => {
+    if (openSessions.length > 0) {
+      const currentSelected = sessions.find((s) => s.id === selectedSessionId);
+      if (!currentSelected || !currentSelected.isOpen) {
+        setSelectedSessionId(openSessions[0].id);
+      }
+    }
+  }, [openSessions.map((s) => s.id).join(','), sessions.length]);
 
   // Prioritize any currently OPEN session if selectedSessionId is not set or no longer exists
   const activeSession: AttendanceSession | undefined =
@@ -108,15 +123,8 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
     sessions.find((s) => s.isOpen) ||
     sessions[0];
 
-  // Enrolled students list (O(1) Set lookup for 2,000+ students)
-  const allUsers = ClassroomDB.getAllUsers();
-  const enrolledSet = new Set(course.enrolledStudentIds);
-  const enrolledStudents = allUsers.filter(
-    (u) => u.role === 'student' && enrolledSet.has(u.id)
-  );
-
-  // Open sessions where student can self check-in
-  const openSessions = sessions.filter((s) => s.isOpen);
+  // Enrolled students list (includes any student who checked into a session for this course)
+  const enrolledStudents = ClassroomDB.getEnrolledStudentsForCourse(course, sessions);
 
   const handleCreateSession = (e: React.FormEvent) => {
     e.preventDefault();
@@ -224,7 +232,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   // Breakdown of Checked-in vs Not Checked-in students for activeSession
   const checkedInStudents = activeSession
     ? enrolledStudents.filter((stu) => {
-        const rec = activeSession.records[stu.id];
+        const rec = ClassroomDB.getStudentAttendanceRecord(activeSession, stu);
         return Boolean(
           rec && (rec.status === 'present' || rec.status === 'late' || rec.status === 'excused')
         );
@@ -233,22 +241,30 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
 
   const notCheckedInStudents = activeSession
     ? enrolledStudents.filter((stu) => {
-        const rec = activeSession.records[stu.id];
+        const rec = ClassroomDB.getStudentAttendanceRecord(activeSession, stu);
         return !rec || rec.status === 'absent';
       })
     : [];
 
   const presentStudentsCount = activeSession
-    ? enrolledStudents.filter((stu) => activeSession.records[stu.id]?.status === 'present').length
+    ? enrolledStudents.filter(
+        (stu) => ClassroomDB.getStudentAttendanceRecord(activeSession, stu)?.status === 'present'
+      ).length
     : 0;
   const lateStudentsCount = activeSession
-    ? enrolledStudents.filter((stu) => activeSession.records[stu.id]?.status === 'late').length
+    ? enrolledStudents.filter(
+        (stu) => ClassroomDB.getStudentAttendanceRecord(activeSession, stu)?.status === 'late'
+      ).length
     : 0;
   const excusedStudentsCount = activeSession
-    ? enrolledStudents.filter((stu) => activeSession.records[stu.id]?.status === 'excused').length
+    ? enrolledStudents.filter(
+        (stu) => ClassroomDB.getStudentAttendanceRecord(activeSession, stu)?.status === 'excused'
+      ).length
     : 0;
   const absentMarkedStudentsCount = activeSession
-    ? enrolledStudents.filter((stu) => activeSession.records[stu.id]?.status === 'absent').length
+    ? enrolledStudents.filter(
+        (stu) => ClassroomDB.getStudentAttendanceRecord(activeSession, stu)?.status === 'absent'
+      ).length
     : 0;
 
   const filteredRollCallStudents = enrolledStudents.filter((stu) => {
@@ -260,7 +276,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       if (!matchName && !matchUser && !matchPhone) return false;
     }
     if (!activeSession || rollCallFilter === 'all') return true;
-    const rec = activeSession.records[stu.id];
+    const rec = ClassroomDB.getStudentAttendanceRecord(activeSession, stu);
     const isCheckedIn = Boolean(
       rec && (rec.status === 'present' || rec.status === 'late' || rec.status === 'excused')
     );
@@ -282,7 +298,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
         : `⏳ Attendance မနှိပ်ရသေးသူများ စာရင်း — ${course.code} (${activeSession.displayDate} - ${activeSession.title}) [${targetList.length}/${enrolledStudents.length} ဦး]`;
 
     const lines = targetList.map((stu, idx) => {
-      const rec = activeSession.records[stu.id];
+      const rec = ClassroomDB.getStudentAttendanceRecord(activeSession, stu);
       const statusText =
         mode === 'checked_in'
           ? rec?.status === 'late'
@@ -479,7 +495,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
 
               <div className="space-y-2.5">
                 {openSessions.map((sess) => {
-                  const myRecord = sess.records[currentUser.id];
+                  const myRecord = ClassroomDB.getStudentAttendanceRecord(sess, currentUser);
                   const isEditingThis = Boolean(editingStudentSessionIds[sess.id]);
 
                   return (
@@ -654,7 +670,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
             ) : (
               <div className="divide-y divide-slate-100 dark:divide-slate-800">
                 {sessions.map((sess) => {
-                  const myRec = sess.records[currentUser.id];
+                  const myRec = ClassroomDB.getStudentAttendanceRecord(sess, currentUser);
                   return (
                     <div
                       key={sess.id}
@@ -1180,7 +1196,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                 ) : (
                   <div className="divide-y divide-slate-100 dark:divide-slate-800">
                     {filteredRollCallStudents.slice(0, visibleRosterLimit).map((stu, idx) => {
-                      const rec = activeSession.records[stu.id];
+                      const rec = ClassroomDB.getStudentAttendanceRecord(activeSession, stu);
                       const currentStatus: AttendanceStatus = rec?.status || 'absent';
                       const isCheckedIn = Boolean(
                         rec &&

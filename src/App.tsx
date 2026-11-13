@@ -188,6 +188,21 @@ export default function App() {
         return;
       }
 
+      // 1a. Fast path for Student Attendance Check-in events:
+      // Students never need to re-query Supabase when other classmates click "Present".
+      // Only Admin / Co-Admin sync the updated roster (using throttled non-forced sync).
+      if (kinds.length === 1 && kinds[0] === 'attendance_checkin') {
+        if (loggedUser.role === 'student') {
+          return;
+        }
+        ClassroomDB.syncAttendanceFromCloud(false).then((attChanged) => {
+          if (attChanged) {
+            refreshData();
+          }
+        });
+        return;
+      }
+
       // 1b. Fast path for Private Note events (students ignore notes belonging to other students)
       if (kinds.length === 1 && kinds[0] === 'private_note') {
         if (
@@ -253,9 +268,16 @@ export default function App() {
             tableSet.add('notifications');
           } else if (k === 'attendance') {
             tableSet.add('attendance');
+          } else if (k === 'attendance_checkin') {
+            if (loggedUser.role !== 'student') {
+              tableSet.add('attendance');
+            }
           } else if (k === 'profile') {
             tableSet.add('profiles');
           }
+        }
+        if (tableSet.size === 0) {
+          return;
         }
         if (tableSet.size > 0) {
           ClassroomDB.pullFromSupabase({
@@ -284,12 +306,22 @@ export default function App() {
     window.addEventListener('storage', handleStorageChange);
 
     let lastUserInteractionAt = Date.now();
+    let lastWakeUpPullAt = Date.now();
     const markUserActive = () => {
-      const wasIdle = Date.now() - lastUserInteractionAt > 90_000;
-      lastUserInteractionAt = Date.now();
-      if (wasIdle && document.visibilityState === 'visible' && navigator.onLine !== false) {
+      const now = Date.now();
+      const wasIdle = now - lastUserInteractionAt > 180_000;
+      lastUserInteractionAt = now;
+      SupabaseService.resumeRealtimeConnection();
+      if (
+        wasIdle &&
+        now - lastWakeUpPullAt >= 45_000 &&
+        document.visibilityState === 'visible' &&
+        navigator.onLine !== false &&
+        !isLowBandwidthRef.current
+      ) {
         const loggedUser = ClassroomDB.getCurrentUser();
         if (loggedUser) {
+          lastWakeUpPullAt = now;
           ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
             if (updated || !ClassroomDB.getCurrentUser()) {
               refreshData();
@@ -303,8 +335,7 @@ export default function App() {
     window.addEventListener('touchstart', markUserActive, { passive: true });
 
     // When refreshing, focusing, or reopening the installed PWA from the background,
-    // pull latest delta updates (throttled to 20s to avoid redundant focus/visibility bursts)
-    let lastWakeUpPullAt = 0;
+    // pull latest delta updates (throttled to 45s to avoid redundant focus/visibility bursts)
     const handleWakeUp = () => {
       if (document.visibilityState === 'hidden') {
         return;
@@ -312,6 +343,7 @@ export default function App() {
       if (document.visibilityState === 'visible') {
         const now = Date.now();
         lastUserInteractionAt = now;
+        SupabaseService.resumeRealtimeConnection();
         ClassroomDB.purgeExpiredComments();
         ClassroomDB.purgeExpiredAuditLogs(false);
         ClassroomDB.checkAndPublishDueScheduledPosts();
@@ -319,7 +351,7 @@ export default function App() {
 
         const loggedUser = ClassroomDB.getCurrentUser();
         if (loggedUser && navigator.onLine !== false && !isLowBandwidthRef.current) {
-          if (now - lastWakeUpPullAt >= 30_000) {
+          if (now - lastWakeUpPullAt >= 45_000) {
             lastWakeUpPullAt = now;
             ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
               if (updated || !ClassroomDB.getCurrentUser()) {
@@ -334,25 +366,29 @@ export default function App() {
     window.addEventListener('pageshow', handleWakeUp);
     window.addEventListener('focus', handleWakeUp);
 
-    // 120s (2-minute) delta background sync fallback when user is active (Realtime WebSocket handles instant <320ms updates)
+    // 240s (4-minute) delta background sync fallback when user is active;
+    // automatically pauses idle student WebSocket connections after 3 minutes of inactivity to save Realtime Messages & Connections
     const syncInterval = setInterval(() => {
-      const isUserActive = Date.now() - lastUserInteractionAt <= 360_000;
+      const idleMs = Date.now() - lastUserInteractionAt;
+      const isUserActive = idleMs <= 180_000;
+      const loggedUser = ClassroomDB.getCurrentUser();
+      if (!loggedUser || (!isUserActive && loggedUser.role === 'student')) {
+        SupabaseService.pauseRealtimeConnection();
+        return;
+      }
       if (
         isUserActive &&
         document.visibilityState === 'visible' &&
         navigator.onLine !== false &&
         !isLowBandwidthRef.current
       ) {
-        const loggedUser = ClassroomDB.getCurrentUser();
-        if (loggedUser) {
-          ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
-            if (updated || !ClassroomDB.getCurrentUser()) {
-              refreshData();
-            }
-          });
-        }
+        ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
+          if (updated || !ClassroomDB.getCurrentUser()) {
+            refreshData();
+          }
+        });
       }
-    }, 120_000);
+    }, 240_000);
 
     // 20-second local timer to immediately auto-publish any due scheduled posts
     const scheduledPostsInterval = setInterval(() => {

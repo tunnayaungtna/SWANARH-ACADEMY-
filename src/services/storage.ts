@@ -159,31 +159,36 @@ export class ClassroomDB {
     try {
       localStorage.setItem(key, JSON.stringify(value));
     } catch (e) {
-      // Self-healing QuotaExceededError recovery so newly created posts NEVER fail to save in localStorage
+      // Self-healing QuotaExceededError recovery so Attendance check-ins and Posts NEVER fail to save in localStorage
       try {
         const logs = this.getItem<AuditLogEntry[]>(STORAGE_KEYS.AUDIT_LOGS, []);
-        if (logs.length > 80) {
-          const trimmedLogs = logs.slice(0, 80);
+        if (logs.length > 60) {
+          const trimmedLogs = logs.slice(0, 60);
           this.memoryCache.set(STORAGE_KEYS.AUDIT_LOGS, trimmedLogs);
           localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(trimmedLogs));
         }
-        if (key === STORAGE_KEYS.POSTS && Array.isArray(value)) {
-          const compactedPosts = (value as unknown as CoursePost[]).map((p, idx) => {
+        const rawPostsForCompact =
+          key === STORAGE_KEYS.POSTS && Array.isArray(value)
+            ? (value as unknown as CoursePost[])
+            : this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, []);
+        if (Array.isArray(rawPostsForCompact) && rawPostsForCompact.length > 0) {
+          const compactedPosts = rawPostsForCompact.map((p, idx) => {
             if (!p || !Array.isArray(p.attachments) || p.attachments.length === 0) return p;
-            // Keep full data URLs for the newest 3 posts if small; compact oversized data URLs (>250KB)
             return {
               ...p,
               attachments: p.attachments.map((att) => {
-                if (att && att.url && att.url.startsWith('data:') && (idx >= 3 || att.url.length > 250_000)) {
+                if (att && att.url && att.url.startsWith('data:') && (idx >= 2 || att.url.length > 180_000)) {
                   return { ...att, url: '#attachment' };
                 }
                 return att;
               }),
             };
           });
-          this.memoryCache.set(key, compactedPosts as unknown as T);
-          localStorage.setItem(key, JSON.stringify(compactedPosts));
-          return;
+          this.memoryCache.set(STORAGE_KEYS.POSTS, compactedPosts);
+          localStorage.setItem(STORAGE_KEYS.POSTS, JSON.stringify(compactedPosts));
+          if (key === STORAGE_KEYS.POSTS) {
+            return;
+          }
         }
         localStorage.setItem(key, JSON.stringify(value));
       } catch {
@@ -532,6 +537,73 @@ export class ClassroomDB {
     const ts = map[id];
     if (!ts) return false;
     return Date.now() - ts < maxAgeMs;
+  }
+
+  private static lastCheckInHealBySession = new Map<string, number>();
+
+  /**
+   * Persistent Local Student Self-Check-In Ledger:
+   * Ensures that once a student clicks "Present" / "Late" / "Excused" on their phone,
+   * their check-in record is permanently remembered in localStorage and NEVER wiped out
+   * by stale caches or concurrent student check-in race conditions.
+   */
+  private static saveStudentLocalCheckIn(
+    sessionId: string,
+    studentId: string,
+    record: AttendanceRecord
+  ): void {
+    if (!sessionId || !studentId || !record) return;
+    try {
+      const raw = localStorage.getItem('classroom_my_attendance_checkins_v1');
+      const map: Record<string, { record: AttendanceRecord; updatedAtMs: number }> = raw
+        ? JSON.parse(raw)
+        : {};
+      map[`${sessionId}:${studentId}`] = {
+        record,
+        updatedAtMs: Date.now(),
+      };
+      // Keep ledger bounded to latest 300 entries
+      const keys = Object.keys(map);
+      if (keys.length > 300) {
+        keys.slice(0, keys.length - 300).forEach((k) => delete map[k]);
+      }
+      localStorage.setItem('classroom_my_attendance_checkins_v1', JSON.stringify(map));
+    } catch {
+      // ignore
+    }
+  }
+
+  private static clearStudentLocalCheckIn(sessionId: string, studentId: string): void {
+    if (!sessionId || !studentId) return;
+    try {
+      const raw = localStorage.getItem('classroom_my_attendance_checkins_v1');
+      if (!raw) return;
+      const map: Record<string, { record: AttendanceRecord; updatedAtMs: number }> =
+        JSON.parse(raw);
+      const key = `${sessionId}:${studentId}`;
+      if (key in map) {
+        delete map[key];
+        localStorage.setItem('classroom_my_attendance_checkins_v1', JSON.stringify(map));
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  private static getStudentLocalCheckIn(
+    sessionId: string,
+    studentId: string
+  ): { record: AttendanceRecord; updatedAtMs: number } | null {
+    if (!sessionId || !studentId || typeof window === 'undefined') return null;
+    try {
+      const raw = localStorage.getItem('classroom_my_attendance_checkins_v1');
+      if (!raw) return null;
+      const map: Record<string, { record: AttendanceRecord; updatedAtMs: number }> =
+        JSON.parse(raw);
+      return map[`${sessionId}:${studentId}`] || null;
+    } catch {
+      return null;
+    }
   }
 
   private static isInitialDemoUserId(id: string): boolean {
@@ -962,7 +1034,10 @@ export class ClassroomDB {
       this.setItem(STORAGE_KEYS.AUDIT_LOGS, activeLogs);
     }
 
-    if (expiredIds.length > 0 || forceCloudCleanup) {
+    const currentActor = this.getCurrentUser();
+    const isInstructorActor =
+      currentActor?.role === 'admin' || currentActor?.role === 'co_admin';
+    if (isInstructorActor && (expiredIds.length > 0 || forceCloudCleanup)) {
       try {
         SupabaseService.purgeExpiredAuditLogs(expiredIds, forceCloudCleanup).catch(() => {});
       } catch {
@@ -1307,11 +1382,15 @@ export class ClassroomDB {
       }
       this.markLocalWrite(unlockedUser.id);
       try {
-        SupabaseService.upsertProfile(unlockedUser).catch(() => {});
+        SupabaseService.upsertProfile(unlockedUser, false, {
+          silentRealtime: true,
+          sessionLockOnly: true,
+        }).catch(() => {});
       } catch {
         // ignore
       }
     }
+    SupabaseService.pauseRealtimeConnection();
   }
 
   private static forceLocalLogoutWithReason(reason: string): void {
@@ -1525,7 +1604,20 @@ export class ClassroomDB {
       };
     }
 
-    const sessionToken = this.generateAndSaveSessionToken();
+    const isSameStudentDeviceSession =
+      matched.role === 'student' &&
+      activeDev === localDeviceId &&
+      Boolean(matched.activeSessionToken);
+    const sessionToken = isSameStudentDeviceSession
+      ? matched.activeSessionToken!
+      : this.generateAndSaveSessionToken();
+    if (isSameStudentDeviceSession) {
+      try {
+        localStorage.setItem(STORAGE_KEYS.SESSION_TOKEN, sessionToken);
+      } catch {
+        // ignore
+      }
+    }
     const stampedUser: User = {
       ...matched,
       avatar: matched.role !== 'admin' ? '' : matched.avatar,
@@ -1533,7 +1625,9 @@ export class ClassroomDB {
         ? {
             activeDeviceId: localDeviceId,
             activeSessionToken: sessionToken,
-            sessionUpdatedAtMs: Date.now(),
+            sessionUpdatedAtMs: isSameStudentDeviceSession
+              ? matched.sessionUpdatedAtMs || Date.now()
+              : Date.now(),
           }
         : {}),
     };
@@ -1549,11 +1643,18 @@ export class ClassroomDB {
 
     this.markLocalWrite(stampedUser.id);
     this.setCurrentUser(stampedUser);
+    SupabaseService.resumeRealtimeConnection();
     if (stampedUser.role === 'student') {
-      try {
-        SupabaseService.upsertProfile(stampedUser).catch(() => {});
-      } catch {
-        // ignore
+      // Only write to Supabase if the student's activeDeviceId actually changed (saves 1 SQL UPDATE on every repeat login!)
+      if (!isSameStudentDeviceSession) {
+        try {
+          SupabaseService.upsertProfile(stampedUser, false, {
+            silentRealtime: true,
+            sessionLockOnly: true,
+          }).catch(() => {});
+        } catch {
+          // ignore
+        }
       }
     } else if (stampedUser.role === 'admin' || stampedUser.role === 'co_admin') {
       this.recordAuditLog({
@@ -2706,6 +2807,132 @@ export class ClassroomDB {
       }));
   }
 
+  /**
+   * Checks if a student is enrolled in a course by ID or by matching username/email alias,
+   * automatically healing `course.enrolledStudentIds` if an alias ID was used.
+   */
+  static isStudentEnrolledInCourse(course: Course | undefined | null, student: User | undefined | null): boolean {
+    if (!course || !student) return false;
+    if (student.role === 'admin' || student.role === 'co_admin') return true;
+    const enrolledIds = course.enrolledStudentIds || [];
+    if (enrolledIds.includes(student.id)) return true;
+
+    const stuUName = (student.username || '').trim().replace(/^@+/, '').toLowerCase();
+    const stuEmail = (student.email || '').trim().toLowerCase();
+    if (!stuUName && !stuEmail) return false;
+
+    const allUsers = this.getItem<User[]>(STORAGE_KEYS.USERS, INITIAL_USERS);
+    const enrolledSet = new Set(enrolledIds);
+    const matchedAlias = allUsers.some((u) => {
+      if (!u || !enrolledSet.has(u.id)) return false;
+      const uName = (u.username || '').trim().replace(/^@+/, '').toLowerCase();
+      const uEmail = (u.email || '').trim().toLowerCase();
+      return (
+        (stuUName && stuUName !== 'user' && uName === stuUName) ||
+        (stuEmail && uEmail === stuEmail)
+      );
+    });
+    return matchedAlias;
+  }
+
+  /**
+   * Resilient lookup for a student's attendance record in a session:
+   * 1. Direct lookup by `student.id` in `session.records`
+   * 2. For the currently logged-in student: fallback to persistent local check-in ledger (`classroom_my_attendance_checkins_v1`)
+   * 3. Alias fallback by matching `studentId` or normalized `studentName`
+   */
+  static getStudentAttendanceRecord(
+    session: AttendanceSession | undefined | null,
+    student: Pick<User, 'id' | 'name'> | string | undefined | null
+  ): AttendanceRecord | undefined {
+    if (!session || !student) return undefined;
+    const records = session.records || {};
+    const stuId = typeof student === 'string' ? student : student.id;
+    const stuName = typeof student === 'string' ? '' : (student.name || '').trim().toLowerCase();
+
+    if (stuId && records[stuId]) {
+      return records[stuId];
+    }
+
+    // Check persistent local self-check-in ledger if not explicitly cleared
+    if (stuId && !this.isRecentLocalWrite(`att-clear:${session.id}:${stuId}`, 60_000)) {
+      const localSaved = this.getStudentLocalCheckIn(session.id, stuId);
+      if (localSaved?.record) {
+        return localSaved.record;
+      }
+    }
+
+    for (const rec of Object.values(records)) {
+      if (!rec || typeof rec !== 'object' || !('status' in rec)) continue;
+      if (stuId && rec.studentId === stuId) {
+        return rec;
+      }
+      if (stuName && (rec.studentName || '').trim().toLowerCase() === stuName) {
+        return rec;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Returns all enrolled students for a course, including any student who has checked into one of the course's
+   * attendance sessions even if their profile hasn't been synced into `localStorage.USERS` yet.
+   */
+  static getEnrolledStudentsForCourse(
+    course: Course | undefined | null,
+    sessions?: AttendanceSession[]
+  ): User[] {
+    if (!course) return [];
+    const deletedSet = new Set(this.getDeletedIds());
+    const allUsers = this.getAllUsers();
+    const enrolledSet = new Set(course.enrolledStudentIds || []);
+    const resultMap = new Map<string, User>();
+    const seenNames = new Set<string>();
+
+    for (const u of allUsers) {
+      if (u && u.role === 'student' && !deletedSet.has(u.id) && enrolledSet.has(u.id)) {
+        resultMap.set(u.id, u);
+        if (u.name) seenNames.add(u.name.trim().toLowerCase());
+      }
+    }
+
+    // Also include any student who has an active check-in record in the course's sessions
+    // so an Instructor NEVER misses a student who clicked "Present" even before profile catalog refresh
+    const sessionList = sessions || this.getAttendanceSessions(course.id);
+    for (const sess of sessionList) {
+      if (!sess?.records) continue;
+      for (const [recKey, rec] of Object.entries(sess.records)) {
+        if (!rec || typeof rec !== 'object' || !('status' in rec)) continue;
+        const sid = rec.studentId || recKey;
+        if (!sid || sid === '__session_meta__' || deletedSet.has(sid) || resultMap.has(sid)) {
+          continue;
+        }
+        const existingUser = allUsers.find((u) => u.id === sid && u.role === 'student');
+        if (existingUser) {
+          resultMap.set(sid, existingUser);
+          if (existingUser.name) seenNames.add(existingUser.name.trim().toLowerCase());
+        } else if (
+          rec.studentName &&
+          !seenNames.has(rec.studentName.trim().toLowerCase()) &&
+          (enrolledSet.has(sid) || rec.status === 'present' || rec.status === 'late' || rec.status === 'excused')
+        ) {
+          seenNames.add(rec.studentName.trim().toLowerCase());
+          resultMap.set(sid, {
+            id: sid,
+            name: rec.studentName,
+            username: sid.replace(/^user-(stu-)?/, ''),
+            email: '',
+            phone: '',
+            role: 'student',
+            avatar: '',
+          });
+        }
+      }
+    }
+
+    return Array.from(resultMap.values());
+  }
+
   // Strict Course & Class Access Control (RLS simulation)
   static getCourses(currentUser: User): Course[] {
     const deletedSet = new Set(this.getDeletedIds());
@@ -2717,7 +2944,7 @@ export class ClassroomDB {
       return allCourses;
     }
     // Strict Visibility Rule: Students MUST ONLY see and access courses they are officially enrolled in.
-    return allCourses.filter((course) => course.enrolledStudentIds.includes(currentUser.id));
+    return allCourses.filter((course) => this.isStudentEnrolledInCourse(course, currentUser));
   }
 
   static getCourseById(courseId: string, currentUser: User): { course: Course | null; error?: string } {
@@ -2731,7 +2958,7 @@ export class ClassroomDB {
       return { course: null, error: 'Course not found.' };
     }
     // RLS check: Admins & Co-admins can access all courses
-    if (currentUser.role === 'student' && !course.enrolledStudentIds.includes(currentUser.id)) {
+    if (currentUser.role === 'student' && !this.isStudentEnrolledInCourse(course, currentUser)) {
       return {
         course: null,
         error: `403 Forbidden: Row-Level Security policy "Enrolled students only" denied access to course "${course.title}".`,
@@ -3206,7 +3433,7 @@ export class ClassroomDB {
         continue;
       }
       const cleanEnrolled = (c.enrolledStudentIds || []).filter(
-        (stuId) => validUserIds.has(stuId) && !deletedSet.has(stuId)
+        (stuId) => Boolean(stuId) && !deletedSet.has(stuId)
       );
       if (cleanEnrolled.length !== (c.enrolledStudentIds || []).length) {
         localCleaned += (c.enrolledStudentIds || []).length - cleanEnrolled.length;
@@ -3221,7 +3448,7 @@ export class ClassroomDB {
     }
     const validCourseIds = new Set(validCourses.map((c) => c.id));
 
-    // 2. Clean orphaned posts (and likes/comments from deleted users)
+    // 2. Clean orphaned posts (and likes/comments from explicitly deleted users)
     const rawPosts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, INITIAL_POSTS);
     let postsMutated = false;
     const validPosts: CoursePost[] = [];
@@ -3232,9 +3459,9 @@ export class ClassroomDB {
         postsMutated = true;
         continue;
       }
-      const cleanLikes = (p.likes || []).filter((uId) => validUserIds.has(uId));
+      const cleanLikes = (p.likes || []).filter((uId) => Boolean(uId) && !deletedSet.has(uId));
       const cleanComments = (p.comments || []).filter(
-        (cm) => cm && cm.id && !deletedSet.has(cm.id) && validUserIds.has(cm.authorId)
+        (cm) => cm && cm.id && !deletedSet.has(cm.id) && !deletedSet.has(cm.authorId)
       );
       if (
         cleanLikes.length !== (p.likes || []).length ||
@@ -3272,7 +3499,7 @@ export class ClassroomDB {
         s.id &&
         !deletedSet.has(s.id) &&
         validAssignmentIds.has(s.assignmentId) &&
-        validUserIds.has(s.studentId) &&
+        !deletedSet.has(s.studentId) &&
         (!s.courseId || validCourseIds.has(s.courseId))
     );
     if (validSubmissions.length !== rawSubmissions.length) {
@@ -3301,7 +3528,7 @@ export class ClassroomDB {
         qs.id &&
         !deletedSet.has(qs.id) &&
         validQuizIds.has(qs.quizId) &&
-        validUserIds.has(qs.studentId) &&
+        !deletedSet.has(qs.studentId) &&
         (!qs.courseId || validCourseIds.has(qs.courseId))
     );
     if (validQuizSubs.length !== rawQuizSubs.length) {
@@ -3309,7 +3536,7 @@ export class ClassroomDB {
       this.setItem(STORAGE_KEYS.QUIZ_SUBMISSIONS, validQuizSubs);
     }
 
-    // 5. Clean orphaned attendance sessions & records for deleted students
+    // 5. Clean orphaned attendance sessions & records ONLY for explicitly deleted students
     const rawAttendance = this.getItem<AttendanceSession[]>(
       STORAGE_KEYS.ATTENDANCE,
       INITIAL_ATTENDANCE_SESSIONS
@@ -3324,7 +3551,7 @@ export class ClassroomDB {
       }
       const records = sess.records || {};
       const recordKeys = Object.keys(records);
-      const orphanRecordKeys = recordKeys.filter((stuId) => !validUserIds.has(stuId));
+      const orphanRecordKeys = recordKeys.filter((stuId) => deletedSet.has(stuId));
       if (orphanRecordKeys.length > 0) {
         const cleanRecords = { ...records };
         orphanRecordKeys.forEach((k) => delete cleanRecords[k]);
@@ -3827,9 +4054,9 @@ export class ClassroomDB {
     const isBackground = Boolean(options?.background);
     const targetTables = options?.tables && options.tables.length > 0 ? new Set(options.tables) : null;
     const now = Date.now();
-    const COOLDOWN_MS = 20_000; // 20s delta cooldown (Realtime WebSocket handles live <300ms pushes)
-    const CATALOG_TTL_MS = 300_000; // 5-minute catalog TTL for full profiles, assignments & quizzes in background polls
-    const MIN_FORCE_GAP_MS = 3_500; // Prevent back-to-back duplicate { force: true } pulls within 3.5s (e.g., Login -> App mount)
+    const COOLDOWN_MS = 35_000; // 35s delta cooldown (Realtime WebSocket handles live <350ms instructor pushes)
+    const CATALOG_TTL_MS = 600_000; // 10-minute catalog TTL for full profiles, assignments & quizzes in background polls
+    const MIN_FORCE_GAP_MS = 4_000; // Prevent back-to-back duplicate { force: true } pulls within 4s (e.g., Login -> App mount)
 
     if (!targetTables) {
       if (onlyProfiles && !force && now - this.lastProfilePullAt < COOLDOWN_MS) {
@@ -3908,9 +4135,21 @@ export class ClassroomDB {
               (isStudentLightweight && u.role === 'student' && u.id !== loggedUser?.id)
             ) {
               userMap.set(u.id, u);
-              if (isUnconfirmedNewUser && !remoteProfileIds.has(u.id)) {
+              // Only Admin/Co-Admin with a recent local write should ever push an unconfirmed user to Supabase
+              if (
+                !isStudentLightweight &&
+                loggedUser &&
+                (loggedUser.role === 'admin' || loggedUser.role === 'co_admin') &&
+                isUnconfirmedNewUser &&
+                this.isRecentLocalWrite(u.id) &&
+                !remoteProfileIds.has(u.id)
+              ) {
                 try {
-                  SupabaseService.upsertProfile(u, true).catch(() => {});
+                  SupabaseService.upsertProfile(u, false)
+                    .then((res) => {
+                      if (res.success) this.markUserCloudConfirmed([u.id]);
+                    })
+                    .catch(() => {});
                 } catch {
                   // ignore
                 }
@@ -4074,7 +4313,19 @@ export class ClassroomDB {
         const wantAssignments = targetTables ? targetTables.has('assignments') : shouldFetchCatalog;
         const wantQuizzes = targetTables ? targetTables.has('quizzes') : shouldFetchCatalog;
         const wantAttendance = targetTables ? targetTables.has('attendance') : true;
-        const wantNotifications = targetTables ? targetTables.has('notifications') : true;
+        // On background polls for students, skip querying notifications table every time since 30-min post notifications are synthesized locally from posts
+        const wantNotifications = targetTables
+          ? targetTables.has('notifications')
+          : !isBackground || !isStudentLightweight || shouldFetchCatalog;
+        const shouldCheckStudentSessionLock =
+          !wantProfiles &&
+          !targetTables &&
+          Boolean(loggedUser && loggedUser.role === 'student') &&
+          now - this.lastProfilePullAt >= 180_000;
+        if (shouldCheckStudentSessionLock) {
+          this.lastProfilePullAt = now;
+          this.savePullTimestampsToCache();
+        }
 
         const [
           remoteProfiles,
@@ -4107,7 +4358,8 @@ export class ClassroomDB {
             ? SupabaseService.getRemoteAttendanceSessions(
                 studentScopedCourseIds,
                 knownAttendanceMap,
-                force && Boolean(targetTables?.has('attendance'))
+                force && Boolean(targetTables?.has('attendance')),
+                loggedUser?.role === 'student' ? loggedUser.id : undefined
               )
             : Promise.resolve(null),
           wantNotifications && loggedUser
@@ -4119,11 +4371,7 @@ export class ClassroomDB {
                 courseIds: studentScopedCourseIds,
               })
             : Promise.resolve(null),
-          !wantProfiles &&
-          !targetTables &&
-          loggedUser &&
-          loggedUser.role === 'student' &&
-          now - this.lastProfilePullAt >= 45_000
+          shouldCheckStudentSessionLock && loggedUser
             ? SupabaseService.getRemoteProfileByIdentifier(loggedUser.username || loggedUser.email, false)
             : Promise.resolve(null),
         ]);
@@ -4134,7 +4382,7 @@ export class ClassroomDB {
         // If a student was just enrolled into a new classroom by Admin/Co-Admin, immediately fetch posts & attendance for their updated course list!
         if (loggedUser && loggedUser.role === 'student' && remoteCourses) {
           const updatedStudentCourseIds = remoteCourses
-            .filter((rc) => !deletedSet.has(rc.id) && rc.enrolledStudentIds.includes(loggedUser.id))
+            .filter((rc) => !deletedSet.has(rc.id) && this.isStudentEnrolledInCourse(rc, loggedUser))
             .map((rc) => rc.id);
           const prevSet = new Set(studentScopedCourseIds || []);
           const hasNewlyEnrolledCourse = updatedStudentCourseIds.some((id) => !prevSet.has(id));
@@ -4142,7 +4390,12 @@ export class ClassroomDB {
             studentScopedCourseIds = updatedStudentCourseIds;
             const [refetchedPosts, refetchedAtt] = await Promise.all([
               SupabaseService.getRemotePosts(studentScopedCourseIds, knownPostsMap),
-              SupabaseService.getRemoteAttendanceSessions(studentScopedCourseIds, knownAttendanceMap),
+              SupabaseService.getRemoteAttendanceSessions(
+                studentScopedCourseIds,
+                knownAttendanceMap,
+                false,
+                loggedUser.id
+              ),
             ]);
             if (refetchedPosts) remotePosts = refetchedPosts;
             if (refetchedAtt) remoteAttendance = refetchedAtt;
@@ -4238,9 +4491,21 @@ export class ClassroomDB {
               (isStudentLightweight && u.role === 'student' && u.id !== loggedUser?.id)
             ) {
               userMap.set(u.id, u);
-              if (cloudActive && isUnconfirmedNewUser && !remoteProfileIds.has(u.id)) {
+              if (
+                cloudActive &&
+                !isStudentLightweight &&
+                loggedUser &&
+                (loggedUser.role === 'admin' || loggedUser.role === 'co_admin') &&
+                isUnconfirmedNewUser &&
+                this.isRecentLocalWrite(u.id) &&
+                !remoteProfileIds.has(u.id)
+              ) {
                 try {
-                  SupabaseService.upsertProfile(u, true).catch(() => {});
+                  SupabaseService.upsertProfile(u, false)
+                    .then((res) => {
+                      if (res.success) this.markUserCloudConfirmed([u.id]);
+                    })
+                    .catch(() => {});
                 } catch {
                   // ignore
                 }
@@ -4255,7 +4520,7 @@ export class ClassroomDB {
 
           remoteProfiles.forEach((ru) => {
             if (deletedSet.has(ru.id)) {
-              if (!this.purgedRemoteIds.has(ru.id)) {
+              if (!isStudentLightweight && !this.purgedRemoteIds.has(ru.id)) {
                 this.purgedRemoteIds.add(ru.id);
                 SupabaseService.deleteProfile(ru.id, ru.username, ru.email).catch(() => {});
               }
@@ -4347,7 +4612,10 @@ export class ClassroomDB {
               }
               this.markLocalWrite(claimedUser.id);
               this.setCurrentUser(claimedUser);
-              SupabaseService.upsertProfile(claimedUser).catch(() => {});
+              SupabaseService.upsertProfile(claimedUser, false, {
+                silentRealtime: true,
+                sessionLockOnly: true,
+              }).catch(() => {});
             } else if (
               remoteDevId === 'LOGGED_OUT' &&
               !this.isRecentLocalWrite(loggedUser.id)
@@ -4389,7 +4657,7 @@ export class ClassroomDB {
 
           remoteCourses.forEach((rc) => {
             if (deletedSet.has(rc.id)) {
-              if (!this.purgedRemoteIds.has(rc.id)) {
+              if (!isStudentLightweight && !this.purgedRemoteIds.has(rc.id)) {
                 this.purgedRemoteIds.add(rc.id);
                 SupabaseService.deleteCourse(rc.id).catch(() => {});
               }
@@ -4463,7 +4731,7 @@ export class ClassroomDB {
 
           remotePosts.forEach((rp) => {
             if (rp.id === 'post-103' || deletedSet.has(rp.id) || deletedSet.has(rp.courseId)) {
-              if (!this.purgedRemoteIds.has(rp.id)) {
+              if (!isStudentLightweight && !this.purgedRemoteIds.has(rp.id)) {
                 this.purgedRemoteIds.add(rp.id);
                 SupabaseService.deletePost(rp.id).catch(() => {});
               }
@@ -4847,40 +5115,90 @@ export class ClassroomDB {
       }
 
       // Reconcile student check-in records:
-      // Start with authoritative remote records.
+      // Start with authoritative remote records and union any known valid student check-ins so concurrent writes NEVER drop a student!
       const mergedRecords: Record<string, AttendanceRecord> = {
         ...(ratt.records || {}),
       };
 
       const loggedUser = this.getCurrentUser();
       if (!resolvedIsOpen) {
-        // Session is CLOSED: if a student had any pending local check-in/clear markers, clear them immediately
-        // unless an instructor just marked attendance on this instructor device.
+        // Session is CLOSED: if a student had already checked in before close, preserve their check-in record
+        // unless an instructor explicitly marked them or the student had cleared it.
         if (loggedUser && loggedUser.role === 'student') {
           this.clearLocalWrite(`att-rec:${ratt.id}:${loggedUser.id}`);
           this.clearLocalWrite(`att-clear:${ratt.id}:${loggedUser.id}`);
+          const savedLocal = this.getStudentLocalCheckIn(ratt.id, loggedUser.id);
+          const existingMyRec = existing?.records?.[loggedUser.id] || savedLocal?.record;
+          if (existingMyRec && !mergedRecords[loggedUser.id]) {
+            mergedRecords[loggedUser.id] = existingMyRec;
+          }
         } else if (isInstructorForAtt && existing?.records) {
           for (const [stuId, localRec] of Object.entries(existing.records)) {
-            if (this.isRecentLocalWrite(`att-rec:${ratt.id}:${stuId}`, 15_000)) {
+            if (
+              this.isRecentLocalWrite(`att-rec:${ratt.id}:${stuId}`, 60_000) ||
+              (!mergedRecords[stuId] &&
+                localRec &&
+                (localRec.status === 'present' ||
+                  localRec.status === 'late' ||
+                  localRec.status === 'excused'))
+            ) {
               mergedRecords[stuId] = localRec;
             }
           }
         }
       } else {
+        // Session is OPEN: preserve all existing check-in records and heal any concurrent cloud overwrite
         if (existing?.records) {
           for (const [stuId, localRec] of Object.entries(existing.records)) {
-            if (this.isRecentLocalWrite(`att-rec:${ratt.id}:${stuId}`, 15_000)) {
+            if (
+              this.isRecentLocalWrite(`att-rec:${ratt.id}:${stuId}`, 120_000) ||
+              (!mergedRecords[stuId] &&
+                localRec &&
+                (localRec.status === 'present' ||
+                  localRec.status === 'late' ||
+                  localRec.status === 'excused'))
+            ) {
               mergedRecords[stuId] = localRec;
             }
           }
         }
-        // If a student just cleared/undid their check-in on this device within the last 15s while open, keep it cleared
-        if (
-          loggedUser &&
-          loggedUser.role === 'student' &&
-          this.isRecentLocalWrite(`att-clear:${ratt.id}:${loggedUser.id}`, 15_000)
-        ) {
-          delete mergedRecords[loggedUser.id];
+
+        if (loggedUser && loggedUser.role === 'student') {
+          const isClearedRecently = this.isRecentLocalWrite(
+            `att-clear:${ratt.id}:${loggedUser.id}`,
+            60_000
+          );
+          if (isClearedRecently) {
+            delete mergedRecords[loggedUser.id];
+          } else {
+            const savedLocal = this.getStudentLocalCheckIn(ratt.id, loggedUser.id);
+            const myLocalRec = savedLocal?.record || existing?.records?.[loggedUser.id];
+            const remoteMyRec = ratt.records?.[loggedUser.id];
+            if (myLocalRec && remoteMyRec?.checkedInBy !== 'instructor') {
+              mergedRecords[loggedUser.id] = myLocalRec;
+              // If Supabase is missing our check-in (e.g., clobbered by another student's concurrent check-in),
+              // automatically re-sync our check-in to Supabase!
+              if (!remoteMyRec || remoteMyRec.status !== myLocalRec.status) {
+                const lastHeal = this.lastCheckInHealBySession.get(ratt.id) || 0;
+                if (Date.now() - lastHeal > 8_000) {
+                  this.lastCheckInHealBySession.set(ratt.id, Date.now());
+                  const healSession: AttendanceSession = {
+                    ...existing,
+                    ...ratt,
+                    isOpen: true,
+                    statusUpdatedAtMs: resolvedStatusMs,
+                    records: mergedRecords,
+                  };
+                  SupabaseService.syncStudentCheckInToCloud(
+                    ratt.id,
+                    loggedUser.id,
+                    myLocalRec,
+                    healSession
+                  ).catch(() => {});
+                }
+              }
+            }
+          }
         }
       }
 
@@ -4924,7 +5242,7 @@ export class ClassroomDB {
 
   /**
    * Fast, lightweight live Attendance sync from Supabase (called while viewing Attendance or Dashboard)
-   * with a 7s deduplication cooldown and course scoping for students so Egress remains minimal.
+   * with a 12s deduplication cooldown and course scoping for students so Egress remains minimal.
    */
   private static activeAttendanceSyncPromise: Promise<boolean> | null = null;
   private static lastAttendanceSyncAt = 0;
@@ -4950,7 +5268,7 @@ export class ClassroomDB {
         const enrolledIdsForStudent =
           loggedUser && loggedUser.role === 'student'
             ? currentCourses
-                .filter((c) => c.enrolledStudentIds.includes(loggedUser.id))
+                .filter((c) => this.isStudentEnrolledInCourse(c, loggedUser))
                 .map((c) => c.id)
             : undefined;
         const studentScopedCourseIds =
@@ -4979,7 +5297,8 @@ export class ClassroomDB {
         const remoteAttendance = await SupabaseService.getRemoteAttendanceSessions(
           studentScopedCourseIds,
           knownAttendanceMap,
-          force
+          force,
+          loggedUser?.role === 'student' ? loggedUser.id : undefined
         );
         if (!remoteAttendance) return false;
         const cloudActive =
@@ -5159,29 +5478,35 @@ export class ClassroomDB {
     );
     this.setItem(STORAGE_KEYS.POSTS, sortedPosts);
 
-    const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
-    autoPublishedList.forEach((ap) => {
-      this.unmarkDeletedId(ap.id);
-      this.markLocalWrite(ap.id);
-      const targetCourse = allCourses.find((c) => c.id === ap.courseId);
-      try {
-        SupabaseService.upsertPost(ap, targetCourse)
-          .then((ok) => {
-            if (ok) this.markPostCloudConfirmed(ap.id);
-          })
-          .catch(() => {});
-      } catch {
-        // ignore
-      }
-      if (targetCourse && (ap.authorRole === 'admin' || ap.authorRole === 'co_admin')) {
-        this.notifyEnrolledStudentsOfCoursePost(
-          targetCourse,
-          ap,
-          ap.authorName,
-          ap.authorRole
-        );
-      }
-    });
+    const currentLogged = this.getCurrentUser();
+    const isInstructor = Boolean(
+      currentLogged && (currentLogged.role === 'admin' || currentLogged.role === 'co_admin')
+    );
+    if (isInstructor) {
+      const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+      autoPublishedList.forEach((ap) => {
+        this.unmarkDeletedId(ap.id);
+        this.markLocalWrite(ap.id);
+        const targetCourse = allCourses.find((c) => c.id === ap.courseId);
+        try {
+          SupabaseService.upsertPost(ap, targetCourse)
+            .then((ok) => {
+              if (ok) this.markPostCloudConfirmed(ap.id);
+            })
+            .catch(() => {});
+        } catch {
+          // ignore
+        }
+        if (targetCourse && (ap.authorRole === 'admin' || ap.authorRole === 'co_admin')) {
+          this.notifyEnrolledStudentsOfCoursePost(
+            targetCourse,
+            ap,
+            ap.authorName,
+            ap.authorRole
+          );
+        }
+      });
+    }
 
     return true;
   }
@@ -5850,7 +6175,11 @@ export class ClassroomDB {
       this.setItem(STORAGE_KEYS.POSTS, updatedPosts);
     }
 
-    if (postsWithPurgedComments.length > 0) {
+    const currentLogged = this.getCurrentUser();
+    const isInstructor = Boolean(
+      currentLogged && (currentLogged.role === 'admin' || currentLogged.role === 'co_admin')
+    );
+    if (isInstructor && postsWithPurgedComments.length > 0) {
       const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
       postsWithPurgedComments.forEach((cleanedPost) => {
         this.markLocalWrite(cleanedPost.id);
@@ -6754,10 +7083,20 @@ export class ClassroomDB {
       };
     }
 
-    // Verify student is enrolled in the course
-    const access = this.getCourseById(target.courseId, student);
-    if (!access.course) {
-      return { success: false, error: 'သင်သည် ဤအတန်းတွင် စာရင်းသွင်းထားခြင်း မရှိပါ။' };
+    // Verify student is enrolled in the course (or heal alias enrollment if course exists)
+    const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const parentCourse = allCourses.find((c) => c.id === target.courseId);
+    if (parentCourse && !parentCourse.enrolledStudentIds.includes(student.id)) {
+      if (this.isStudentEnrolledInCourse(parentCourse, student)) {
+        const healedCourses = allCourses.map((c) =>
+          c.id === parentCourse.id
+            ? { ...c, enrolledStudentIds: [...c.enrolledStudentIds, student.id] }
+            : c
+        );
+        this.setItem(STORAGE_KEYS.COURSES, healedCourses);
+      } else {
+        return { success: false, error: 'သင်သည် ဤအတန်းတွင် စာရင်းသွင်းထားခြင်း မရှိပါ။' };
+      }
     }
 
     const previousRecordForStudent = target.records ? target.records[student.id] : undefined;
@@ -6802,20 +7141,23 @@ export class ClassroomDB {
     if (status === 'clear') {
       this.clearLocalWrite(`att-rec:${sessionId}:${student.id}`);
       this.markLocalWrite(`att-clear:${sessionId}:${student.id}`);
-    } else {
+      this.clearStudentLocalCheckIn(sessionId, student.id);
+    } else if (studentRecordToSync) {
       this.clearLocalWrite(`att-clear:${sessionId}:${student.id}`);
       this.markLocalWrite(`att-rec:${sessionId}:${student.id}`);
+      this.saveStudentLocalCheckIn(sessionId, student.id, studentRecordToSync);
     }
 
     this.setItem(STORAGE_KEYS.ATTENDANCE, updated);
 
     if (updatedSession) {
       const fallbackSess = updatedSession as AttendanceSession;
+      const expectedRecord = studentRecordToSync;
       try {
         SupabaseService.syncStudentCheckInToCloud(
           sessionId,
           student.id,
-          studentRecordToSync,
+          expectedRecord,
           fallbackSess
         )
           .then((res) => {
@@ -6823,6 +7165,11 @@ export class ClassroomDB {
               // Session was already closed by Admin/Co-Admin in Supabase! Revert local check-in and mark session closed
               this.clearLocalWrite(`att-rec:${sessionId}:${student.id}`);
               this.clearLocalWrite(`att-clear:${sessionId}:${student.id}`);
+              if (!previousRecordForStudent) {
+                this.clearStudentLocalCheckIn(sessionId, student.id);
+              } else {
+                this.saveStudentLocalCheckIn(sessionId, student.id, previousRecordForStudent);
+              }
               const currentSessions = this.getItem<AttendanceSession[]>(
                 STORAGE_KEYS.ATTENDANCE,
                 INITIAL_ATTENDANCE_SESSIONS
@@ -6859,6 +7206,32 @@ export class ClassroomDB {
               }
             } else if (res.success && res.mergedRecords) {
               this.markAttendanceCloudConfirmed(sessionId);
+              const currentSessions = this.getItem<AttendanceSession[]>(
+                STORAGE_KEYS.ATTENDANCE,
+                INITIAL_ATTENDANCE_SESSIONS
+              );
+              const nextSynced = currentSessions.map((cs) => {
+                if (cs.id === sessionId) {
+                  const nextRecs: Record<string, AttendanceRecord> = {
+                    ...cs.records,
+                    ...res.mergedRecords,
+                  };
+                  if (expectedRecord === null) {
+                    delete nextRecs[student.id];
+                  } else {
+                    nextRecs[student.id] = expectedRecord;
+                  }
+                  return {
+                    ...cs,
+                    records: nextRecs,
+                  };
+                }
+                return cs;
+              });
+              this.setItem(STORAGE_KEYS.ATTENDANCE, nextSynced);
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new Event('storage'));
+              }
             }
           })
           .catch(() => {});
@@ -7020,7 +7393,7 @@ export class ClassroomDB {
     let weightedAttended = 0;
 
     sessions.forEach((sess) => {
-      const rec = sess.records[studentId];
+      const rec = this.getStudentAttendanceRecord(sess, studentId);
       const status = rec?.status || (sess.isOpen ? 'absent' : 'absent');
       if (rec?.status === 'present') {
         presentCount++;
@@ -7062,15 +7435,11 @@ export class ClassroomDB {
     const course = allCourses.find((c) => c.id === courseId);
     if (!course) return { success: false };
 
-    const allUsers = this.getAllUsers();
-    const enrolledStudents = allUsers.filter(
-      (u) => u.role === 'student' && course.enrolledStudentIds.includes(u.id)
-    );
-
     // Chronological order of sessions for column headers
     const sessions = [...this.getAttendanceSessions(course.id)].sort((a, b) =>
       a.date.localeCompare(b.date)
     );
+    const enrolledStudents = this.getEnrolledStudentsForCourse(course, sessions);
 
     const escapeCsv = (val: string | number | undefined) => {
       let str = String(val ?? '');
@@ -7107,7 +7476,7 @@ export class ClassroomDB {
     const rows = enrolledStudents.map((stu) => {
       const stats = this.getStudentAttendanceStats(course.id, stu.id);
       const sessionCells = sessions.map((sess) => {
-        const rec = sess.records[stu.id];
+        const rec = this.getStudentAttendanceRecord(sess, stu);
         if (!rec) return 'Absent';
         const statusLabel =
           rec.status.charAt(0).toUpperCase() + rec.status.slice(1);
@@ -7372,7 +7741,10 @@ export class ClassroomDB {
       this.setItem(STORAGE_KEYS.NOTIFICATIONS, activeNotifs);
     }
 
-    if (expiredIds.length > 0 || forceCloudCleanup) {
+    const currentActor = this.getCurrentUser();
+    const isInstructorActor =
+      currentActor?.role === 'admin' || currentActor?.role === 'co_admin';
+    if (isInstructorActor && (expiredIds.length > 0 || forceCloudCleanup)) {
       try {
         SupabaseService.purgeExpiredNotifications(expiredIds, forceCloudCleanup).catch(() => {});
       } catch {
@@ -7610,7 +7982,11 @@ export class ClassroomDB {
       return n;
     });
     this.setItem(STORAGE_KEYS.NOTIFICATIONS, updated);
-    if (targetDirectNotif) {
+    if (
+      targetDirectNotif &&
+      activeUser &&
+      (activeUser.role === 'admin' || activeUser.role === 'co_admin')
+    ) {
       try {
         SupabaseService.upsertNotifications([targetDirectNotif]).catch(() => {});
       } catch {
@@ -7678,7 +8054,11 @@ export class ClassroomDB {
       return n;
     });
     this.setItem(STORAGE_KEYS.NOTIFICATIONS, updated);
-    if (updatedForUser.length > 0) {
+    if (
+      updatedForUser.length > 0 &&
+      user &&
+      (user.role === 'admin' || user.role === 'co_admin')
+    ) {
       try {
         SupabaseService.upsertNotifications(updatedForUser).catch(() => {});
       } catch {

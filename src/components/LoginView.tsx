@@ -122,7 +122,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
         return;
       }
       onLoginSuccess(res.user);
-      ClassroomDB.pullFromSupabase({ force: true }).catch(() => {});
+      ClassroomDB.pullFromSupabase().catch(() => {});
     }
   };
 

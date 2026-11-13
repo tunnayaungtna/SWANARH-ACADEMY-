@@ -44,23 +44,32 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
   >('all');
 
   useEffect(() => {
+    if (!isInstructor) {
+      // Students receive instant Realtime broadcasts when an Instructor opens/closes Attendance,
+      // and App.tsx already handles background delta sync — no extra student interval needed!
+      return;
+    }
     let mounted = true;
     const syncNow = () => {
       if (document.visibilityState === 'visible' && navigator.onLine !== false) {
-        ClassroomDB.syncAttendanceFromCloud().then((changed) => {
-          if (mounted && changed) {
-            onRefresh();
-          }
-        });
+        const hasOpen = courses.some((c) =>
+          ClassroomDB.getAttendanceSessions(c.id).some((s) => s.isOpen)
+        );
+        if (hasOpen) {
+          ClassroomDB.syncAttendanceFromCloud().then((changed) => {
+            if (mounted && changed) {
+              onRefresh();
+            }
+          });
+        }
       }
     };
-    syncNow();
-    const timer = setInterval(syncNow, 60_000);
+    const timer = setInterval(syncNow, 45_000);
     return () => {
       mounted = false;
       clearInterval(timer);
     };
-  }, [courses.length]);
+  }, [isInstructor, courses.length]);
 
   if (courses.length === 0) return null;
 
@@ -164,7 +173,9 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
         course.id,
         currentUser.id
       );
-      const myRecord = openSession ? openSession.records[currentUser.id] : undefined;
+      const myRecord = openSession
+        ? ClassroomDB.getStudentAttendanceRecord(openSession, currentUser)
+        : undefined;
       const isMarkedPresent =
         myRecord?.status === 'present' || myRecord?.status === 'late';
 
@@ -395,8 +406,9 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
   // =========================================================================
   const activeCourseSessions = ClassroomDB.getAttendanceSessions(activeCourse.id);
   const activeOpenSession = activeCourseSessions.find((s) => s.isOpen);
-  const enrolledStudentsInActive = allUsers.filter(
-    (u) => u.role === 'student' && activeCourse.enrolledStudentIds.includes(u.id)
+  const enrolledStudentsInActive = ClassroomDB.getEnrolledStudentsForCourse(
+    activeCourse,
+    activeCourseSessions
   );
 
   return (
@@ -444,9 +456,7 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
           const sessions = ClassroomDB.getAttendanceSessions(course.id);
           const openSess = sessions.find((s) => s.isOpen);
           const isSelected = course.id === activeCourse.id;
-          const enrolledList = allUsers.filter(
-            (u) => u.role === 'student' && course.enrolledStudentIds.includes(u.id)
-          );
+          const enrolledList = ClassroomDB.getEnrolledStudentsForCourse(course, sessions);
           const avgAttendance =
             enrolledList.length > 0
               ? Math.round(
@@ -460,7 +470,7 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
 
           const checkedInCount = openSess
             ? Object.values(openSess.records).filter(
-                (r) => r.status === 'present' || r.status === 'late'
+                (r) => r.status === 'present' || r.status === 'late' || r.status === 'excused'
               ).length
             : 0;
 
@@ -587,7 +597,7 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
               const latestSess = activeOpenSession || activeCourseSessions[0];
               const checkedCount = latestSess
                 ? enrolledStudentsInActive.filter((s) => {
-                    const r = latestSess.records[s.id];
+                    const r = ClassroomDB.getStudentAttendanceRecord(latestSess, s);
                     return Boolean(
                       r && (r.status === 'present' || r.status === 'late' || r.status === 'excused')
                     );
@@ -596,7 +606,7 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
               const notCheckedCount = enrolledStudentsInActive.length - checkedCount;
               const filteredDashStudents = enrolledStudentsInActive.filter((s) => {
                 if (!latestSess || dashboardRosterFilter === 'all') return true;
-                const r = latestSess.records[s.id];
+                const r = ClassroomDB.getStudentAttendanceRecord(latestSess, s);
                 const isChk = Boolean(
                   r && (r.status === 'present' || r.status === 'late' || r.status === 'excused')
                 );
@@ -670,7 +680,9 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
                             activeCourse.id,
                             stu.id
                           );
-                          const latestRec = latestSess?.records[stu.id];
+                          const latestRec = latestSess
+                            ? ClassroomDB.getStudentAttendanceRecord(latestSess, stu)
+                            : undefined;
                           const isCheckedIn = Boolean(
                             latestRec &&
                               (latestRec.status === 'present' ||

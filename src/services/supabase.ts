@@ -128,7 +128,36 @@ type AutoRouteType = 'direct' | 'same_origin_proxy' | 'sg_cloud_relay';
 
 let activeWinningRoute: AutoRouteType | null = null;
 let activeWinningRouteTimestamp = 0;
-const ROUTE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const ROUTE_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const WINNING_ROUTE_STORAGE_KEY = 'classroom_winning_route_v1';
+
+if (typeof window !== 'undefined') {
+  try {
+    const savedRoute = sessionStorage.getItem(WINNING_ROUTE_STORAGE_KEY) as AutoRouteType | null;
+    if (
+      savedRoute === 'direct' ||
+      savedRoute === 'same_origin_proxy' ||
+      savedRoute === 'sg_cloud_relay'
+    ) {
+      activeWinningRoute = savedRoute;
+      activeWinningRouteTimestamp = Date.now();
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function saveWinningRoute(route: AutoRouteType): void {
+  activeWinningRoute = route;
+  activeWinningRouteTimestamp = Date.now();
+  if (typeof window !== 'undefined') {
+    try {
+      sessionStorage.setItem(WINNING_ROUTE_STORAGE_KEY, route);
+    } catch {
+      // ignore
+    }
+  }
+}
 
 function getCandidateRoutesForHost(): AutoRouteType[] {
   if (typeof window === 'undefined') return ['direct'];
@@ -266,126 +295,52 @@ const geoResilientSupabaseFetch: typeof fetch = async (input, init) => {
     now - activeWinningRouteTimestamp < ROUTE_CACHE_TTL_MS &&
     baseCandidates.includes(activeWinningRoute);
 
-  // If we already verified the fastest route for this user's ISP, try it first with a 1.4s hedge timer
-  if (hasValidCachedWinner && activeWinningRoute) {
-    const primaryRoute = activeWinningRoute;
-    const backupRoute = baseCandidates.find((r) => r !== primaryRoute) || 'direct';
-    try {
-      const primaryUrl = buildRouteUrl(rawUrl, primaryRoute);
-      const res = await fetchSingleRouteWithTimeout(
-        primaryUrl,
-        applyActiveProjectHeaders(init, primaryRoute),
-        4500
-      );
-      if (primaryRoute === 'same_origin_proxy' && (res.status === 404 || res.status === 405)) {
-        throw new Error('Same-origin proxy not mounted');
-      }
-      activeWinningRouteTimestamp = Date.now();
-      return res;
-    } catch {
-      const backupUrl = buildRouteUrl(rawUrl, backupRoute);
-      const backupRes = await fetchSingleRouteWithTimeout(
-        backupUrl,
-        applyActiveProjectHeaders(init, backupRoute),
-        8000
-      );
-      activeWinningRoute = backupRoute;
-      activeWinningRouteTimestamp = Date.now();
-      return backupRes;
-    }
-  }
+  // Sequential primary -> backup failover (never fires duplicate parallel requests to Supabase!)
+  const primaryRoute =
+    hasValidCachedWinner && activeWinningRoute ? activeWinningRoute : baseCandidates[0];
+  const backupRoute = baseCandidates.find((r) => r !== primaryRoute) || 'direct';
 
-  // First connection or expired route cache:
-  // Race both routes automatically (giving primary a 250ms head start for mutations, or parallel for GET/HEAD)
-  const method = (init?.method || 'GET').toUpperCase();
-  const isIdempotent = method === 'GET' || method === 'HEAD' || method === 'OPTIONS';
-
-  if (isIdempotent && baseCandidates.length > 1) {
-    const raceControllers = baseCandidates.map(() => new AbortController());
-    try {
-      const winner = await Promise.any(
-        baseCandidates.map(async (route, idx) => {
-          const url = buildRouteUrl(rawUrl, route);
-          const res = await fetchSingleRouteWithTimeout(
-            url,
-            applyActiveProjectHeaders(init, route),
-            7500,
-            raceControllers[idx].signal
-          );
-          if (route === 'same_origin_proxy' && (res.status === 404 || res.status === 405)) {
-            throw new Error('Same-origin proxy unavailable');
-          }
-          return { route, res, idx };
-        })
-      );
-
-      // Cancel the slower route immediately so bandwidth isn't wasted
-      raceControllers.forEach((ctrl, idx) => {
-        if (idx !== winner.idx) ctrl.abort();
-      });
-
-      activeWinningRoute = winner.route;
-      activeWinningRouteTimestamp = Date.now();
-      return winner.res;
-    } catch {
-      // Fallback final attempt
-      const fallbackRoute = baseCandidates[0];
-      const fallbackUrl = buildRouteUrl(rawUrl, fallbackRoute);
-      return fetch(fallbackUrl, applyActiveProjectHeaders(init, fallbackRoute));
-    }
-  }
-
-  // For non-GET requests when route isn't cached yet: try primary with fast 2.2s failover to backup
-  const primaryRoute = baseCandidates[0];
-  const backupRoute = baseCandidates[1] || 'direct';
   try {
     const primaryUrl = buildRouteUrl(rawUrl, primaryRoute);
     const res = await fetchSingleRouteWithTimeout(
       primaryUrl,
       applyActiveProjectHeaders(init, primaryRoute),
-      2200
+      hasValidCachedWinner ? 4500 : 3200
     );
     if (primaryRoute === 'same_origin_proxy' && (res.status === 404 || res.status === 405)) {
-      throw new Error('Same-origin proxy unavailable');
+      throw new Error('Same-origin proxy not mounted');
     }
-    activeWinningRoute = primaryRoute;
-    activeWinningRouteTimestamp = Date.now();
+    saveWinningRoute(primaryRoute);
     return res;
   } catch {
     const backupUrl = buildRouteUrl(rawUrl, backupRoute);
     const backupRes = await fetchSingleRouteWithTimeout(
       backupUrl,
       applyActiveProjectHeaders(init, backupRoute),
-      8500
+      8000
     );
-    activeWinningRoute = backupRoute;
-    activeWinningRouteTimestamp = Date.now();
+    saveWinningRoute(backupRoute);
     return backupRes;
   }
 };
 
-// Initialize Supabase Client with Automatic Geo-Resilient VPN-Free Fetch
+// Initialize Supabase Client with Automatic Geo-Resilient VPN-Free Fetch & Low-Overhead Realtime Heartbeat
 export const supabase = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.publishableKey, {
   auth: {
     persistSession: false,
     autoRefreshToken: false,
     detectSessionInUrl: false,
   },
+  realtime: {
+    params: {
+      eventsPerSecond: 4,
+    },
+    heartbeatIntervalMs: 60_000,
+  },
   global: {
     fetch: geoResilientSupabaseFetch,
   },
 });
-
-// Silently probe and lock onto the fastest unblocked route in the background on startup
-if (typeof window !== 'undefined') {
-  setTimeout(() => {
-    supabase
-      .from('profiles')
-      .select('id', { head: true })
-      .limit(1)
-      .then(() => {}, () => {});
-  }, 10);
-}
 
 /**
  * Production-ready PostgreSQL SQL schema and RLS policies for Supabase
@@ -990,6 +945,16 @@ export class SupabaseService {
   private static pendingKinds = new Set<string>();
   private static pendingTargetUserIds = new Set<string>();
   private static ignoredRealtimeDeleteIds = new Set<string>();
+  // Outbound broadcast coalescer & visibility auto-pause to keep Realtime Messages < 5% of quota
+  private static outboundBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
+  private static pendingOutboundKinds = new Set<string>();
+  private static pendingOutboundTargetUserIds = new Set<string>();
+  private static pendingOutboundDeletedIds = new Set<string>();
+  private static pendingOutboundDeletedUsernames = new Set<string>();
+  private static pendingOutboundDeletedEmails = new Set<string>();
+  private static lastBroadcastSentByKind = new Map<string, number>();
+  private static visibilityListenerRegistered = false;
+  private static hiddenDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   private static loadCloudCleanupTimestamps(): void {
     if (
@@ -1042,6 +1007,42 @@ export class SupabaseService {
     );
   }
 
+  private static getLoggedUserRole(): UserRole | null {
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = localStorage.getItem('classroom_current_user');
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { role?: UserRole };
+      if (parsed?.role === 'admin' || parsed?.role === 'co_admin' || parsed?.role === 'student') {
+        return parsed.role;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  static pauseRealtimeConnection(): void {
+    if (this.hiddenDisconnectTimer) {
+      clearTimeout(this.hiddenDisconnectTimer);
+      this.hiddenDisconnectTimer = null;
+    }
+    if (this.activeRealtimeChannel) {
+      try {
+        supabase.removeChannel(this.activeRealtimeChannel).catch(() => {});
+      } catch {
+        // ignore
+      }
+      this.activeRealtimeChannel = null;
+    }
+  }
+
+  static resumeRealtimeConnection(): void {
+    if (!this.activeRealtimeChannel && this.realtimeListeners.size > 0) {
+      this.ensureRealtimeChannel();
+    }
+  }
+
   private static ensureRealtimeChannel(): void {
     if (typeof window === 'undefined') return;
     if (!this.localBroadcastChannel && typeof BroadcastChannel !== 'undefined') {
@@ -1050,6 +1051,7 @@ export class SupabaseService {
         this.localBroadcastChannel.onmessage = (ev) => {
           const data = (ev?.data || {}) as {
             kind?: string;
+            kinds?: string[];
             targetUserIds?: string[];
             deletedIds?: string[];
             deletedUsernames?: string[];
@@ -1061,8 +1063,34 @@ export class SupabaseService {
         // ignore
       }
     }
+    if (!this.visibilityListenerRegistered && typeof document !== 'undefined') {
+      this.visibilityListenerRegistered = true;
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          if (this.hiddenDisconnectTimer) clearTimeout(this.hiddenDisconnectTimer);
+          // Disconnect hidden background tabs after 15s to save Realtime Concurrent Connections & Heartbeat Messages
+          this.hiddenDisconnectTimer = setTimeout(() => {
+            this.hiddenDisconnectTimer = null;
+            if (document.visibilityState === 'hidden') {
+              this.pauseRealtimeConnection();
+            }
+          }, 15_000);
+        } else if (document.visibilityState === 'visible') {
+          if (this.hiddenDisconnectTimer) {
+            clearTimeout(this.hiddenDisconnectTimer);
+            this.hiddenDisconnectTimer = null;
+          }
+          this.resumeRealtimeConnection();
+        }
+      });
+    }
     if (this.activeRealtimeChannel) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    // Never open a Supabase Realtime WebSocket connection on the logged-out Login screen!
+    const activeRole = this.getLoggedUserRole();
+    if (!activeRole) return;
     try {
+      // Lightweight Broadcast-only channel (eliminates wildcard postgres_changes WAL replication fan-out across 90+ peers)
       const ch = supabase
         .channel('classroom-live-sync-v1', {
           config: { broadcast: { self: false } },
@@ -1070,77 +1098,13 @@ export class SupabaseService {
         .on('broadcast', { event: 'classroom_update' }, (msg) => {
           const data = (msg?.payload || {}) as {
             kind?: string;
+            kinds?: string[];
             targetUserIds?: string[];
             deletedIds?: string[];
             deletedUsernames?: string[];
             deletedEmails?: string[];
           };
           this.triggerRealtimeListeners(data);
-        })
-        .on('postgres_changes', { event: '*', schema: 'public' }, (payload) => {
-          const tableName = String(payload?.table || '');
-
-          // Ignore notification/audit-log background DELETE sweeps & audit_log inserts so they NEVER trigger sync waves
-          if (tableName === 'notifications') {
-            if (payload?.eventType === 'DELETE') {
-              return;
-            }
-            const newNotif = (payload?.new || {}) as Record<string, unknown>;
-            if (newNotif.user_id === AUDIT_LOG_SYSTEM_USER_ID || newNotif.type === 'audit_log') {
-              return;
-            }
-            if (newNotif.user_id === PRIVATE_NOTE_SYSTEM_USER_ID || newNotif.type === 'private_note') {
-              const targetStudentId = newNotif.post_id ? String(newNotif.post_id) : undefined;
-              this.triggerRealtimeListeners({
-                kind: 'private_note',
-                targetUserIds: targetStudentId ? [targetStudentId] : undefined,
-              });
-              return;
-            }
-            this.triggerRealtimeListeners({ kind: 'notification' });
-            return;
-          }
-
-          if (payload?.eventType === 'DELETE' && payload?.old && typeof payload.old === 'object') {
-            const oldRec = payload.old as Record<string, unknown>;
-            const delId = oldRec.id ? String(oldRec.id) : '';
-            if (delId && this.ignoredRealtimeDeleteIds.has(delId)) {
-              this.ignoredRealtimeDeleteIds.delete(delId);
-              return;
-            }
-            // Note: Explicit user deletions already broadcast `deletedUsernames` and `deletedEmails` via `deleteProfile`.
-            // Do not extract `deletedUsernames`/`deletedEmails` from raw postgres_changes DELETE events so that duplicate ID cleanup during account creation never blacklists a newly created username/email.
-            this.triggerRealtimeListeners({
-              kind: 'delete',
-              deletedIds: delId ? [delId] : undefined,
-            });
-            return;
-          }
-
-          const tableKindMap: Record<string, string> = {
-            attendance_sessions: 'attendance',
-            posts: 'post',
-            courses: 'course',
-            profiles: 'profile',
-            assignments: 'assignment',
-            assignment_submissions: 'submission',
-            quizzes: 'quiz',
-            quiz_submissions: 'quiz_submission',
-          };
-          const mappedKind = tableKindMap[tableName] || 'all';
-          if (mappedKind === 'profile' && payload?.eventType === 'UPDATE' && payload?.new) {
-            const newProf = payload.new as Record<string, unknown>;
-            const profId = newProf.id ? String(newProf.id) : '';
-            const profRole = newProf.role ? String(newProf.role) : '';
-            if (profId && profRole === 'student') {
-              this.triggerRealtimeListeners({
-                kind: 'profile',
-                targetUserIds: [profId],
-              });
-              return;
-            }
-          }
-          this.triggerRealtimeListeners({ kind: mappedKind });
         })
         .subscribe();
       this.activeRealtimeChannel = ch;
@@ -1151,41 +1115,56 @@ export class SupabaseService {
 
   private static triggerRealtimeListeners(meta?: {
     kind?: string;
+    kinds?: string[];
     targetUserIds?: string[];
     deletedIds?: string[];
     deletedUsernames?: string[];
     deletedEmails?: string[];
   }): void {
-    const incomingKind = meta?.kind || 'all';
-    this.pendingKinds.add(incomingKind);
-    if (incomingKind === 'profile' || incomingKind === 'delete' || incomingKind === 'all') {
-      this.invalidateClientCache('profiles');
-      this.invalidateClientCache('profile_candidates');
+    if (Array.isArray(meta?.kinds) && meta.kinds.length > 0) {
+      meta.kinds.forEach((k) => {
+        if (k) this.pendingKinds.add(k);
+      });
+    } else {
+      const incomingKind = meta?.kind || 'all';
+      this.pendingKinds.add(incomingKind);
     }
-    if (incomingKind === 'course' || incomingKind === 'delete' || incomingKind === 'all') {
-      this.invalidateClientCache('courses');
-    }
-    if (incomingKind === 'post' || incomingKind === 'delete' || incomingKind === 'all') {
-      this.invalidateClientCache('posts');
-      this.invalidateClientCache('notifs');
-    }
-    if (incomingKind === 'attendance' || incomingKind === 'delete' || incomingKind === 'all') {
-      this.invalidateClientCache('attendance');
-    }
-    if (incomingKind === 'notification' || incomingKind === 'delete' || incomingKind === 'all') {
-      this.invalidateClientCache('notifs');
-    }
-    if (incomingKind === 'private_note' || incomingKind === 'delete' || incomingKind === 'all') {
-      this.invalidateClientCache('private_notes');
-    }
-    if (incomingKind === 'assignment' || incomingKind === 'delete' || incomingKind === 'all') {
-      this.invalidateClientCache('assignments');
-    }
-    if (incomingKind === 'submission' || incomingKind === 'delete' || incomingKind === 'all') {
-      this.invalidateClientCache('submissions');
-    }
-    if (incomingKind === 'quiz' || incomingKind === 'delete' || incomingKind === 'all') {
-      this.invalidateClientCache('quizzes');
+
+    for (const incomingKind of Array.from(this.pendingKinds)) {
+      if (incomingKind === 'profile' || incomingKind === 'delete' || incomingKind === 'all') {
+        this.invalidateClientCache('profiles');
+        this.invalidateClientCache('profile_candidates');
+      }
+      if (incomingKind === 'course' || incomingKind === 'delete' || incomingKind === 'all') {
+        this.invalidateClientCache('courses');
+      }
+      if (incomingKind === 'post' || incomingKind === 'delete' || incomingKind === 'all') {
+        this.invalidateClientCache('posts');
+        this.invalidateClientCache('notifs');
+      }
+      if (
+        incomingKind === 'attendance' ||
+        incomingKind === 'attendance_checkin' ||
+        incomingKind === 'delete' ||
+        incomingKind === 'all'
+      ) {
+        this.invalidateClientCache('attendance');
+      }
+      if (incomingKind === 'notification' || incomingKind === 'delete' || incomingKind === 'all') {
+        this.invalidateClientCache('notifs');
+      }
+      if (incomingKind === 'private_note' || incomingKind === 'delete' || incomingKind === 'all') {
+        this.invalidateClientCache('private_notes');
+      }
+      if (incomingKind === 'assignment' || incomingKind === 'delete' || incomingKind === 'all') {
+        this.invalidateClientCache('assignments');
+      }
+      if (incomingKind === 'submission' || incomingKind === 'delete' || incomingKind === 'all') {
+        this.invalidateClientCache('submissions');
+      }
+      if (incomingKind === 'quiz' || incomingKind === 'delete' || incomingKind === 'all') {
+        this.invalidateClientCache('quizzes');
+      }
     }
 
     if (Array.isArray(meta?.targetUserIds)) {
@@ -1244,7 +1223,7 @@ export class SupabaseService {
           // ignore
         }
       });
-    }, 320);
+    }, 350);
   }
 
   static subscribeToRealtimeChanges(
@@ -1275,7 +1254,7 @@ export class SupabaseService {
   ): void {
     if (typeof window === 'undefined') return;
     this.ensureRealtimeChannel();
-    const messagePayload = {
+    const immediateLocalPayload = {
       kind,
       ts: Date.now(),
       ...(meta?.targetUserIds?.length ? { targetUserIds: meta.targetUserIds } : {}),
@@ -1285,24 +1264,103 @@ export class SupabaseService {
     };
     try {
       if (this.localBroadcastChannel) {
-        this.localBroadcastChannel.postMessage(messagePayload);
+        this.localBroadcastChannel.postMessage(immediateLocalPayload);
       }
     } catch {
       // ignore
     }
-    try {
-      if (this.activeRealtimeChannel) {
-        this.activeRealtimeChannel
-          .send({
-            type: 'broadcast',
-            event: 'classroom_update',
-            payload: messagePayload,
-          })
-          .catch(() => {});
-      }
-    } catch {
-      // ignore
+
+    // CRITICAL REALTIME QUOTA PROTECTION:
+    // Student actions (attendance check-ins, login/logout session locks, quiz/assignment submissions, post likes/comments)
+    // must NEVER broadcast WebSocket messages to 94+ connected student peers (1 broadcast = 95 Realtime Messages billed!).
+    // Only Admin and Co-Admin browsers broadcast classroom updates over Supabase Realtime WebSocket!
+    const currentRole = this.getLoggedUserRole();
+    if (currentRole !== 'admin' && currentRole !== 'co_admin') {
+      return;
     }
+
+    // Coalesce & throttle outbound Supabase WebSocket broadcasts so rapid bursts send only 1 message
+    this.pendingOutboundKinds.add(kind);
+    if (Array.isArray(meta?.targetUserIds)) {
+      meta.targetUserIds.forEach((id) => {
+        if (id) this.pendingOutboundTargetUserIds.add(id);
+      });
+    }
+    if (Array.isArray(meta?.deletedIds)) {
+      meta.deletedIds.forEach((id) => {
+        if (id) this.pendingOutboundDeletedIds.add(id);
+      });
+    }
+    if (Array.isArray(meta?.deletedUsernames)) {
+      meta.deletedUsernames.forEach((u) => {
+        if (u) this.pendingOutboundDeletedUsernames.add(u.trim().toLowerCase());
+      });
+    }
+    if (Array.isArray(meta?.deletedEmails)) {
+      meta.deletedEmails.forEach((e) => {
+        if (e) this.pendingOutboundDeletedEmails.add(e.trim().toLowerCase());
+      });
+    }
+
+    const isUrgentKind = kind === 'attendance' || kind === 'delete';
+    const now = Date.now();
+    const lastSent = this.lastBroadcastSentByKind.get(kind) || 0;
+    const minIntervalMs = isUrgentKind ? 400 : 2_000;
+    const delayMs = Math.max(isUrgentKind ? 80 : 350, minIntervalMs - (now - lastSent));
+
+    if (this.outboundBroadcastTimer && !isUrgentKind) {
+      return;
+    }
+    if (this.outboundBroadcastTimer) {
+      clearTimeout(this.outboundBroadcastTimer);
+    }
+
+    this.outboundBroadcastTimer = setTimeout(() => {
+      this.outboundBroadcastTimer = null;
+      const kindsList = Array.from(this.pendingOutboundKinds);
+      if (kindsList.length === 0) return;
+      const primaryKind =
+        kindsList.length === 1 ? kindsList[0] : kindsList.includes('delete') ? 'delete' : 'all';
+      const coalescedPayload = {
+        kind: primaryKind,
+        kinds: kindsList,
+        ts: Date.now(),
+        ...(this.pendingOutboundTargetUserIds.size > 0
+          ? { targetUserIds: Array.from(this.pendingOutboundTargetUserIds) }
+          : {}),
+        ...(this.pendingOutboundDeletedIds.size > 0
+          ? { deletedIds: Array.from(this.pendingOutboundDeletedIds) }
+          : {}),
+        ...(this.pendingOutboundDeletedUsernames.size > 0
+          ? { deletedUsernames: Array.from(this.pendingOutboundDeletedUsernames) }
+          : {}),
+        ...(this.pendingOutboundDeletedEmails.size > 0
+          ? { deletedEmails: Array.from(this.pendingOutboundDeletedEmails) }
+          : {}),
+      };
+
+      const sentAt = Date.now();
+      kindsList.forEach((k) => this.lastBroadcastSentByKind.set(k, sentAt));
+      this.pendingOutboundKinds.clear();
+      this.pendingOutboundTargetUserIds.clear();
+      this.pendingOutboundDeletedIds.clear();
+      this.pendingOutboundDeletedUsernames.clear();
+      this.pendingOutboundDeletedEmails.clear();
+
+      try {
+        if (this.activeRealtimeChannel) {
+          this.activeRealtimeChannel
+            .send({
+              type: 'broadcast',
+              event: 'classroom_update',
+              payload: coalescedPayload,
+            })
+            .catch(() => {});
+        }
+      } catch {
+        // ignore
+      }
+    }, delayMs);
   }
 
   /**
@@ -2166,7 +2224,7 @@ export class SupabaseService {
         if (avatarCacheChanged) {
           this.persistAssetCache();
         }
-        this.setCachedQuery(cacheKey, mapped, isStudentLite ? 60_000 : 45_000);
+        this.setCachedQuery(cacheKey, mapped, isStudentLite ? 120_000 : 90_000);
         return mapped;
       } catch {
         return null;
@@ -2299,7 +2357,7 @@ export class SupabaseService {
         if (bannerCacheChanged) {
           this.persistAssetCache();
         }
-        this.setCachedQuery(cacheKey, mappedCourses, 45_000);
+        this.setCachedQuery(cacheKey, mappedCourses, 90_000);
         return mappedCourses;
       } catch {
         return null;
@@ -2554,7 +2612,7 @@ export class SupabaseService {
             comments: comments as CoursePost['comments'],
           };
         });
-        this.setCachedQuery(cacheKey, mappedPosts, 25_000);
+        this.setCachedQuery(cacheKey, mappedPosts, 45_000);
         return mappedPosts;
       } catch {
         return null;
@@ -2692,7 +2750,8 @@ export class SupabaseService {
       string,
       { isOpen: boolean; statusUpdatedAtMs?: number; records: Record<string, AttendanceRecord> }
     >,
-    forceRefresh: boolean = false
+    forceRefresh: boolean = false,
+    forStudentId?: string
   ): Promise<AttendanceSession[] | null> {
     if (courseIds && courseIds.length === 0) {
       return [];
@@ -2700,7 +2759,7 @@ export class SupabaseService {
     const useDeltaRecords = Boolean(knownSessions && knownSessions.size > 0);
     const scopeKey = `${
       courseIds && courseIds.length > 0 ? courseIds.slice().sort().join(',') : 'all'
-    }:${useDeltaRecords ? 'delta' : 'full'}`;
+    }:${useDeltaRecords ? 'delta' : 'full'}:${forStudentId || 'inst'}`;
     const cacheKey = `attendance:${scopeKey}`;
     if (!forceRefresh) {
       const cached = this.getCachedQuery<AttendanceSession[]>(cacheKey);
@@ -2742,20 +2801,26 @@ export class SupabaseService {
             const localRecObj = localKnown?.records || {};
             const localRecCount = Object.keys(localRecObj).length;
             const localRecHash = computeFastStringHash(JSON.stringify(localRecObj));
+            const studentAlreadyCheckedInLocally = Boolean(
+              forStudentId && localRecObj[forStudentId]
+            );
 
             // Fetch full `records` JSONB ONLY if:
             // 1. Session is not in local storage yet (`!localKnown`)
             // 2. Session's Open/Close state (`isOpen`) changed
-            // 3. Session's `statusUpdatedAtMs` timestamp, `recordCount`, or `recordHash` changed
-            // 4. Legacy open session without `statusUpdatedAtMs` metadata
+            // 3. Session's `statusUpdatedAtMs` timestamp changed (Instructor opened/closed or marked a student)
+            // 4. For Instructors (or Students who haven't checked in yet): `recordCount` or `recordHash` changed
+            //    (Students who ALREADY checked in do NOT need to re-download 90+ classmates' records every time another student checks in!)
             if (
               !localKnown ||
               localKnown.isOpen !== rowIsOpen ||
               (decodedState.statusUpdatedAtMs &&
                 localKnown.statusUpdatedAtMs !== decodedState.statusUpdatedAtMs) ||
-              (decodedState.recordCount !== undefined &&
+              (!studentAlreadyCheckedInLocally &&
+                decodedState.recordCount !== undefined &&
                 localRecCount !== decodedState.recordCount) ||
-              (decodedState.recordHash !== undefined &&
+              (!studentAlreadyCheckedInLocally &&
+                decodedState.recordHash !== undefined &&
                 localRecHash !== decodedState.recordHash) ||
               (rowIsOpen && !decodedState.statusUpdatedAtMs)
             ) {
@@ -2822,7 +2887,7 @@ export class SupabaseService {
             records: cleanRecords,
           };
         });
-        this.setCachedQuery(cacheKey, mappedSessions, 12_000);
+        this.setCachedQuery(cacheKey, mappedSessions, 15_000);
         return mappedSessions;
       } catch {
         return null;
@@ -2901,7 +2966,7 @@ export class SupabaseService {
             expiresAtMs: expiresMs,
           };
         });
-        this.setCachedQuery(cacheKey, mappedNotifs, 45_000);
+        this.setCachedQuery(cacheKey, mappedNotifs, 90_000);
         return mappedNotifs;
       } catch {
         return null;
@@ -3316,7 +3381,7 @@ export class SupabaseService {
             // ignore malformed JSON
           }
         }
-        this.setCachedQuery(cacheKey, notes, 30_000);
+        this.setCachedQuery(cacheKey, notes, 90_000);
         return notes;
       } catch {
         return null;
@@ -4355,92 +4420,216 @@ export class SupabaseService {
     remoteStatusUpdatedAtMs?: number;
     mergedRecords?: Record<string, AttendanceRecord>;
   }> {
-    try {
-      const { data: existingRow, error: fetchErr } = await supabase
-        .from('attendance_sessions')
-        .select('id,is_open,opened_by,records')
-        .eq('id', sessionId)
-        .maybeSingle();
+    this.invalidateClientCache('attendance');
+    for (const k of Array.from(this.inflightGetRequests.keys())) {
+      if (k.startsWith('attendance:')) {
+        this.inflightGetRequests.delete(k);
+      }
+    }
 
-      if (!fetchErr && existingRow) {
-        const decodedRemote = decodeAttendanceOpenedBy(
-          existingRow.opened_by as string | null,
-          existingRow.is_open
-        );
-        const remoteRecords =
-          existingRow.records && typeof existingRow.records === 'object'
-            ? (existingRow.records as Record<string, AttendanceRecord>)
-            : {};
-        const cleanRemoteRecords: Record<string, AttendanceRecord> = {};
-        for (const [k, v] of Object.entries(remoteRecords)) {
+    try {
+      // Seed accumulatedRecords with known records from fallbackSession so concurrent check-ins never get dropped
+      const accumulatedRecords: Record<string, AttendanceRecord> = {};
+      if (fallbackSession?.records && typeof fallbackSession.records === 'object') {
+        for (const [k, v] of Object.entries(fallbackSession.records)) {
           if (k !== '__session_meta__' && v && typeof v === 'object' && 'status' in v) {
-            cleanRemoteRecords[k] = v;
+            accumulatedRecords[k] = v;
+          }
+        }
+      }
+      if (record === null) {
+        delete accumulatedRecords[studentId];
+      } else {
+        accumulatedRecords[studentId] = record;
+      }
+
+      const maxAttempts = 4;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const { data: existingRow, error: fetchErr } = await supabase
+          .from('attendance_sessions')
+          .select('id,is_open,opened_by,records')
+          .eq('id', sessionId)
+          .maybeSingle();
+
+        if (!fetchErr && existingRow) {
+          const decodedRemote = decodeAttendanceOpenedBy(
+            existingRow.opened_by as string | null,
+            existingRow.is_open
+          );
+          const remoteRecords =
+            existingRow.records && typeof existingRow.records === 'object'
+              ? (existingRow.records as Record<string, AttendanceRecord>)
+              : {};
+          const cleanRemoteRecords: Record<string, AttendanceRecord> = {};
+          for (const [k, v] of Object.entries(remoteRecords)) {
+            if (k !== '__session_meta__' && v && typeof v === 'object' && 'status' in v) {
+              cleanRemoteRecords[k] = v;
+            }
+          }
+
+          // If Admin/Co-Admin already closed this attendance session on another device, do NOT allow check-in or overwrite is_open!
+          if (!existingRow.is_open || !decodedRemote.isOpen) {
+            return {
+              success: false,
+              closedRemotely: true,
+              remoteIsOpen: false,
+              remoteStatusUpdatedAtMs: decodedRemote.statusUpdatedAtMs || Date.now(),
+              mergedRecords: cleanRemoteRecords,
+            };
+          }
+
+          // Union remote records with accumulatedRecords so NO student's concurrent check-in is ever lost
+          for (const [k, v] of Object.entries(cleanRemoteRecords)) {
+            if (k !== studentId) {
+              accumulatedRecords[k] = v;
+            }
+          }
+          if (record === null) {
+            delete accumulatedRecords[studentId];
+          } else {
+            accumulatedRecords[studentId] = record;
+          }
+
+          const nextRecords: Record<string, AttendanceRecord> = { ...accumulatedRecords };
+
+          // Preserve the Instructor's statusUpdatedAtMs so student device clocks never advance or skew Open/Close timestamps!
+          const preservedStatusMs =
+            decodedRemote.statusUpdatedAtMs || fallbackSession.statusUpdatedAtMs || Date.now();
+          const encodedMarker = encodeAttendanceOpenedBy({
+            ...fallbackSession,
+            openedBy: decodedRemote.openedBy,
+            isOpen: true,
+            statusUpdatedAtMs: preservedStatusMs,
+            records: nextRecords,
+          });
+
+          const { error: updateErr } = await supabase
+            .from('attendance_sessions')
+            .update({
+              records: nextRecords,
+              opened_by: encodedMarker,
+            })
+            .eq('id', sessionId)
+            .eq('is_open', true);
+
+          if (!updateErr) {
+            // Read-after-write verification after short random jitter (70-190ms) to guarantee concurrent student check-ins did not clobber each other
+            const jitterMs = 70 + Math.floor(Math.random() * 120);
+            await new Promise((r) => setTimeout(r, jitterMs));
+
+            const { data: verifyRow, error: verifyErr } = await supabase
+              .from('attendance_sessions')
+              .select('id,is_open,opened_by,records')
+              .eq('id', sessionId)
+              .maybeSingle();
+
+            if (!verifyErr && verifyRow) {
+              const verifyDecoded = decodeAttendanceOpenedBy(
+                verifyRow.opened_by as string | null,
+                verifyRow.is_open
+              );
+              const verifyRaw =
+                verifyRow.records && typeof verifyRow.records === 'object'
+                  ? (verifyRow.records as Record<string, AttendanceRecord>)
+                  : {};
+              const verifyClean: Record<string, AttendanceRecord> = {};
+              for (const [k, v] of Object.entries(verifyRaw)) {
+                if (k !== '__session_meta__' && v && typeof v === 'object' && 'status' in v) {
+                  verifyClean[k] = v;
+                  if (k !== studentId) {
+                    accumulatedRecords[k] = v;
+                  }
+                }
+              }
+
+              if (!verifyRow.is_open || !verifyDecoded.isOpen) {
+                return {
+                  success: false,
+                  closedRemotely: true,
+                  remoteIsOpen: false,
+                  remoteStatusUpdatedAtMs: verifyDecoded.statusUpdatedAtMs || Date.now(),
+                  mergedRecords: verifyClean,
+                };
+              }
+
+              const myVerifiedRec = verifyClean[studentId];
+              const myWriteIntact =
+                record === null
+                  ? !myVerifiedRec
+                  : Boolean(myVerifiedRec && myVerifiedRec.status === record.status);
+              const allPeersIntact = Object.keys(accumulatedRecords).every((peerId) =>
+                peerId === studentId ? myWriteIntact : Boolean(verifyClean[peerId])
+              );
+
+              if (myWriteIntact && allPeersIntact) {
+                this.invalidateClientCache('attendance');
+                this.notifyRealtimePeers('attendance_checkin');
+                return {
+                  success: true,
+                  remoteIsOpen: true,
+                  remoteStatusUpdatedAtMs: preservedStatusMs,
+                  mergedRecords: verifyClean,
+                };
+              }
+              // Concurrent write detected! Loop will immediately re-merge and write the union of both students' records.
+              continue;
+            }
+
+            this.invalidateClientCache('attendance');
+            this.notifyRealtimePeers('attendance_checkin');
+            return {
+              success: true,
+              remoteIsOpen: true,
+              remoteStatusUpdatedAtMs: preservedStatusMs,
+              mergedRecords: nextRecords,
+            };
           }
         }
 
-        // If Admin/Co-Admin already closed this attendance session on another device, do NOT allow check-in or overwrite is_open!
-        if (!existingRow.is_open || !decodedRemote.isOpen) {
+        // If row does not exist in Supabase yet:
+        // - If it is a real newly opened session (not a demo att-sess-1..4), upsert it so the student's check-in is saved!
+        // - Only treat demo sessions as closedRemotely.
+        if (!fetchErr && !existingRow) {
+          const isDemoSession = /^att-sess-\d{1,4}$/.test(sessionId || '');
+          if (!isDemoSession && fallbackSession && fallbackSession.isOpen) {
+            const sessionToCreate: AttendanceSession = {
+              ...fallbackSession,
+              isOpen: true,
+              records: accumulatedRecords,
+            };
+            const createdOk = await this.upsertAttendanceSession(sessionToCreate, {
+              force: true,
+            });
+            if (createdOk) {
+              this.invalidateClientCache('attendance');
+              this.notifyRealtimePeers('attendance_checkin');
+              return {
+                success: true,
+                remoteIsOpen: true,
+                remoteStatusUpdatedAtMs: fallbackSession.statusUpdatedAtMs || Date.now(),
+                mergedRecords: accumulatedRecords,
+              };
+            }
+          }
+          if (isDemoSession) {
+            return {
+              success: false,
+              closedRemotely: true,
+              remoteIsOpen: false,
+              remoteStatusUpdatedAtMs: Date.now(),
+            };
+          }
           return {
             success: false,
-            closedRemotely: true,
-            remoteIsOpen: false,
-            remoteStatusUpdatedAtMs: decodedRemote.statusUpdatedAtMs || Date.now(),
-            mergedRecords: cleanRemoteRecords,
+            remoteIsOpen: true,
+            mergedRecords: accumulatedRecords,
           };
         }
 
-        const nextRecords: Record<string, AttendanceRecord> = { ...cleanRemoteRecords };
-        if (record === null) {
-          delete nextRecords[studentId];
-        } else {
-          nextRecords[studentId] = record;
-        }
-
-        // Preserve the Instructor's statusUpdatedAtMs so student device clocks never advance or skew Open/Close timestamps!
-        const preservedStatusMs =
-          decodedRemote.statusUpdatedAtMs || fallbackSession.statusUpdatedAtMs || Date.now();
-        const encodedMarker = encodeAttendanceOpenedBy({
-          ...fallbackSession,
-          openedBy: decodedRemote.openedBy,
-          isOpen: true,
-          statusUpdatedAtMs: preservedStatusMs,
-          records: nextRecords,
-        });
-
-        // Update `records` and `opened_by` recordHash marker ONLY while `is_open` is still true in PostgreSQL!
-        const { error: updateErr } = await supabase
-          .from('attendance_sessions')
-          .update({
-            records: nextRecords,
-            opened_by: encodedMarker,
-          })
-          .eq('id', sessionId)
-          .eq('is_open', true);
-
-        if (!updateErr) {
-          this.invalidateClientCache('attendance');
-          this.notifyRealtimePeers('attendance');
-        }
-
-        return {
-          success: !updateErr,
-          remoteIsOpen: true,
-          remoteStatusUpdatedAtMs: preservedStatusMs,
-          mergedRecords: nextRecords,
-        };
+        await new Promise((r) => setTimeout(r, 120 * (attempt + 1)));
       }
 
-      // If row does not exist in Supabase (e.g., deleted or unseeded demo session), students must NEVER create or re-open it!
-      if (!fetchErr && !existingRow) {
-        return {
-          success: false,
-          closedRemotely: true,
-          remoteIsOpen: false,
-          remoteStatusUpdatedAtMs: Date.now(),
-        };
-      }
-
-      return { success: false };
+      return { success: false, mergedRecords: accumulatedRecords };
     } catch {
       return { success: false };
     }

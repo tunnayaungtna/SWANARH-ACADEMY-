@@ -69,7 +69,7 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
     });
   }, [course.id, currentUser.id]);
 
-  // Quiet fallback poll every 35 seconds while inside the Private Notes tab (Realtime WebSocket handles live updates)
+  // Quiet fallback poll every 120 seconds while inside the Private Notes tab
   useEffect(() => {
     let mounted = true;
     const interval = setInterval(() => {
@@ -80,7 +80,7 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
           }
         });
       }
-    }, 35_000);
+    }, 120_000);
     return () => {
       mounted = false;
       clearInterval(interval);
