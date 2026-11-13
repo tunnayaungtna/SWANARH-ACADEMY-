@@ -9,6 +9,7 @@ import {
   Quiz,
   AttendanceSession,
   AttendanceRecord,
+  RealtimeAttendancePatch,
   NotificationItem,
   AuditLogEntry,
   PrivateNote,
@@ -934,6 +935,7 @@ export class SupabaseService {
       deletedIds?: string[];
       deletedUsernames?: string[];
       deletedEmails?: string[];
+      attendancePatches?: RealtimeAttendancePatch[];
     }) => void
   >();
   private static activeRealtimeChannel: ReturnType<typeof supabase.channel> | null = null;
@@ -944,6 +946,7 @@ export class SupabaseService {
   private static pendingDeletedEmails = new Set<string>();
   private static pendingKinds = new Set<string>();
   private static pendingTargetUserIds = new Set<string>();
+  private static pendingAttendancePatches: RealtimeAttendancePatch[] = [];
   private static ignoredRealtimeDeleteIds = new Set<string>();
   // Outbound broadcast coalescer & visibility auto-pause to keep Realtime Messages < 5% of quota
   private static outboundBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -952,6 +955,7 @@ export class SupabaseService {
   private static pendingOutboundDeletedIds = new Set<string>();
   private static pendingOutboundDeletedUsernames = new Set<string>();
   private static pendingOutboundDeletedEmails = new Set<string>();
+  private static pendingOutboundAttendancePatches: RealtimeAttendancePatch[] = [];
   private static lastBroadcastSentByKind = new Map<string, number>();
   private static visibilityListenerRegistered = false;
   private static hiddenDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1056,6 +1060,7 @@ export class SupabaseService {
             deletedIds?: string[];
             deletedUsernames?: string[];
             deletedEmails?: string[];
+            attendancePatches?: RealtimeAttendancePatch[];
           };
           this.triggerRealtimeListeners(data);
         };
@@ -1103,6 +1108,7 @@ export class SupabaseService {
             deletedIds?: string[];
             deletedUsernames?: string[];
             deletedEmails?: string[];
+            attendancePatches?: RealtimeAttendancePatch[];
           };
           this.triggerRealtimeListeners(data);
         })
@@ -1120,6 +1126,7 @@ export class SupabaseService {
     deletedIds?: string[];
     deletedUsernames?: string[];
     deletedEmails?: string[];
+    attendancePatches?: RealtimeAttendancePatch[];
   }): void {
     if (Array.isArray(meta?.kinds) && meta.kinds.length > 0) {
       meta.kinds.forEach((k) => {
@@ -1187,43 +1194,59 @@ export class SupabaseService {
         if (e) this.pendingDeletedEmails.add(e.trim().toLowerCase());
       });
     }
+    if (Array.isArray(meta?.attendancePatches) && meta.attendancePatches.length > 0) {
+      this.pendingAttendancePatches.push(...meta.attendancePatches);
+    }
+
+    const isFastAttendance =
+      this.pendingAttendancePatches.length > 0 ||
+      this.pendingKinds.has('attendance') ||
+      this.pendingKinds.has('attendance_checkin');
 
     if (this.realtimeDebounceTimer) {
       clearTimeout(this.realtimeDebounceTimer);
     }
-    this.realtimeDebounceTimer = setTimeout(() => {
-      this.realtimeDebounceTimer = null;
-      const kindsList = Array.from(this.pendingKinds);
-      const primaryKind =
-        kindsList.length === 1 ? kindsList[0] : kindsList.includes('delete') ? 'delete' : 'all';
-      const snapshot = {
-        kind: primaryKind,
-        kinds: kindsList,
-        targetUserIds:
-          this.pendingTargetUserIds.size > 0 ? Array.from(this.pendingTargetUserIds) : undefined,
-        deletedIds:
-          this.pendingDeletedIds.size > 0 ? Array.from(this.pendingDeletedIds) : undefined,
-        deletedUsernames:
-          this.pendingDeletedUsernames.size > 0
-            ? Array.from(this.pendingDeletedUsernames)
-            : undefined,
-        deletedEmails:
-          this.pendingDeletedEmails.size > 0 ? Array.from(this.pendingDeletedEmails) : undefined,
-      };
-      this.pendingKinds.clear();
-      this.pendingTargetUserIds.clear();
-      this.pendingDeletedIds.clear();
-      this.pendingDeletedUsernames.clear();
-      this.pendingDeletedEmails.clear();
+    this.realtimeDebounceTimer = setTimeout(
+      () => {
+        this.realtimeDebounceTimer = null;
+        const kindsList = Array.from(this.pendingKinds);
+        const primaryKind =
+          kindsList.length === 1 ? kindsList[0] : kindsList.includes('delete') ? 'delete' : 'all';
+        const snapshot = {
+          kind: primaryKind,
+          kinds: kindsList,
+          targetUserIds:
+            this.pendingTargetUserIds.size > 0 ? Array.from(this.pendingTargetUserIds) : undefined,
+          deletedIds:
+            this.pendingDeletedIds.size > 0 ? Array.from(this.pendingDeletedIds) : undefined,
+          deletedUsernames:
+            this.pendingDeletedUsernames.size > 0
+              ? Array.from(this.pendingDeletedUsernames)
+              : undefined,
+          deletedEmails:
+            this.pendingDeletedEmails.size > 0 ? Array.from(this.pendingDeletedEmails) : undefined,
+          attendancePatches:
+            this.pendingAttendancePatches.length > 0
+              ? [...this.pendingAttendancePatches]
+              : undefined,
+        };
+        this.pendingKinds.clear();
+        this.pendingTargetUserIds.clear();
+        this.pendingDeletedIds.clear();
+        this.pendingDeletedUsernames.clear();
+        this.pendingDeletedEmails.clear();
+        this.pendingAttendancePatches = [];
 
-      this.realtimeListeners.forEach((cb) => {
-        try {
-          cb(snapshot);
-        } catch {
-          // ignore
-        }
-      });
-    }, 350);
+        this.realtimeListeners.forEach((cb) => {
+          try {
+            cb(snapshot);
+          } catch {
+            // ignore
+          }
+        });
+      },
+      isFastAttendance ? 40 : 300
+    );
   }
 
   static subscribeToRealtimeChanges(
@@ -1234,6 +1257,7 @@ export class SupabaseService {
       deletedIds?: string[];
       deletedUsernames?: string[];
       deletedEmails?: string[];
+      attendancePatches?: RealtimeAttendancePatch[];
     }) => void
   ): () => void {
     this.realtimeListeners.add(onChange);
@@ -1250,6 +1274,7 @@ export class SupabaseService {
       deletedIds?: string[];
       deletedUsernames?: string[];
       deletedEmails?: string[];
+      attendancePatches?: RealtimeAttendancePatch[];
     }
   ): void {
     if (typeof window === 'undefined') return;
@@ -1261,6 +1286,7 @@ export class SupabaseService {
       ...(meta?.deletedIds?.length ? { deletedIds: meta.deletedIds } : {}),
       ...(meta?.deletedUsernames?.length ? { deletedUsernames: meta.deletedUsernames } : {}),
       ...(meta?.deletedEmails?.length ? { deletedEmails: meta.deletedEmails } : {}),
+      ...(meta?.attendancePatches?.length ? { attendancePatches: meta.attendancePatches } : {}),
     };
     try {
       if (this.localBroadcastChannel) {
@@ -1270,12 +1296,15 @@ export class SupabaseService {
       // ignore
     }
 
-    // CRITICAL REALTIME QUOTA PROTECTION:
-    // Student actions (attendance check-ins, login/logout session locks, quiz/assignment submissions, post likes/comments)
-    // must NEVER broadcast WebSocket messages to 94+ connected student peers (1 broadcast = 95 Realtime Messages billed!).
-    // Only Admin and Co-Admin browsers broadcast classroom updates over Supabase Realtime WebSocket!
+    // REALTIME QUOTA PROTECTION + INSTANT ATTENDANCE SYNC:
+    // - Admin & Co-Admin browsers broadcast all classroom updates.
+    // - Student browsers ONLY broadcast 'attendance_checkin' (and 'private_note') so when a student clicks "Present",
+    //   all Admin, Co-Admin, and Student screens update in <200ms with the embedded attendancePatch (requiring 0 extra HTTP queries!).
+    // - Student background profile locks, post likes, comments, and submissions never broadcast over WebSocket.
     const currentRole = this.getLoggedUserRole();
-    if (currentRole !== 'admin' && currentRole !== 'co_admin') {
+    const isAllowedStudentKind =
+      currentRole === 'student' && (kind === 'attendance_checkin' || kind === 'private_note');
+    if (currentRole !== 'admin' && currentRole !== 'co_admin' && !isAllowedStudentKind) {
       return;
     }
 
@@ -1301,12 +1330,16 @@ export class SupabaseService {
         if (e) this.pendingOutboundDeletedEmails.add(e.trim().toLowerCase());
       });
     }
+    if (Array.isArray(meta?.attendancePatches) && meta.attendancePatches.length > 0) {
+      this.pendingOutboundAttendancePatches.push(...meta.attendancePatches);
+    }
 
-    const isUrgentKind = kind === 'attendance' || kind === 'delete';
+    const isUrgentKind =
+      kind === 'attendance' || kind === 'attendance_checkin' || kind === 'delete';
     const now = Date.now();
     const lastSent = this.lastBroadcastSentByKind.get(kind) || 0;
-    const minIntervalMs = isUrgentKind ? 400 : 2_000;
-    const delayMs = Math.max(isUrgentKind ? 80 : 350, minIntervalMs - (now - lastSent));
+    const minIntervalMs = isUrgentKind ? 180 : 2_000;
+    const delayMs = Math.max(isUrgentKind ? 50 : 350, minIntervalMs - (now - lastSent));
 
     if (this.outboundBroadcastTimer && !isUrgentKind) {
       return;
@@ -1337,6 +1370,9 @@ export class SupabaseService {
         ...(this.pendingOutboundDeletedEmails.size > 0
           ? { deletedEmails: Array.from(this.pendingOutboundDeletedEmails) }
           : {}),
+        ...(this.pendingOutboundAttendancePatches.length > 0
+          ? { attendancePatches: [...this.pendingOutboundAttendancePatches] }
+          : {}),
       };
 
       const sentAt = Date.now();
@@ -1346,6 +1382,7 @@ export class SupabaseService {
       this.pendingOutboundDeletedIds.clear();
       this.pendingOutboundDeletedUsernames.clear();
       this.pendingOutboundDeletedEmails.clear();
+      this.pendingOutboundAttendancePatches = [];
 
       try {
         if (this.activeRealtimeChannel) {
@@ -2887,7 +2924,7 @@ export class SupabaseService {
             records: cleanRecords,
           };
         });
-        this.setCachedQuery(cacheKey, mappedSessions, 15_000);
+        this.setCachedQuery(cacheKey, mappedSessions, 3_000);
         return mappedSessions;
       } catch {
         return null;
@@ -4368,29 +4405,64 @@ export class SupabaseService {
         }
       }
 
-      // Whenever an Admin/Co-Admin closes attendance (or opens a single session for a course),
-      // guarantee that NO OTHER session in the same course remains is_open = true in Supabase SQL!
-      if (writeOk && options?.onlyUpdateOpenState && session.courseId) {
-        if (!resolvedIsOpen) {
-          await supabase
-            .from('attendance_sessions')
-            .update({ is_open: false })
-            .eq('course_id', session.courseId)
-            .neq('id', session.id)
-            .eq('is_open', true);
-        } else {
-          await supabase
-            .from('attendance_sessions')
-            .update({ is_open: false })
-            .eq('course_id', session.courseId)
-            .neq('id', session.id)
-            .eq('is_open', true);
+      // Whenever an Admin/Co-Admin OPENS a session for a course (resolvedIsOpen === true),
+      // guarantee that NO OLDER session in the same course remains is_open = true in Supabase SQL!
+      // CRITICAL: Never run `.neq('id', session.id)` when `!resolvedIsOpen` (closing an older session),
+      // because that would clobber a newly opened session (e.g., 13th) when auto-closing an older session (e.g., 12th)!
+      if (writeOk && options?.onlyUpdateOpenState && session.courseId && resolvedIsOpen) {
+        const { data: otherOpenRows } = await supabase
+          .from('attendance_sessions')
+          .select('id,opened_by,records')
+          .eq('course_id', session.courseId)
+          .neq('id', session.id)
+          .eq('is_open', true);
+
+        if (Array.isArray(otherOpenRows) && otherOpenRows.length > 0) {
+          for (const otherRow of otherOpenRows) {
+            const decodedOther = decodeAttendanceOpenedBy(
+              otherRow.opened_by as string | null,
+              false
+            );
+            const otherRecs =
+              otherRow.records && typeof otherRow.records === 'object'
+                ? (otherRow.records as Record<string, AttendanceRecord>)
+                : {};
+            const closedOtherEncoded = encodeAttendanceOpenedBy({
+              id: String(otherRow.id),
+              courseId: session.courseId,
+              date: '',
+              displayDate: '',
+              title: '',
+              isOpen: false,
+              openedBy: decodedOther.openedBy,
+              createdAt: '',
+              statusUpdatedAtMs: resolvedStatusMs,
+              records: otherRecs,
+            });
+            await supabase
+              .from('attendance_sessions')
+              .update({
+                is_open: false,
+                opened_by: closedOtherEncoded,
+              })
+              .eq('id', String(otherRow.id));
+          }
         }
       }
 
       if (writeOk) {
         this.recordSignature(sigKey, row);
-        this.notifyRealtimePeers('attendance');
+        this.notifyRealtimePeers('attendance', {
+          attendancePatches: [
+            {
+              type: 'session_upsert',
+              sessionId: sessionToEncode.id,
+              courseId: sessionToEncode.courseId,
+              session: sessionToEncode,
+              statusUpdatedAtMs: resolvedStatusMs,
+            },
+          ],
+        });
         return true;
       }
 
@@ -4563,7 +4635,17 @@ export class SupabaseService {
 
               if (myWriteIntact && allPeersIntact) {
                 this.invalidateClientCache('attendance');
-                this.notifyRealtimePeers('attendance_checkin');
+                this.notifyRealtimePeers('attendance_checkin', {
+                  attendancePatches: [
+                    {
+                      type: 'student_checkin',
+                      sessionId,
+                      courseId: fallbackSession?.courseId,
+                      studentId,
+                      record,
+                    },
+                  ],
+                });
                 return {
                   success: true,
                   remoteIsOpen: true,
@@ -4576,7 +4658,17 @@ export class SupabaseService {
             }
 
             this.invalidateClientCache('attendance');
-            this.notifyRealtimePeers('attendance_checkin');
+            this.notifyRealtimePeers('attendance_checkin', {
+              attendancePatches: [
+                {
+                  type: 'student_checkin',
+                  sessionId,
+                  courseId: fallbackSession?.courseId,
+                  studentId,
+                  record,
+                },
+              ],
+            });
             return {
               success: true,
               remoteIsOpen: true,
@@ -4602,7 +4694,17 @@ export class SupabaseService {
             });
             if (createdOk) {
               this.invalidateClientCache('attendance');
-              this.notifyRealtimePeers('attendance_checkin');
+              this.notifyRealtimePeers('attendance_checkin', {
+                attendancePatches: [
+                  {
+                    type: 'student_checkin',
+                    sessionId,
+                    courseId: fallbackSession?.courseId,
+                    studentId,
+                    record,
+                  },
+                ],
+              });
               return {
                 success: true,
                 remoteIsOpen: true,

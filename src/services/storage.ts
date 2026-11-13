@@ -14,6 +14,7 @@ import {
   AttendanceSession,
   AttendanceStatus,
   AttendanceRecord,
+  RealtimeAttendancePatch,
   AuditLogEntry,
   AuditLogCategory,
   AuditLogSeverity,
@@ -4358,7 +4359,7 @@ export class ClassroomDB {
             ? SupabaseService.getRemoteAttendanceSessions(
                 studentScopedCourseIds,
                 knownAttendanceMap,
-                force && Boolean(targetTables?.has('attendance')),
+                force,
                 loggedUser?.role === 'student' ? loggedUser.id : undefined
               )
             : Promise.resolve(null),
@@ -5062,7 +5063,7 @@ export class ClassroomDB {
         );
       } else if (
         !cloudActive ||
-        (isInstructorForAtt && (isRecentAttWrite || (!wasConfirmedInCloud && !isInitialDemo)))
+        (isInstructorForAtt && isRecentAttWrite && !isInitialDemo)
       ) {
         attMap.set(
           att.id,
@@ -5073,6 +5074,8 @@ export class ClassroomDB {
         if (isRecentAttWrite && isInstructorForAtt && !isInitialDemo) {
           attToPushToCloud.push(normalizedLocalAtt);
         }
+      } else if (!wasConfirmedInCloud && !isInitialDemo && !cloudActive) {
+        attMap.set(att.id, normalizedLocalAtt);
       } else {
         newlyDiscoveredRemoteDeletions.push(att.id);
         deletedSet.add(att.id);
@@ -5215,6 +5218,44 @@ export class ClassroomDB {
       this.recordDeletedIds(newlyDiscoveredRemoteDeletions);
     }
 
+    // Enforce Single Open Session Per Course Rule:
+    // If a course has multiple sessions marked isOpen === true (e.g., 13th newly opened on phone while 12th was still cached on computer),
+    // ONLY the newest session (by date & statusUpdatedAtMs) stays open, and all older sessions in that course are forced closed!
+    const openByCourse = new Map<string, AttendanceSession[]>();
+    for (const sess of attMap.values()) {
+      if (sess.isOpen) {
+        const list = openByCourse.get(sess.courseId) || [];
+        list.push(sess);
+        openByCourse.set(sess.courseId, list);
+      }
+    }
+    for (const [, openList] of openByCourse.entries()) {
+      if (openList.length > 1) {
+        openList.sort(
+          (a, b) =>
+            b.date.localeCompare(a.date) ||
+            (b.statusUpdatedAtMs || 0) - (a.statusUpdatedAtMs || 0) ||
+            b.id.localeCompare(a.id)
+        );
+        const newestOpen = openList[0];
+        for (let i = 1; i < openList.length; i++) {
+          const staleOpen = openList[i];
+          const closedStale: AttendanceSession = {
+            ...staleOpen,
+            isOpen: false,
+            statusUpdatedAtMs: Math.max(
+              newestOpen.statusUpdatedAtMs || Date.now(),
+              staleOpen.statusUpdatedAtMs || 0
+            ),
+          };
+          attMap.set(staleOpen.id, closedStale);
+          if (isInstructorForAtt) {
+            attToPushToCloud.push(closedStale);
+          }
+        }
+      }
+    }
+
     const merged = Array.from(attMap.values()).sort(
       (a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)
     );
@@ -5224,7 +5265,7 @@ export class ClassroomDB {
       uniqueToPush.forEach((sess) => {
         SupabaseService.upsertAttendanceSession(sess, {
           force: true,
-          onlyUpdateOpenState: true,
+          onlyUpdateOpenState: Boolean(sess.isOpen),
         })
           .then((ok) => {
             if (ok) this.markAttendanceCloudConfirmed(sess.id);
@@ -5241,8 +5282,126 @@ export class ClassroomDB {
   }
 
   /**
+   * Applies incoming Realtime WebSocket attendance patches directly into localStorage in 0ms
+   * so opening/closing Attendance (13th vs 12th) and Student "Present" check-ins update immediately
+   * across all Admin, Co-Admin, and Student devices without waiting for HTTP polling.
+   */
+  static applyRealtimeAttendancePatches(patches?: RealtimeAttendancePatch[]): boolean {
+    if (!Array.isArray(patches) || patches.length === 0) return false;
+    const deletedSet = new Set(this.getDeletedIds());
+    const currentSessions = this.getItem<AttendanceSession[]>(
+      STORAGE_KEYS.ATTENDANCE,
+      INITIAL_ATTENDANCE_SESSIONS
+    ).filter((s) => !deletedSet.has(s.id));
+    const prevJson = JSON.stringify(currentSessions);
+    const sessMap = new Map<string, AttendanceSession>();
+    currentSessions.forEach((s) => sessMap.set(s.id, s));
+
+    for (const patch of patches) {
+      if (!patch) continue;
+      if (patch.type === 'session_upsert' && patch.session && patch.session.id) {
+        const incoming = patch.session;
+        if (deletedSet.has(incoming.id)) continue;
+        // If incoming session is OPEN, immediately close any other open session in the same course (e.g. close 12th when 13th opens!)
+        if (incoming.isOpen && incoming.courseId) {
+          for (const [id, existing] of sessMap.entries()) {
+            if (id !== incoming.id && existing.courseId === incoming.courseId && existing.isOpen) {
+              sessMap.set(id, {
+                ...existing,
+                isOpen: false,
+                statusUpdatedAtMs: Math.max(
+                  incoming.statusUpdatedAtMs || Date.now(),
+                  existing.statusUpdatedAtMs || 0
+                ),
+              });
+            }
+          }
+        }
+        const prev = sessMap.get(incoming.id);
+        const mergedRecs: Record<string, AttendanceRecord> = {
+          ...(prev?.records || {}),
+          ...(incoming.records || {}),
+        };
+        sessMap.set(incoming.id, {
+          ...prev,
+          ...incoming,
+          isOpen: Boolean(incoming.isOpen),
+          statusUpdatedAtMs: Math.max(
+            incoming.statusUpdatedAtMs || 0,
+            prev?.statusUpdatedAtMs || 0
+          ) || Date.now(),
+          records: mergedRecs,
+        });
+        this.markAttendanceCloudConfirmed(incoming.id);
+      } else if (patch.type === 'session_close_all' && patch.courseId) {
+        const closeTs = patch.statusUpdatedAtMs || Date.now();
+        for (const [id, existing] of sessMap.entries()) {
+          if (existing.courseId === patch.courseId && existing.isOpen) {
+            sessMap.set(id, {
+              ...existing,
+              isOpen: false,
+              statusUpdatedAtMs: Math.max(closeTs, existing.statusUpdatedAtMs || 0),
+            });
+          }
+        }
+      } else if (patch.type === 'student_checkin' && patch.sessionId && patch.studentId) {
+        const existing = sessMap.get(patch.sessionId);
+        if (existing) {
+          const nextRecs = { ...(existing.records || {}) };
+          if (patch.record === null || patch.record === undefined) {
+            delete nextRecs[patch.studentId];
+          } else {
+            nextRecs[patch.studentId] = patch.record;
+          }
+          sessMap.set(patch.sessionId, {
+            ...existing,
+            records: nextRecs,
+          });
+        }
+      }
+    }
+
+    const updatedList = Array.from(sessMap.values()).sort(
+      (a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)
+    );
+    if (JSON.stringify(updatedList) !== prevJson) {
+      this.setItem(STORAGE_KEYS.ATTENDANCE, updatedList);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Returns YYYY-MM-DD in the device's local timezone (avoids UTC lag in Myanmar where midnight-6:30am UTC is still yesterday!)
+   */
+  static getLocalTodayIso(d: Date = new Date()): string {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  /**
+   * Formats exact check-in time down to the second + date (e.g., "09:15:42 AM · 13 Nov 2026")
+   */
+  static formatCheckInTimestamp(d: Date = new Date()): string {
+    const timePart = d.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true,
+    });
+    const datePart = d.toLocaleDateString('en-US', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
+    return `${timePart} · ${datePart}`;
+  }
+
+  /**
    * Fast, lightweight live Attendance sync from Supabase (called while viewing Attendance or Dashboard)
-   * with a 12s deduplication cooldown and course scoping for students so Egress remains minimal.
+   * with a 2.5s deduplication cooldown and course scoping for students so Egress remains minimal.
    */
   private static activeAttendanceSyncPromise: Promise<boolean> | null = null;
   private static lastAttendanceSyncAt = 0;
@@ -5251,7 +5410,7 @@ export class ClassroomDB {
       return false;
     }
     const now = Date.now();
-    if (!force && now - this.lastAttendanceSyncAt < 12_000) {
+    if (!force && now - this.lastAttendanceSyncAt < 2_500) {
       return false;
     }
     if (this.activeAttendanceSyncPromise) {
@@ -6799,21 +6958,43 @@ export class ClassroomDB {
     this.setItem(STORAGE_KEYS.ATTENDANCE, [newSession, ...updatedExisting]);
 
     try {
-      SupabaseService.upsertAttendanceSession(newSession, {
-        force: true,
-        onlyUpdateOpenState: true,
-      })
-        .then((ok) => {
-          if (ok) this.markAttendanceCloudConfirmed(newSession.id);
-        })
-        .catch(() => {});
-
-      autoClosedSessions.forEach((oldSess) => {
-        SupabaseService.upsertAttendanceSession(oldSess, {
-          force: true,
-          onlyUpdateOpenState: true,
-        }).catch(() => {});
+      // Broadcast immediately so other Admin computers & Student devices see the new session in <150ms
+      SupabaseService.notifyRealtimePeers('attendance', {
+        attendancePatches: [
+          ...autoClosedSessions.map((oldSess) => ({
+            type: 'session_upsert' as const,
+            sessionId: oldSess.id,
+            courseId: oldSess.courseId,
+            session: oldSess,
+            statusUpdatedAtMs: nowMs,
+          })),
+          {
+            type: 'session_upsert' as const,
+            sessionId: newSession.id,
+            courseId: newSession.courseId,
+            session: newSession,
+            statusUpdatedAtMs: nowMs,
+          },
+        ],
       });
+
+      // Sequence old session closes first (without bulk course update), then upsert the newly opened session
+      // so oldSess and newSession NEVER race in Supabase!
+      (async () => {
+        for (const oldSess of autoClosedSessions) {
+          await SupabaseService.upsertAttendanceSession(oldSess, {
+            force: true,
+            onlyUpdateOpenState: false,
+          }).catch(() => false);
+        }
+        const ok = await SupabaseService.upsertAttendanceSession(newSession, {
+          force: true,
+          onlyUpdateOpenState: Boolean(isOpen),
+        }).catch(() => false);
+        if (ok) {
+          this.markAttendanceCloudConfirmed(newSession.id);
+        }
+      })();
     } catch {
       // ignore
     }
@@ -6892,21 +7073,40 @@ export class ClassroomDB {
     if (updatedSession) {
       const targetSess = updatedSession as AttendanceSession;
       try {
-        SupabaseService.upsertAttendanceSession(targetSess, {
-          force: true,
-          onlyUpdateOpenState: true,
-        })
-          .then((ok) => {
-            if (ok) this.markAttendanceCloudConfirmed(targetSess.id);
-          })
-          .catch(() => {});
-
-        otherModifiedSessions.forEach((otherSess) => {
-          SupabaseService.upsertAttendanceSession(otherSess, {
-            force: true,
-            onlyUpdateOpenState: true,
-          }).catch(() => {});
+        SupabaseService.notifyRealtimePeers('attendance', {
+          attendancePatches: [
+            ...otherModifiedSessions.map((otherSess) => ({
+              type: 'session_upsert' as const,
+              sessionId: otherSess.id,
+              courseId: otherSess.courseId,
+              session: otherSess,
+              statusUpdatedAtMs: nowMs,
+            })),
+            {
+              type: 'session_upsert' as const,
+              sessionId: targetSess.id,
+              courseId: targetSess.courseId,
+              session: targetSess,
+              statusUpdatedAtMs: nowMs,
+            },
+          ],
         });
+
+        (async () => {
+          for (const otherSess of otherModifiedSessions) {
+            await SupabaseService.upsertAttendanceSession(otherSess, {
+              force: true,
+              onlyUpdateOpenState: false,
+            }).catch(() => false);
+          }
+          const ok = await SupabaseService.upsertAttendanceSession(targetSess, {
+            force: true,
+            onlyUpdateOpenState: Boolean(isOpen),
+          }).catch(() => false);
+          if (ok) {
+            this.markAttendanceCloudConfirmed(targetSess.id);
+          }
+        })();
       } catch {
         // ignore
       }
@@ -6969,11 +7169,31 @@ export class ClassroomDB {
 
     if (closedList.length > 0) {
       this.setItem(STORAGE_KEYS.ATTENDANCE, updated);
+      try {
+        SupabaseService.notifyRealtimePeers('attendance', {
+          attendancePatches: [
+            {
+              type: 'session_close_all',
+              courseId,
+              statusUpdatedAtMs: nowMs,
+            },
+            ...closedList.map((sess) => ({
+              type: 'session_upsert' as const,
+              sessionId: sess.id,
+              courseId: sess.courseId,
+              session: sess,
+              statusUpdatedAtMs: nowMs,
+            })),
+          ],
+        });
+      } catch {
+        // ignore
+      }
       closedList.forEach((sess) => {
         try {
           SupabaseService.upsertAttendanceSession(sess, {
             force: true,
-            onlyUpdateOpenState: true,
+            onlyUpdateOpenState: false,
           })
             .then((ok) => {
               if (ok) this.markAttendanceCloudConfirmed(sess.id);
@@ -7100,7 +7320,8 @@ export class ClassroomDB {
     }
 
     const previousRecordForStudent = target.records ? target.records[student.id] : undefined;
-    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const nowMs = Date.now();
+    const nowTime = this.formatCheckInTimestamp(new Date(nowMs));
     let updatedSession: AttendanceSession | null = null;
     let studentRecordToSync: AttendanceRecord | null = null;
 
@@ -7123,6 +7344,7 @@ export class ClassroomDB {
           studentName: student.name,
           status: status as AttendanceStatus,
           checkedInAt: status === 'absent' ? undefined : nowTime,
+          checkedInAtMs: status === 'absent' ? undefined : nowMs,
           checkedInBy: 'student' as const,
           note: note !== undefined ? note.trim() || undefined : prevRec?.note,
         };
@@ -7154,6 +7376,19 @@ export class ClassroomDB {
       const fallbackSess = updatedSession as AttendanceSession;
       const expectedRecord = studentRecordToSync;
       try {
+        // Broadcast immediately (<100ms) so Admin, Co-Admin, and Student screens see this check-in & exact timestamp right away!
+        SupabaseService.notifyRealtimePeers('attendance_checkin', {
+          attendancePatches: [
+            {
+              type: 'student_checkin',
+              sessionId,
+              courseId: target.courseId,
+              studentId: student.id,
+              record: expectedRecord,
+            },
+          ],
+        });
+
         SupabaseService.syncStudentCheckInToCloud(
           sessionId,
           student.id,
@@ -7256,25 +7491,40 @@ export class ClassroomDB {
       STORAGE_KEYS.ATTENDANCE,
       INITIAL_ATTENDANCE_SESSIONS
     );
-    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    let updatedSession: AttendanceSession | null = null;
     const nowMs = Date.now();
+    const nowTime = this.formatCheckInTimestamp(new Date(nowMs));
+    let updatedSession: AttendanceSession | null = null;
+    let markedRecord: AttendanceRecord | null = null;
     const updated = sessions.map((s) => {
       if (s.id === sessionId) {
         const prevRecord = s.records[student.id];
+        const preserveStudentSelfCheckIn =
+          prevRecord?.checkedInBy === 'student' && prevRecord?.status === status;
+        markedRecord = {
+          studentId: student.id,
+          studentName: student.name,
+          status,
+          checkedInAt:
+            status === 'absent'
+              ? undefined
+              : preserveStudentSelfCheckIn
+              ? prevRecord?.checkedInAt || nowTime
+              : nowTime,
+          checkedInAtMs:
+            status === 'absent'
+              ? undefined
+              : preserveStudentSelfCheckIn
+              ? prevRecord?.checkedInAtMs || nowMs
+              : nowMs,
+          checkedInBy: preserveStudentSelfCheckIn ? 'student' : 'instructor',
+          note: note !== undefined ? note : prevRecord?.note,
+        };
         updatedSession = {
           ...s,
           statusUpdatedAtMs: nowMs,
           records: {
             ...s.records,
-            [student.id]: {
-              studentId: student.id,
-              studentName: student.name,
-              status,
-              checkedInAt: status === 'absent' ? undefined : prevRecord?.checkedInAt || nowTime,
-              checkedInBy: 'instructor' as const,
-              note: note !== undefined ? note : prevRecord?.note,
-            },
+            [student.id]: markedRecord,
           },
         };
         return updatedSession;
@@ -7285,8 +7535,20 @@ export class ClassroomDB {
     this.markLocalWrite(`att-rec:${sessionId}:${student.id}`);
     this.setItem(STORAGE_KEYS.ATTENDANCE, updated);
     if (updatedSession) {
+      const targetSess = updatedSession as AttendanceSession;
       try {
-        SupabaseService.upsertAttendanceSession(updatedSession, {
+        SupabaseService.notifyRealtimePeers('attendance', {
+          attendancePatches: [
+            {
+              type: 'student_checkin',
+              sessionId,
+              courseId: targetSess.courseId,
+              studentId: student.id,
+              record: markedRecord,
+            },
+          ],
+        });
+        SupabaseService.upsertAttendanceSession(targetSess, {
           preserveRemoteOpenState: true,
         })
           .then((ok) => {
@@ -7313,20 +7575,34 @@ export class ClassroomDB {
       STORAGE_KEYS.ATTENDANCE,
       INITIAL_ATTENDANCE_SESSIONS
     );
-    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const nowMs = Date.now();
+    const nowTime = this.formatCheckInTimestamp(new Date(nowMs));
     let updatedSession: AttendanceSession | null = null;
     const updated = sessions.map((s) => {
       if (s.id === sessionId) {
         const nextRecords: Record<string, AttendanceRecord> = { ...s.records };
         students.forEach((stu) => {
           this.markLocalWrite(`att-rec:${sessionId}:${stu.id}`);
+          const prevRec = nextRecords[stu.id];
+          const preserveStudentSelfCheckIn =
+            prevRec?.checkedInBy === 'student' && prevRec?.status === status;
           nextRecords[stu.id] = {
             studentId: stu.id,
             studentName: stu.name,
             status,
-            checkedInAt: status === 'absent' ? undefined : nextRecords[stu.id]?.checkedInAt || nowTime,
-            checkedInBy: 'instructor',
+            checkedInAt:
+              status === 'absent'
+                ? undefined
+                : preserveStudentSelfCheckIn
+                ? prevRec?.checkedInAt || nowTime
+                : nowTime,
+            checkedInAtMs:
+              status === 'absent'
+                ? undefined
+                : preserveStudentSelfCheckIn
+                ? prevRec?.checkedInAtMs || nowMs
+                : nowMs,
+            checkedInBy: preserveStudentSelfCheckIn ? 'student' : 'instructor',
           };
         });
         updatedSession = { ...s, statusUpdatedAtMs: nowMs, records: nextRecords };
@@ -7337,8 +7613,20 @@ export class ClassroomDB {
 
     this.setItem(STORAGE_KEYS.ATTENDANCE, updated);
     if (updatedSession) {
+      const targetSess = updatedSession as AttendanceSession;
       try {
-        SupabaseService.upsertAttendanceSession(updatedSession, {
+        SupabaseService.notifyRealtimePeers('attendance', {
+          attendancePatches: [
+            {
+              type: 'session_upsert',
+              sessionId: targetSess.id,
+              courseId: targetSess.courseId,
+              session: targetSess,
+              statusUpdatedAtMs: nowMs,
+            },
+          ],
+        });
+        SupabaseService.upsertAttendanceSession(targetSess, {
           preserveRemoteOpenState: true,
         })
           .then((ok) => {

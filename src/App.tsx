@@ -164,7 +164,10 @@ export default function App() {
     // Smartly routes each Realtime event to ONLY the affected table(s) to cut Log Ingestion & Egress by ~90%
     const unsubscribeRealtime = SupabaseService.subscribeToRealtimeChanges((payload) => {
       const deletedChanged = ClassroomDB.applyRemoteDeletions(payload);
-      if (deletedChanged) {
+      const attPatchChanged = ClassroomDB.applyRealtimeAttendancePatches(
+        payload?.attendancePatches
+      );
+      if (deletedChanged || attPatchChanged) {
         refreshData();
       }
       if (navigator.onLine === false) return;
@@ -178,7 +181,7 @@ export default function App() {
           ? [payload.kind]
           : ['all'];
 
-      // 1. Fast path for Attendance-only events (1 lightweight 0.3KB delta request instead of 8 queries)
+      // 1. Fast path for Attendance-only events (already applied in 0ms via attendancePatches, plus 0.3KB delta verification)
       if (kinds.length === 1 && kinds[0] === 'attendance') {
         ClassroomDB.syncAttendanceFromCloud(true).then((attChanged) => {
           if (attChanged) {
@@ -189,8 +192,8 @@ export default function App() {
       }
 
       // 1a. Fast path for Student Attendance Check-in events:
-      // Students never need to re-query Supabase when other classmates click "Present".
-      // Only Admin / Co-Admin sync the updated roster (using throttled non-forced sync).
+      // The student's exact check-in record & timestamp were already applied in 0ms above via `applyRealtimeAttendancePatches`!
+      // Only Admin / Co-Admin run a background verification sync.
       if (kinds.length === 1 && kinds[0] === 'attendance_checkin') {
         if (loggedUser.role === 'student') {
           return;
@@ -529,6 +532,17 @@ export default function App() {
           onLoginSuccess={(user) => {
             setCurrentUser(user);
             refreshData();
+            SupabaseService.resumeRealtimeConnection();
+            ClassroomDB.syncAttendanceFromCloud(true).then((attChanged) => {
+              if (attChanged) {
+                refreshData();
+              }
+            });
+            ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
+              if (updated || !ClassroomDB.getCurrentUser()) {
+                refreshData();
+              }
+            });
           }}
           onOpenArchitecture={() => setShowArchitectureModal(true)}
           theme={theme}

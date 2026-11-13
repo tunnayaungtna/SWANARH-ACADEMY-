@@ -175,8 +175,19 @@ export interface AttendanceRecord {
   studentName: string;
   status: AttendanceStatus;
   checkedInAt?: string;
+  checkedInAtMs?: number;
   checkedInBy: 'student' | 'instructor';
   note?: string;
+}
+
+export interface RealtimeAttendancePatch {
+  type: 'session_upsert' | 'session_close_all' | 'student_checkin';
+  sessionId?: string;
+  courseId?: string;
+  session?: AttendanceSession;
+  studentId?: string;
+  record?: AttendanceRecord | null;
+  statusUpdatedAtMs?: number;
 }
 
 export interface AttendanceSession {

@@ -44,27 +44,22 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
   >('all');
 
   useEffect(() => {
-    if (!isInstructor) {
-      // Students receive instant Realtime broadcasts when an Instructor opens/closes Attendance,
-      // and App.tsx already handles background delta sync — no extra student interval needed!
-      return;
-    }
     let mounted = true;
-    const syncNow = () => {
+    const syncNow = (forcePull: boolean = false) => {
       if (document.visibilityState === 'visible' && navigator.onLine !== false) {
-        const hasOpen = courses.some((c) =>
-          ClassroomDB.getAttendanceSessions(c.id).some((s) => s.isOpen)
-        );
-        if (hasOpen) {
-          ClassroomDB.syncAttendanceFromCloud().then((changed) => {
-            if (mounted && changed) {
-              onRefresh();
-            }
-          });
-        }
+        ClassroomDB.syncAttendanceFromCloud(forcePull).then((changed) => {
+          if (mounted && changed) {
+            onRefresh();
+          }
+        });
       }
     };
-    const timer = setInterval(syncNow, 45_000);
+    syncNow(true);
+    const hasOpen = courses.some((c) =>
+      ClassroomDB.getAttendanceSessions(c.id).some((s) => s.isOpen)
+    );
+    const intervalMs = isInstructor && hasOpen ? 8_000 : 15_000;
+    const timer = setInterval(() => syncNow(false), intervalMs);
     return () => {
       mounted = false;
       clearInterval(timer);
@@ -91,7 +86,7 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
       return;
     }
 
-    const todayIso = new Date().toISOString().slice(0, 10);
+    const todayIso = ClassroomDB.getLocalTodayIso();
     const existingTodayClosed = !customTitle?.trim()
       ? sessions.find((s) => s.date === todayIso && !s.isOpen)
       : undefined;
@@ -289,18 +284,24 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
                       {myRecord ? (
                         <div className="space-y-2">
                           <div className="flex items-center justify-between gap-2">
-                            <div className="flex-1 py-2 px-3 rounded-xl bg-emerald-100 dark:bg-emerald-950/90 border border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-200 text-xs font-bold flex items-center justify-center gap-1.5">
-                              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                              <span>
-                                {myRecord.status === 'present'
-                                  ? 'Present (တက်ရောက်)'
-                                  : myRecord.status === 'late'
-                                  ? 'Late (နောက်ကျ)'
-                                  : myRecord.status === 'excused'
-                                  ? 'Excused (ခွင့်တိုင်)'
-                                  : 'Absent'}{' '}
-                                {myRecord.checkedInAt ? `(${myRecord.checkedInAt})` : ''}
-                              </span>
+                            <div className="flex-1 py-2 px-3 rounded-xl bg-emerald-100 dark:bg-emerald-950/90 border border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-200 text-xs font-bold flex flex-col items-center justify-center gap-0.5">
+                              <div className="flex items-center gap-1.5">
+                                <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                                <span>
+                                  {myRecord.status === 'present'
+                                    ? 'Present (တက်ရောက်)'
+                                    : myRecord.status === 'late'
+                                    ? 'Late (နောက်ကျ)'
+                                    : myRecord.status === 'excused'
+                                    ? 'Excused (ခွင့်တိုင်)'
+                                    : 'Absent'}
+                                </span>
+                              </div>
+                              {myRecord.checkedInAt && (
+                                <span className="text-[10px] font-mono font-semibold text-emerald-700 dark:text-emerald-300">
+                                  ⏰ နှိပ်သည့်အချိန်: {myRecord.checkedInAt}
+                                </span>
+                              )}
                             </div>
                             <button
                               type="button"
@@ -744,9 +745,9 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
                               <td className="py-2.5 px-3.5 text-right">
                                 {latestSess ? (
                                   isCheckedIn ? (
-                                    <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
-                                      ✓ {latestRec?.status === 'late' ? 'Late' : latestRec?.status === 'excused' ? 'Excused' : 'Present'} (
-                                      {latestRec?.checkedInAt})
+                                    <span className="text-emerald-600 dark:text-emerald-400 font-semibold font-mono">
+                                      ✓ {latestRec?.status === 'late' ? 'Late' : latestRec?.status === 'excused' ? 'Excused' : 'Present'}{' '}
+                                      {latestRec?.checkedInAt ? `(⏰ ${latestRec.checkedInAt})` : ''}
                                     </span>
                                   ) : (
                                     <button

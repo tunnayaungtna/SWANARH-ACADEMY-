@@ -54,7 +54,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   );
 
   // Create new attendance session form state (for Instructors)
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = ClassroomDB.getLocalTodayIso();
   const [newTitle, setNewTitle] = useState('');
   const [newDate, setNewDate] = useState(todayIso);
   const [openImmediately, setOpenImmediately] = useState(true);
@@ -72,12 +72,12 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
     setTimeout(() => setToastMsg(null), 3200);
   };
 
-  // Real-time multi-device Attendance synchronization (polls 0.3KB delta metadata every 8s)
+  // Real-time multi-device Attendance synchronization (instant WebSocket patch + 6s delta verification)
   useEffect(() => {
     let mounted = true;
-    const syncNow = () => {
+    const syncNow = (forcePull: boolean = false) => {
       if (document.visibilityState === 'visible' && navigator.onLine !== false) {
-        ClassroomDB.syncAttendanceFromCloud().then((changed) => {
+        ClassroomDB.syncAttendanceFromCloud(forcePull).then((changed) => {
           if (mounted && changed) {
             onRefresh();
           }
@@ -92,10 +92,10 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       );
       onRefresh();
     };
-    syncNow();
+    syncNow(true);
     const hasOpenNow = sessions.some((s) => s.isOpen);
-    const pollIntervalMs = isInstructor && hasOpenNow ? 20_000 : 90_000;
-    const timer = setInterval(syncNow, pollIntervalMs);
+    const pollIntervalMs = hasOpenNow ? 6_000 : 12_000;
+    const timer = setInterval(() => syncNow(false), pollIntervalMs);
     window.addEventListener('attendance-closed-remotely', handleRemoteClosed);
     return () => {
       mounted = false;
@@ -107,15 +107,17 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   // Open sessions where student can self check-in
   const openSessions = sessions.filter((s) => s.isOpen);
 
-  // Automatically switch selectedSessionId to the active open session when one opens
+  // Automatically switch selectedSessionId to the active open session (e.g., 13th opened on another device)
+  // or to the newest session when remote sessions arrive from Supabase
+  const latestOpenId = openSessions[0]?.id || '';
+  const latestSessionId = sessions[0]?.id || '';
   useEffect(() => {
-    if (openSessions.length > 0) {
-      const currentSelected = sessions.find((s) => s.id === selectedSessionId);
-      if (!currentSelected || !currentSelected.isOpen) {
-        setSelectedSessionId(openSessions[0].id);
-      }
+    if (latestOpenId && selectedSessionId !== latestOpenId) {
+      setSelectedSessionId(latestOpenId);
+    } else if (!latestOpenId && latestSessionId && !sessions.some((s) => s.id === selectedSessionId)) {
+      setSelectedSessionId(latestSessionId);
     }
-  }, [openSessions.map((s) => s.id).join(','), sessions.length]);
+  }, [latestOpenId, latestSessionId, sessions.length]);
 
   // Prioritize any currently OPEN session if selectedSessionId is not set or no longer exists
   const activeSession: AttendanceSession | undefined =
@@ -307,7 +309,9 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
             ? ' [Excused]'
             : ' [Present]'
           : '';
-      return `${idx + 1}. ${stu.name} (@${stu.username})${statusText}`;
+      const timeText =
+        mode === 'checked_in' && rec?.checkedInAt ? ` — ⏰ ${rec.checkedInAt}` : '';
+      return `${idx + 1}. ${stu.name} (@${stu.username})${statusText}${timeText}`;
     });
 
     const fullText = [header, '━━━━━━━━━━━━━━━━━━━━', ...lines].join('\n');
@@ -522,8 +526,9 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                           <div className="flex flex-wrap items-center gap-2 shrink-0">
                             {renderStatusBadge(myRecord.status)}
                             {myRecord.checkedInAt && (
-                              <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                                ({myRecord.checkedInAt})
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] font-mono font-semibold text-emerald-700 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-800">
+                                <Clock className="w-3 h-3 shrink-0" />
+                                <span>နှိပ်သည့်အချိန်: {myRecord.checkedInAt}</span>
                               </span>
                             )}
                             <button
@@ -695,9 +700,15 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                           {sess.title}
                         </div>
                         {myRec?.checkedInAt && (
-                          <div className="text-[11px] text-slate-400 dark:text-slate-500 font-mono mt-0.5">
-                            Checked in at {myRec.checkedInAt} (
-                            {myRec.checkedInBy === 'student' ? 'Self Check-in' : 'Marked by Instructor'})
+                          <div className="text-[11px] text-emerald-700 dark:text-emerald-400 font-mono font-semibold mt-0.5 flex items-center gap-1 flex-wrap">
+                            <Clock className="w-3 h-3 shrink-0" />
+                            <span>
+                              နှိပ်သည့်အချိန်: {myRec.checkedInAt} (
+                              {myRec.checkedInBy === 'student'
+                                ? 'ကျောင်းသားကိုယ်တိုင် နှိပ်ထားသည်'
+                                : 'ဆရာမှ ခြစ်ပေးထားသည်'}
+                              )
+                            </span>
                           </div>
                         )}
                       </div>
@@ -1243,20 +1254,23 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                                   </span>
                                 )}
                               </div>
-                              <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                              <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 mt-1 flex-wrap">
                                 {rec?.checkedInAt ? (
                                   <span
-                                    className={`font-mono ${
+                                    className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg font-mono font-semibold border ${
                                       isCheckedIn
-                                        ? 'text-emerald-600 dark:text-emerald-400'
-                                        : 'text-rose-600 dark:text-rose-400'
+                                        ? 'bg-emerald-50/80 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                                        : 'bg-rose-50/80 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800'
                                     }`}
                                   >
-                                    {isCheckedIn ? '✓' : '✕'} {rec.checkedInAt} တွင် မှတ်တမ်းတင်ထားသည် (
-                                    {rec.checkedInBy === 'student'
-                                      ? 'ကျောင်းသားကိုယ်တိုင် နှိပ်ထားသည်'
-                                      : 'Admin / Co-Admin မှ ခြစ်ပေးထားသည်'}
-                                    )
+                                    <Clock className="w-3 h-3 shrink-0" />
+                                    <span>
+                                      နှိပ်သည့်အချိန်: <strong>{rec.checkedInAt}</strong> (
+                                      {rec.checkedInBy === 'student'
+                                        ? 'ကျောင်းသားကိုယ်တိုင် နှိပ်ထားသည်'
+                                        : 'Admin / Co-Admin မှ ခြစ်ပေးထားသည်'}
+                                      )
+                                    </span>
                                   </span>
                                 ) : (
                                   <span className="text-amber-600 dark:text-amber-400 font-medium">
