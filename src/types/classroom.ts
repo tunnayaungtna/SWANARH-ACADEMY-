@@ -256,6 +256,18 @@ export interface PrivateNote {
   updatedAtMs?: number;
 }
 
+export interface RealtimePrivateNotePatch {
+  type: 'note_upsert' | 'note_delete' | 'note_typing';
+  noteId?: string;
+  courseId?: string;
+  studentId?: string;
+  note?: PrivateNote;
+  typingActorId?: string;
+  typingActorName?: string;
+  typingActorRole?: UserRole;
+  typingAtMs?: number;
+}
+
 export interface NotificationItem {
   id: string;
   userId: string;

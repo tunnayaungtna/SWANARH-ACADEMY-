@@ -15,6 +15,7 @@ import {
   AttendanceStatus,
   AttendanceRecord,
   RealtimeAttendancePatch,
+  RealtimePrivateNotePatch,
   AuditLogEntry,
   AuditLogCategory,
   AuditLogSeverity,
@@ -4370,6 +4371,7 @@ export class ClassroomDB {
             ? SupabaseService.getRemotePrivateNotes({
                 studentId: loggedUser.role === 'student' ? loggedUser.id : undefined,
                 courseIds: studentScopedCourseIds,
+                forceRefresh: force,
               })
             : Promise.resolve(null),
           shouldCheckStudentSessionLock && loggedUser
@@ -5478,7 +5480,8 @@ export class ClassroomDB {
   }
 
   /**
-   * Reconciles remote Private Notes with local Private Notes using updatedAtMs / repliedAtMs / createdAtMs
+   * Reconciles remote Private Notes with local Private Notes using status priority + repliedAtMs / updatedAtMs.
+   * CRITICAL: A replied/approved/rejected note NEVER regresses back to 'pending' due to a read-receipt timestamp!
    */
   private static reconcileRemotePrivateNotes(
     remoteNotes: PrivateNote[],
@@ -5504,13 +5507,30 @@ export class ClassroomDB {
         noteMap.set(rn.id, rn);
         return;
       }
-      const localTs = existing.updatedAtMs || existing.repliedAtMs || existing.createdAtMs || 0;
-      const remoteTs = rn.updatedAtMs || rn.repliedAtMs || rn.createdAtMs || 0;
-      const winner = remoteTs >= localTs ? rn : existing;
+      const existingReplied = existing.status !== 'pending' && Boolean(existing.replyContent);
+      const remoteReplied = rn.status !== 'pending' && Boolean(rn.replyContent);
+
+      let winner: PrivateNote;
+      if (remoteReplied && !existingReplied) {
+        winner = rn;
+      } else if (existingReplied && !remoteReplied) {
+        winner = existing;
+      } else if (remoteReplied && existingReplied) {
+        const localReplyTs = existing.repliedAtMs || existing.updatedAtMs || 0;
+        const remoteReplyTs = rn.repliedAtMs || rn.updatedAtMs || 0;
+        winner = remoteReplyTs >= localReplyTs ? rn : existing;
+      } else {
+        const localTs = existing.updatedAtMs || existing.createdAtMs || 0;
+        const remoteTs = rn.updatedAtMs || rn.createdAtMs || 0;
+        winner = remoteTs >= localTs ? rn : existing;
+      }
+
       noteMap.set(rn.id, {
         ...existing,
         ...winner,
-        isReadByInstructor: Boolean(existing.isReadByInstructor || rn.isReadByInstructor),
+        isReadByInstructor: Boolean(
+          winner.status !== 'pending' || existing.isReadByInstructor || rn.isReadByInstructor
+        ),
         isReadByStudent:
           winner.status !== 'pending' && existing.status === 'pending'
             ? Boolean(rn.isReadByStudent)
@@ -5535,7 +5555,7 @@ export class ClassroomDB {
       return false;
     }
     const now = Date.now();
-    if (!force && now - this.lastPrivateNoteSyncAt < 15_000) {
+    if (!force && now - this.lastPrivateNoteSyncAt < 3_000) {
       return false;
     }
     if (this.activePrivateNoteSyncPromise) {
@@ -5575,6 +5595,189 @@ export class ClassroomDB {
       }
     })();
     return this.activePrivateNoteSyncPromise;
+  }
+
+  private static activePrivateNoteTypingMap = new Map<
+    string,
+    { actorId: string; actorName: string; actorRole: UserRole; expiresAtMs: number }
+  >();
+  private static lastPrivateNoteTypingSentAt = new Map<string, number>();
+
+  /**
+   * Broadcasts to other Admins / Co-Admins that this instructor is currently typing a reply
+   * to a specific Private Note so two instructors do not reply at the same time.
+   * Throttled to once every 3.5 seconds per note to keep Supabase Realtime usage minimal.
+   */
+  static broadcastPrivateNoteTyping(note: PrivateNote, actor: User): void {
+    if (actor.role !== 'admin' && actor.role !== 'co_admin') return;
+    const now = Date.now();
+    const lastSent = this.lastPrivateNoteTypingSentAt.get(note.id) || 0;
+    if (now - lastSent < 3_500) return;
+    this.lastPrivateNoteTypingSentAt.set(note.id, now);
+    try {
+      SupabaseService.notifyRealtimePeers('private_note', {
+        privateNotePatches: [
+          {
+            type: 'note_typing',
+            noteId: note.id,
+            courseId: note.courseId,
+            studentId: note.studentId,
+            typingActorId: actor.id,
+            typingActorName: actor.name,
+            typingActorRole: actor.role,
+            typingAtMs: now,
+          },
+        ],
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  static getActiveReplyTypingForNote(
+    noteId: string,
+    currentUserId?: string
+  ): { actorId: string; actorName: string; actorRole: UserRole } | null {
+    const entry = this.activePrivateNoteTypingMap.get(noteId);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAtMs) {
+      this.activePrivateNoteTypingMap.delete(noteId);
+      return null;
+    }
+    if (currentUserId && entry.actorId === currentUserId) {
+      return null;
+    }
+    return entry;
+  }
+
+  /**
+   * Applies incoming Realtime WebSocket private note patches directly into localStorage in 0ms
+   * without waiting for a Supabase HTTP SELECT round-trip.
+   * Strictly enforces student privacy (students only store notes where studentId === loggedUser.id).
+   */
+  static applyRealtimePrivateNotePatches(patches?: RealtimePrivateNotePatch[]): boolean {
+    if (!patches || !Array.isArray(patches) || patches.length === 0) return false;
+    const loggedUser = this.getCurrentUser();
+    if (!loggedUser) return false;
+
+    const deletedSet = new Set(this.getDeletedIds());
+    let localNotes = this.getItem<PrivateNote[]>(STORAGE_KEYS.PRIVATE_NOTES, []).filter(
+      (n) => !deletedSet.has(n.id) && !deletedSet.has(n.courseId)
+    );
+    const prevJson = JSON.stringify(localNotes);
+    let typingChanged = false;
+    const newlyRepliedNotes: PrivateNote[] = [];
+
+    for (const patch of patches) {
+      if (!patch || !patch.noteId) continue;
+
+      // Enforce 1-on-1 Student Privacy: students ignore patches for other students
+      if (loggedUser.role === 'student' && patch.studentId && patch.studentId !== loggedUser.id) {
+        continue;
+      }
+
+      if (patch.type === 'note_typing') {
+        if (
+          (loggedUser.role === 'admin' || loggedUser.role === 'co_admin') &&
+          patch.typingActorId &&
+          patch.typingActorId !== loggedUser.id &&
+          patch.typingActorName
+        ) {
+          this.activePrivateNoteTypingMap.set(patch.noteId, {
+            actorId: patch.typingActorId,
+            actorName: patch.typingActorName,
+            actorRole: patch.typingActorRole || 'admin',
+            expiresAtMs: Date.now() + 8_000,
+          });
+          typingChanged = true;
+        }
+        continue;
+      }
+
+      if (patch.type === 'note_delete') {
+        this.activePrivateNoteTypingMap.delete(patch.noteId);
+        localNotes = localNotes.filter((n) => n.id !== patch.noteId);
+        continue;
+      }
+
+      if (patch.type === 'note_upsert' && patch.note) {
+        const rn = patch.note;
+        if (loggedUser.role === 'student' && rn.studentId !== loggedUser.id) {
+          continue;
+        }
+        if (deletedSet.has(rn.id) || deletedSet.has(rn.courseId)) {
+          continue;
+        }
+        if (rn.status !== 'pending') {
+          this.activePrivateNoteTypingMap.delete(rn.id);
+        }
+
+        const existingIdx = localNotes.findIndex((n) => n.id === rn.id);
+        if (existingIdx === -1) {
+          localNotes = [rn, ...localNotes];
+          if (rn.status !== 'pending') {
+            newlyRepliedNotes.push(rn);
+          }
+        } else {
+          const existing = localNotes[existingIdx];
+          const wasPending = existing.status === 'pending';
+          const existingReplied = existing.status !== 'pending' && Boolean(existing.replyContent);
+          const remoteReplied = rn.status !== 'pending' && Boolean(rn.replyContent);
+
+          let winner: PrivateNote;
+          if (remoteReplied && !existingReplied) {
+            winner = rn;
+          } else if (existingReplied && !remoteReplied) {
+            winner = existing;
+          } else if (remoteReplied && existingReplied) {
+            const localReplyTs = existing.repliedAtMs || existing.updatedAtMs || 0;
+            const remoteReplyTs = rn.repliedAtMs || rn.updatedAtMs || 0;
+            winner = remoteReplyTs >= localReplyTs ? rn : existing;
+          } else {
+            const localTs = existing.updatedAtMs || existing.createdAtMs || 0;
+            const remoteTs = rn.updatedAtMs || rn.createdAtMs || 0;
+            winner = remoteTs >= localTs ? rn : existing;
+          }
+
+          const mergedNote: PrivateNote = {
+            ...existing,
+            ...winner,
+            isReadByInstructor: Boolean(
+              winner.status !== 'pending' || existing.isReadByInstructor || rn.isReadByInstructor
+            ),
+            isReadByStudent:
+              winner.status !== 'pending' && existing.status === 'pending'
+                ? Boolean(rn.isReadByStudent)
+                : Boolean(existing.isReadByStudent || rn.isReadByStudent),
+          };
+          localNotes[existingIdx] = mergedNote;
+
+          if (wasPending && mergedNote.status !== 'pending') {
+            newlyRepliedNotes.push(mergedNote);
+          }
+        }
+      }
+    }
+
+    localNotes.sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
+    const notesChanged = JSON.stringify(localNotes) !== prevJson;
+    if (notesChanged) {
+      this.setItem(STORAGE_KEYS.PRIVATE_NOTES, localNotes);
+    }
+
+    if ((notesChanged || typingChanged) && typeof window !== 'undefined') {
+      try {
+        window.dispatchEvent(
+          new CustomEvent('private-note-realtime-update', {
+            detail: { newlyRepliedNotes, typingChanged },
+          })
+        );
+      } catch {
+        // ignore
+      }
+    }
+
+    return notesChanged || typingChanged;
   }
 
   /**
@@ -8296,9 +8499,8 @@ export class ClassroomDB {
           !note.isReadByInstructor
         ) {
           notesMutated = true;
-          const next = { ...note, isReadByInstructor: true, updatedAtMs: nowMs };
-          notesToSync.push(next);
-          return next;
+          // Do NOT advance updatedAtMs or re-upsert pending notes so we never overwrite another instructor's reply!
+          return { ...note, isReadByInstructor: true };
         }
         if (
           user.role === 'student' &&
@@ -8451,8 +8653,22 @@ export class ClassroomDB {
     this.markLocalWrite(newNote.id);
     this.setItem(STORAGE_KEYS.PRIVATE_NOTES, [newNote, ...existing]);
 
+    // Immediately broadcast the new Private Note over WebSocket in <50ms so all connected
+    // Admins and Co-Admins receive it instantaneously without waiting for HTTP round-trip
     try {
-      SupabaseService.upsertPrivateNote(newNote).catch(() => {});
+      SupabaseService.notifyRealtimePeers('private_note', {
+        targetUserIds: [newNote.studentId],
+        privateNotePatches: [
+          {
+            type: 'note_upsert',
+            noteId: newNote.id,
+            courseId: newNote.courseId,
+            studentId: newNote.studentId,
+            note: newNote,
+          },
+        ],
+      });
+      SupabaseService.upsertPrivateNote(newNote, true).catch(() => {});
     } catch {
       // ignore
     }
@@ -8496,6 +8712,7 @@ export class ClassroomDB {
       updatedAtMs: nowMs,
     };
 
+    this.activePrivateNoteTypingMap.delete(noteId);
     const updatedList = existing.map((n) => (n.id === noteId ? updatedNote : n));
     this.markLocalWrite(noteId);
     this.setItem(STORAGE_KEYS.PRIVATE_NOTES, updatedList);
@@ -8520,8 +8737,22 @@ export class ClassroomDB {
       }
     }
 
+    // Immediately broadcast the completed reply over WebSocket in <50ms so all other
+    // Admins, Co-Admins, and the Student see it right away and never double-reply!
     try {
-      SupabaseService.upsertPrivateNote(updatedNote).catch(() => {});
+      SupabaseService.notifyRealtimePeers('private_note', {
+        targetUserIds: [updatedNote.studentId],
+        privateNotePatches: [
+          {
+            type: 'note_upsert',
+            noteId: updatedNote.id,
+            courseId: updatedNote.courseId,
+            studentId: updatedNote.studentId,
+            note: updatedNote,
+          },
+        ],
+      });
+      SupabaseService.upsertPrivateNote(updatedNote, true).catch(() => {});
     } catch {
       // ignore
     }
@@ -8547,18 +8778,16 @@ export class ClassroomDB {
 
   static markPrivateNoteReadByInstructor(noteId: string): void {
     const existing = this.getItem<PrivateNote[]>(STORAGE_KEYS.PRIVATE_NOTES, []);
-    let targetNote: PrivateNote | null = null;
-    const nowMs = Date.now();
+    let changed = false;
     const updated = existing.map((n) => {
       if (n.id === noteId && !n.isReadByInstructor) {
-        targetNote = { ...n, isReadByInstructor: true, updatedAtMs: nowMs };
-        return targetNote;
+        changed = true;
+        return { ...n, isReadByInstructor: true };
       }
       return n;
     });
-    if (targetNote) {
+    if (changed) {
       this.setItem(STORAGE_KEYS.PRIVATE_NOTES, updated);
-      SupabaseService.upsertPrivateNote(targetNote, true).catch(() => {});
     }
   }
 
@@ -8581,7 +8810,8 @@ export class ClassroomDB {
 
   static markPrivateNotesReadForCourse(courseId: string, user: User): void {
     const existing = this.getItem<PrivateNote[]>(STORAGE_KEYS.PRIVATE_NOTES, []);
-    const toSync: PrivateNote[] = [];
+    const studentToSync: PrivateNote[] = [];
+    let mutated = false;
     const nowMs = Date.now();
     const updated = existing.map((n) => {
       if (n.courseId !== courseId) return n;
@@ -8591,23 +8821,24 @@ export class ClassroomDB {
         n.status !== 'pending' &&
         !n.isReadByStudent
       ) {
+        mutated = true;
         const next = { ...n, isReadByStudent: true, updatedAtMs: nowMs };
-        toSync.push(next);
+        studentToSync.push(next);
         return next;
       }
       if (
         (user.role === 'admin' || user.role === 'co_admin') &&
         !n.isReadByInstructor
       ) {
-        const next = { ...n, isReadByInstructor: true, updatedAtMs: nowMs };
-        toSync.push(next);
-        return next;
+        mutated = true;
+        // CRITICAL: Do NOT overwrite updatedAtMs or push pending notes to Supabase when an instructor opens the tab!
+        return { ...n, isReadByInstructor: true };
       }
       return n;
     });
-    if (toSync.length > 0) {
+    if (mutated) {
       this.setItem(STORAGE_KEYS.PRIVATE_NOTES, updated);
-      toSync.forEach((n) => {
+      studentToSync.forEach((n) => {
         SupabaseService.upsertPrivateNote(n, true).catch(() => {});
       });
     }
@@ -8624,12 +8855,24 @@ export class ClassroomDB {
     ) {
       return false;
     }
+    this.activePrivateNoteTypingMap.delete(noteId);
     this.recordDeletedIds([noteId]);
     this.setItem(
       STORAGE_KEYS.PRIVATE_NOTES,
       existing.filter((n) => n.id !== noteId)
     );
     try {
+      SupabaseService.notifyRealtimePeers('private_note', {
+        targetUserIds: [target.studentId],
+        privateNotePatches: [
+          {
+            type: 'note_delete',
+            noteId,
+            courseId: target.courseId,
+            studentId: target.studentId,
+          },
+        ],
+      });
       SupabaseService.deleteRemotePrivateNote(noteId, target.studentId).catch(() => {});
     } catch {
       // ignore

@@ -10,6 +10,7 @@ import {
   AttendanceSession,
   AttendanceRecord,
   RealtimeAttendancePatch,
+  RealtimePrivateNotePatch,
   NotificationItem,
   AuditLogEntry,
   PrivateNote,
@@ -936,6 +937,7 @@ export class SupabaseService {
       deletedUsernames?: string[];
       deletedEmails?: string[];
       attendancePatches?: RealtimeAttendancePatch[];
+      privateNotePatches?: RealtimePrivateNotePatch[];
     }) => void
   >();
   private static activeRealtimeChannel: ReturnType<typeof supabase.channel> | null = null;
@@ -947,6 +949,7 @@ export class SupabaseService {
   private static pendingKinds = new Set<string>();
   private static pendingTargetUserIds = new Set<string>();
   private static pendingAttendancePatches: RealtimeAttendancePatch[] = [];
+  private static pendingPrivateNotePatches: RealtimePrivateNotePatch[] = [];
   private static ignoredRealtimeDeleteIds = new Set<string>();
   // Outbound broadcast coalescer & visibility auto-pause to keep Realtime Messages < 5% of quota
   private static outboundBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -956,6 +959,7 @@ export class SupabaseService {
   private static pendingOutboundDeletedUsernames = new Set<string>();
   private static pendingOutboundDeletedEmails = new Set<string>();
   private static pendingOutboundAttendancePatches: RealtimeAttendancePatch[] = [];
+  private static pendingOutboundPrivateNotePatches: RealtimePrivateNotePatch[] = [];
   private static lastBroadcastSentByKind = new Map<string, number>();
   private static visibilityListenerRegistered = false;
   private static hiddenDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1061,6 +1065,7 @@ export class SupabaseService {
             deletedUsernames?: string[];
             deletedEmails?: string[];
             attendancePatches?: RealtimeAttendancePatch[];
+            privateNotePatches?: RealtimePrivateNotePatch[];
           };
           this.triggerRealtimeListeners(data);
         };
@@ -1109,6 +1114,7 @@ export class SupabaseService {
             deletedUsernames?: string[];
             deletedEmails?: string[];
             attendancePatches?: RealtimeAttendancePatch[];
+            privateNotePatches?: RealtimePrivateNotePatch[];
           };
           this.triggerRealtimeListeners(data);
         })
@@ -1127,6 +1133,7 @@ export class SupabaseService {
     deletedUsernames?: string[];
     deletedEmails?: string[];
     attendancePatches?: RealtimeAttendancePatch[];
+    privateNotePatches?: RealtimePrivateNotePatch[];
   }): void {
     if (Array.isArray(meta?.kinds) && meta.kinds.length > 0) {
       meta.kinds.forEach((k) => {
@@ -1197,11 +1204,16 @@ export class SupabaseService {
     if (Array.isArray(meta?.attendancePatches) && meta.attendancePatches.length > 0) {
       this.pendingAttendancePatches.push(...meta.attendancePatches);
     }
+    if (Array.isArray(meta?.privateNotePatches) && meta.privateNotePatches.length > 0) {
+      this.pendingPrivateNotePatches.push(...meta.privateNotePatches);
+    }
 
-    const isFastAttendance =
+    const isFastRealtime =
       this.pendingAttendancePatches.length > 0 ||
+      this.pendingPrivateNotePatches.length > 0 ||
       this.pendingKinds.has('attendance') ||
-      this.pendingKinds.has('attendance_checkin');
+      this.pendingKinds.has('attendance_checkin') ||
+      this.pendingKinds.has('private_note');
 
     if (this.realtimeDebounceTimer) {
       clearTimeout(this.realtimeDebounceTimer);
@@ -1229,6 +1241,10 @@ export class SupabaseService {
             this.pendingAttendancePatches.length > 0
               ? [...this.pendingAttendancePatches]
               : undefined,
+          privateNotePatches:
+            this.pendingPrivateNotePatches.length > 0
+              ? [...this.pendingPrivateNotePatches]
+              : undefined,
         };
         this.pendingKinds.clear();
         this.pendingTargetUserIds.clear();
@@ -1236,6 +1252,7 @@ export class SupabaseService {
         this.pendingDeletedUsernames.clear();
         this.pendingDeletedEmails.clear();
         this.pendingAttendancePatches = [];
+        this.pendingPrivateNotePatches = [];
 
         this.realtimeListeners.forEach((cb) => {
           try {
@@ -1245,7 +1262,7 @@ export class SupabaseService {
           }
         });
       },
-      isFastAttendance ? 40 : 300
+      isFastRealtime ? 40 : 300
     );
   }
 
@@ -1258,6 +1275,7 @@ export class SupabaseService {
       deletedUsernames?: string[];
       deletedEmails?: string[];
       attendancePatches?: RealtimeAttendancePatch[];
+      privateNotePatches?: RealtimePrivateNotePatch[];
     }) => void
   ): () => void {
     this.realtimeListeners.add(onChange);
@@ -1275,6 +1293,7 @@ export class SupabaseService {
       deletedUsernames?: string[];
       deletedEmails?: string[];
       attendancePatches?: RealtimeAttendancePatch[];
+      privateNotePatches?: RealtimePrivateNotePatch[];
     }
   ): void {
     if (typeof window === 'undefined') return;
@@ -1287,6 +1306,9 @@ export class SupabaseService {
       ...(meta?.deletedUsernames?.length ? { deletedUsernames: meta.deletedUsernames } : {}),
       ...(meta?.deletedEmails?.length ? { deletedEmails: meta.deletedEmails } : {}),
       ...(meta?.attendancePatches?.length ? { attendancePatches: meta.attendancePatches } : {}),
+      ...(meta?.privateNotePatches?.length
+        ? { privateNotePatches: meta.privateNotePatches }
+        : {}),
     };
     try {
       if (this.localBroadcastChannel) {
@@ -1296,10 +1318,10 @@ export class SupabaseService {
       // ignore
     }
 
-    // REALTIME QUOTA PROTECTION + INSTANT ATTENDANCE SYNC:
+    // REALTIME QUOTA PROTECTION + INSTANT ATTENDANCE & PRIVATE NOTE SYNC:
     // - Admin & Co-Admin browsers broadcast all classroom updates.
-    // - Student browsers ONLY broadcast 'attendance_checkin' (and 'private_note') so when a student clicks "Present",
-    //   all Admin, Co-Admin, and Student screens update in <200ms with the embedded attendancePatch (requiring 0 extra HTTP queries!).
+    // - Student browsers ONLY broadcast 'attendance_checkin' and 'private_note' so when a student clicks "Present"
+    //   or sends a Private Note / Leave Request, all Admin & Co-Admin screens update in <150ms with the embedded patch (requiring 0 extra HTTP queries!).
     // - Student background profile locks, post likes, comments, and submissions never broadcast over WebSocket.
     const currentRole = this.getLoggedUserRole();
     const isAllowedStudentKind =
@@ -1333,9 +1355,15 @@ export class SupabaseService {
     if (Array.isArray(meta?.attendancePatches) && meta.attendancePatches.length > 0) {
       this.pendingOutboundAttendancePatches.push(...meta.attendancePatches);
     }
+    if (Array.isArray(meta?.privateNotePatches) && meta.privateNotePatches.length > 0) {
+      this.pendingOutboundPrivateNotePatches.push(...meta.privateNotePatches);
+    }
 
     const isUrgentKind =
-      kind === 'attendance' || kind === 'attendance_checkin' || kind === 'delete';
+      kind === 'attendance' ||
+      kind === 'attendance_checkin' ||
+      kind === 'private_note' ||
+      kind === 'delete';
     const now = Date.now();
     const lastSent = this.lastBroadcastSentByKind.get(kind) || 0;
     const minIntervalMs = isUrgentKind ? 180 : 2_000;
@@ -1373,6 +1401,9 @@ export class SupabaseService {
         ...(this.pendingOutboundAttendancePatches.length > 0
           ? { attendancePatches: [...this.pendingOutboundAttendancePatches] }
           : {}),
+        ...(this.pendingOutboundPrivateNotePatches.length > 0
+          ? { privateNotePatches: [...this.pendingOutboundPrivateNotePatches] }
+          : {}),
       };
 
       const sentAt = Date.now();
@@ -1383,6 +1414,7 @@ export class SupabaseService {
       this.pendingOutboundDeletedUsernames.clear();
       this.pendingOutboundDeletedEmails.clear();
       this.pendingOutboundAttendancePatches = [];
+      this.pendingOutboundPrivateNotePatches = [];
 
       try {
         if (this.activeRealtimeChannel) {
@@ -3418,7 +3450,7 @@ export class SupabaseService {
             // ignore malformed JSON
           }
         }
-        this.setCachedQuery(cacheKey, notes, 90_000);
+        this.setCachedQuery(cacheKey, notes, 4_000);
         return notes;
       } catch {
         return null;
@@ -3429,6 +3461,7 @@ export class SupabaseService {
   /**
    * Upsert a Private Note / Leave Request to Supabase (`user_id = 'SYSTEM_PRIVATE_NOTE'`).
    * Never deleted by the 30-minute notification sweep.
+   * Also protects against stale 'pending' writes overwriting a colleague's completed reply!
    */
   static async upsertPrivateNote(note: PrivateNote, silent: boolean = false): Promise<boolean> {
     if (this.notificationsTableStatus === 'missing') {
@@ -3436,21 +3469,58 @@ export class SupabaseService {
     }
     try {
       this.invalidateClientCache('private_notes');
-      const createdMs = note.createdAtMs || Date.now();
+      for (const k of Array.from(this.inflightGetRequests.keys())) {
+        if (k.startsWith('private_notes:')) {
+          this.inflightGetRequests.delete(k);
+        }
+      }
+
+      let resolvedNote: PrivateNote = { ...note };
+
+      // If this is a background silent read-mark or a 'pending' note write, check if another Admin/Co-Admin
+      // has already replied in Supabase so we NEVER clobber a colleague's reply!
+      if (silent || note.status === 'pending') {
+        const { data: existingRow } = await supabase
+          .from('notifications')
+          .select('message')
+          .eq('id', note.id)
+          .eq('user_id', PRIVATE_NOTE_SYSTEM_USER_ID)
+          .maybeSingle();
+
+        if (existingRow?.message && String(existingRow.message).trim().startsWith('{')) {
+          try {
+            const remoteNote = JSON.parse(String(existingRow.message)) as PrivateNote;
+            if (remoteNote && remoteNote.status !== 'pending' && note.status === 'pending') {
+              // Colleague already replied! Preserve their reply and only merge read flags.
+              resolvedNote = {
+                ...remoteNote,
+                isReadByInstructor: Boolean(
+                  remoteNote.isReadByInstructor || note.isReadByInstructor
+                ),
+                isReadByStudent: Boolean(remoteNote.isReadByStudent || note.isReadByStudent),
+              };
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+
+      const createdMs = resolvedNote.createdAtMs || Date.now();
       const expiresMs = createdMs + PRIVATE_NOTE_TTL_MS;
       const row = {
-        id: note.id,
+        id: resolvedNote.id,
         user_id: PRIVATE_NOTE_SYSTEM_USER_ID,
-        course_id: note.courseId,
-        course_code: note.courseCode || null,
-        course_title: note.courseTitle || '',
-        post_id: note.studentId, // Stored in post_id for strict student-scoped SQL filtering
-        author_name: note.studentName,
+        course_id: resolvedNote.courseId,
+        course_code: resolvedNote.courseCode || null,
+        course_title: resolvedNote.courseTitle || '',
+        post_id: resolvedNote.studentId, // Stored in post_id for strict student-scoped SQL filtering
+        author_name: resolvedNote.studentName,
         author_role: 'student',
-        title: note.subject || 'Private Note',
-        message: JSON.stringify(note),
+        title: resolvedNote.subject || 'Private Note',
+        message: JSON.stringify(resolvedNote),
         type: 'private_note',
-        is_read: Boolean(note.isReadByInstructor && note.isReadByStudent),
+        is_read: Boolean(resolvedNote.isReadByInstructor && resolvedNote.isReadByStudent),
         created_at: new Date(createdMs).toISOString(),
         expires_at: new Date(expiresMs).toISOString(),
       };
@@ -3464,7 +3534,18 @@ export class SupabaseService {
       }
       this.notificationsTableStatus = 'available';
       if (!silent) {
-        this.notifyRealtimePeers('private_note', { targetUserIds: [note.studentId] });
+        this.notifyRealtimePeers('private_note', {
+          targetUserIds: [resolvedNote.studentId],
+          privateNotePatches: [
+            {
+              type: 'note_upsert',
+              noteId: resolvedNote.id,
+              courseId: resolvedNote.courseId,
+              studentId: resolvedNote.studentId,
+              note: resolvedNote,
+            },
+          ],
+        });
       }
       return true;
     } catch {
@@ -3489,6 +3570,13 @@ export class SupabaseService {
         this.notifyRealtimePeers('delete', {
           deletedIds: [noteId],
           targetUserIds: studentId ? [studentId] : undefined,
+          privateNotePatches: [
+            {
+              type: 'note_delete',
+              noteId,
+              studentId,
+            },
+          ],
         });
       }
       return !error;

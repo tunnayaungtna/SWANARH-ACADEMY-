@@ -167,7 +167,10 @@ export default function App() {
       const attPatchChanged = ClassroomDB.applyRealtimeAttendancePatches(
         payload?.attendancePatches
       );
-      if (deletedChanged || attPatchChanged) {
+      const notePatchChanged = ClassroomDB.applyRealtimePrivateNotePatches(
+        payload?.privateNotePatches
+      );
+      if (deletedChanged || attPatchChanged || notePatchChanged) {
         refreshData();
       }
       if (navigator.onLine === false) return;
@@ -206,7 +209,10 @@ export default function App() {
         return;
       }
 
-      // 1b. Fast path for Private Note events (students ignore notes belonging to other students)
+      // 1b. Fast path for Private Note events:
+      // If `privateNotePatches` was already included in the broadcast payload, it was applied in 0ms above
+      // WITHOUT needing any extra HTTP SELECT query to Supabase!
+      // Only run a fallback cloud sync when no patch was embedded.
       if (kinds.length === 1 && kinds[0] === 'private_note') {
         if (
           loggedUser.role === 'student' &&
@@ -214,6 +220,9 @@ export default function App() {
           payload.targetUserIds.length > 0 &&
           !payload.targetUserIds.includes(loggedUser.id)
         ) {
+          return;
+        }
+        if (payload?.privateNotePatches && payload.privateNotePatches.length > 0) {
           return;
         }
         ClassroomDB.syncPrivateNotesFromCloud(true).then((notesChanged) => {
@@ -538,6 +547,11 @@ export default function App() {
                 refreshData();
               }
             });
+            ClassroomDB.syncPrivateNotesFromCloud(true).then((notesChanged) => {
+              if (notesChanged) {
+                refreshData();
+              }
+            });
             ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
               if (updated || !ClassroomDB.getCurrentUser()) {
                 refreshData();
@@ -596,6 +610,95 @@ export default function App() {
 
       {/* Main Container - Responsive padding for mobile, tablet & desktop screens */}
       <main className="flex-1 max-w-7xl w-full min-w-0 mx-auto px-2.5 sm:px-6 py-4 sm:py-8">
+        {/* Live Private Note / Leave Request Instant Alert Banner for Admin, Co-Admin & Students */}
+        {(() => {
+          const allVisibleNotes = ClassroomDB.getPrivateNotes(undefined, currentUser);
+          if (currentUser.role === 'admin' || currentUser.role === 'co_admin') {
+            const pendingNotes = allVisibleNotes.filter((n) => n.status === 'pending');
+            if (pendingNotes.length === 0) return null;
+            const latestNote = pendingNotes[0];
+            if (
+              selectedCourse &&
+              selectedCourse.id === latestNote.courseId &&
+              selectedCourseInitialTab === 'private_notes'
+            ) {
+              return null;
+            }
+            return (
+              <div className="mb-5 p-4 rounded-2xl neu-card ring-2 ring-amber-500/45 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fade-in">
+                <div className="flex items-start sm:items-center gap-3 min-w-0">
+                  <div className="p-2.5 rounded-xl bg-amber-600 text-white shrink-0 shadow-xs">
+                    <Lock className="w-4 h-4 animate-pulse" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white truncate">
+                        📩 ကျောင်းသား သီးသန့်စာ / ခွင့်တိုင်စာ ({pendingNotes.length} စောင် မဖြေရသေးပါ)
+                      </span>
+                      <span className="px-2 py-0.5 rounded-lg bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[10px] font-bold">
+                        {latestNote.courseCode}
+                      </span>
+                    </div>
+                    <p className="text-[11px] sm:text-xs text-slate-600 dark:text-slate-300 mt-0.5 truncate">
+                      <strong>{latestNote.studentName}</strong>: {latestNote.subject} — "{latestNote.content}" ·{' '}
+                      <span className="font-mono text-indigo-600 dark:text-indigo-400">
+                        {latestNote.createdAt}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleOpenCourseById(latestNote.courseId, 'private_notes');
+                    }}
+                    className="px-3.5 py-2 rounded-xl neu-btn-indigo text-xs font-bold cursor-pointer"
+                  >
+                    ချက်ချင်း ကြည့်ရှုဖြေကြားမည် →
+                  </button>
+                </div>
+              </div>
+            );
+          }
+
+          const unreadReplies = allVisibleNotes.filter(
+            (n) => n.status !== 'pending' && !n.isReadByStudent
+          );
+          if (unreadReplies.length === 0) return null;
+          const latestReply = unreadReplies[0];
+          return (
+            <div className="mb-5 p-4 rounded-2xl neu-card ring-2 ring-emerald-500/45 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fade-in">
+              <div className="flex items-start sm:items-center gap-3 min-w-0">
+                <div className="p-2.5 rounded-xl bg-emerald-600 text-white shrink-0 shadow-xs">
+                  <CheckCircle2 className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white truncate">
+                    💬 သင်၏ သီးသန့်စာကို ဆရာ {latestReply.repliedByName || 'Instructor'} မှ ပြန်လည်ဖြေကြားလိုက်ပါပြီ!
+                  </div>
+                  <p className="text-[11px] sm:text-xs text-slate-600 dark:text-slate-300 mt-0.5 truncate">
+                    [{latestReply.courseCode}] {latestReply.subject}: "{latestReply.replyContent}"
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    ClassroomDB.markPrivateNoteReadByStudent(latestReply.id);
+                    refreshData();
+                    handleOpenCourseById(latestReply.courseId, 'private_notes');
+                  }}
+                  className="px-3.5 py-2 rounded-xl neu-btn-indigo text-xs font-bold cursor-pointer"
+                >
+                  ဆရာ့အဖြေ ဖတ်ရှုမည် →
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Student Unread Classroom Post Notification Alert Banner */}
         {currentUser.role === 'student' &&
           notifications.some((n) => !n.isRead && n.type === 'post') && (() => {

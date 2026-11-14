@@ -41,7 +41,7 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
   // Student compose state
   const [category, setCategory] = useState<PrivateNoteCategory>('question');
   const [subject, setSubject] = useState('');
-  const [leaveDate, setLeaveDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [leaveDate, setLeaveDate] = useState(() => ClassroomDB.getLocalTodayIso());
   const [content, setContent] = useState('');
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -54,38 +54,81 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [livePeerNotice, setLivePeerNotice] = useState<string | null>(null);
+  const [, setTypingTick] = useState(0);
 
   const notes = ClassroomDB.getPrivateNotes(course.id, currentUser);
 
-  // Automatically mark unread notes/replies as read when opening this tab
-  useEffect(() => {
-    ClassroomDB.markPrivateNotesReadForCourse(course.id, currentUser);
-    onRefresh();
-    ClassroomDB.syncPrivateNotesFromCloud().then((changed) => {
-      if (changed) {
-        ClassroomDB.markPrivateNotesReadForCourse(course.id, currentUser);
-        onRefresh();
-      }
-    });
-  }, [course.id, currentUser.id]);
-
-  // Quiet fallback poll every 120 seconds while inside the Private Notes tab
+  // Pull latest private notes from cloud FIRST before marking read so we never overwrite a colleague's reply
   useEffect(() => {
     let mounted = true;
+    ClassroomDB.markPrivateNotesReadForCourse(course.id, currentUser);
+    onRefresh();
+    ClassroomDB.syncPrivateNotesFromCloud(true).then((changed) => {
+      if (mounted) {
+        ClassroomDB.markPrivateNotesReadForCourse(course.id, currentUser);
+        if (changed) {
+          onRefresh();
+        }
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [course.id, currentUser.id]);
+
+  // Listen for instant WebSocket patches (new student note, colleague's completed reply, or colleague typing)
+  useEffect(() => {
+    const handleRealtimeNoteUpdate = (evt: Event) => {
+      const customEvt = evt as CustomEvent<{
+        newlyRepliedNotes?: PrivateNote[];
+        typingChanged?: boolean;
+      }>;
+      const newlyReplied = customEvt.detail?.newlyRepliedNotes || [];
+      if (isInstructor && newlyReplied.length > 0) {
+        const forThisCourse = newlyReplied.filter(
+          (n) => n.courseId === course.id && n.repliedById !== currentUser.id
+        );
+        if (forThisCourse.length > 0) {
+          const latest = forThisCourse[0];
+          setEditingNoteId((prev) => (prev === latest.id ? null : prev));
+          setLivePeerNotice(
+            `✅ ဆရာ ${latest.repliedByName || 'Instructor'} မှ "${latest.studentName}" ၏ သီးသန့်စာကို ယခုလေးတင် ပြန်လည်ဖြေကြားပြီးဖြစ်ပါသည်! (ထပ်မံဖြေကြားရန် မလိုအပ်တော့ပါ)`
+          );
+          setTimeout(() => setLivePeerNotice(null), 6000);
+        }
+      }
+      setTypingTick((t) => t + 1);
+      onRefresh();
+    };
+    window.addEventListener('private-note-realtime-update', handleRealtimeNoteUpdate);
+    const typingExpiryTimer = setInterval(() => {
+      setTypingTick((t) => t + 1);
+    }, 3_000);
+    return () => {
+      window.removeEventListener('private-note-realtime-update', handleRealtimeNoteUpdate);
+      clearInterval(typingExpiryTimer);
+    };
+  }, [course.id, currentUser.id, isInstructor]);
+
+  // Fast fallback poll while inside the Private Notes tab (12s for Instructors, 20s for Students)
+  useEffect(() => {
+    let mounted = true;
+    const pollMs = isInstructor ? 12_000 : 20_000;
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible' && navigator.onLine !== false) {
-        ClassroomDB.syncPrivateNotesFromCloud().then((changed) => {
+        ClassroomDB.syncPrivateNotesFromCloud(false).then((changed) => {
           if (mounted && changed) {
             onRefresh();
           }
         });
       }
-    }, 120_000);
+    }, pollMs);
     return () => {
       mounted = false;
       clearInterval(interval);
     };
-  }, [course.id]);
+  }, [course.id, isInstructor]);
 
   const handleManualSync = async () => {
     setIsSyncing(true);
@@ -259,6 +302,22 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
           <span>Sync</span>
         </button>
       </div>
+
+      {livePeerNotice && (
+        <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 text-xs sm:text-sm font-bold text-emerald-800 dark:text-emerald-200 flex items-center justify-between gap-3 animate-fade-in">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{livePeerNotice}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setLivePeerNotice(null)}
+            className="text-xs underline shrink-0 cursor-pointer"
+          >
+            ပိတ်မည်
+          </button>
+        </div>
+      )}
 
       {/* STUDENT COMPOSE FORM */}
       {!isInstructor && (
@@ -639,69 +698,88 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
                 )}
 
                 {/* Instructor Reply / Approval Box */}
-                {isReplyingOrEditing && (
-                  <div className="pt-2 space-y-2.5">
-                    <textarea
-                      rows={2}
-                      value={currentDraft}
-                      onChange={(e) =>
-                        setReplyDrafts((prev) => ({
-                          ...prev,
-                          [note.id]: e.target.value,
-                        }))
-                      }
-                      placeholder={
-                        note.category === 'leave_request'
-                          ? 'မှတ်ချက်/အဖြေ ရေးရန် (မရေးဘဲ "ခွင့်ပြုသည်" တိုက်ရိုက်နှိပ်လျှင်လည်း စနစ်မှ အလိုအလျောက် စာသားထည့်ပေးပါမည်)...'
-                          : 'ကျောင်းသားထံ ပြန်လည်ဖြေကြားလိုသော အဖြေကို ရေးသားပါ...'
-                      }
-                      className="neu-input w-full px-3.5 py-2.5 rounded-2xl text-xs sm:text-sm text-slate-900 dark:text-slate-100"
-                    />
+                {isReplyingOrEditing && (() => {
+                  const activePeerTyping = ClassroomDB.getActiveReplyTypingForNote(
+                    note.id,
+                    currentUser.id
+                  );
+                  return (
+                    <div className="pt-2 space-y-2.5">
+                      {activePeerTyping && (
+                        <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/60 border border-amber-300/80 dark:border-amber-800 text-[11px] sm:text-xs font-bold text-amber-800 dark:text-amber-300 flex items-center gap-2 animate-pulse">
+                          <span>✍️</span>
+                          <span>
+                            လက်ရှိတွင် ဆရာ <strong>{activePeerTyping.actorName}</strong> ({activePeerTyping.actorRole === 'admin' ? 'Admin' : 'Co-Admin'}) မှ ဤစာကို ပြန်လည်ဖြေကြားရန် ရေးသားနေပါသည်... (၂ ယောက်ထပ်မဖြေမိစေရန် သတိပြုပါ)
+                          </span>
+                        </div>
+                      )}
 
-                    <div className="flex flex-wrap items-center justify-end gap-2">
-                      {editingNoteId === note.id && (
+                      <textarea
+                        rows={2}
+                        value={currentDraft}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setReplyDrafts((prev) => ({
+                            ...prev,
+                            [note.id]: val,
+                          }));
+                          if (val.trim().length > 0) {
+                            ClassroomDB.broadcastPrivateNoteTyping(note, currentUser);
+                          }
+                        }}
+                        placeholder={
+                          note.category === 'leave_request'
+                            ? 'မှတ်ချက်/အဖြေ ရေးရန် (မရေးဘဲ "ခွင့်ပြုသည်" တိုက်ရိုက်နှိပ်လျှင်လည်း စနစ်မှ အလိုအလျောက် စာသားထည့်ပေးပါမည်)...'
+                            : 'ကျောင်းသားထံ ပြန်လည်ဖြေကြားလိုသော အဖြေကို ရေးသားပါ...'
+                        }
+                        className="neu-input w-full px-3.5 py-2.5 rounded-2xl text-xs sm:text-sm text-slate-900 dark:text-slate-100"
+                      />
+
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                        {editingNoteId === note.id && (
+                          <button
+                            type="button"
+                            onClick={() => setEditingNoteId(null)}
+                            className="neu-btn px-3 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 cursor-pointer"
+                          >
+                            မပြင်တော့ပါ (Cancel)
+                          </button>
+                        )}
+
+                        {note.category === 'leave_request' && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleInstructorReply(note, 'approved')}
+                              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-xs cursor-pointer"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>✓ ခွင့်ပြုသည် (Approve Leave)</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleInstructorReply(note, 'rejected')}
+                              className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              <span>ငြင်းပယ်သည် (Decline)</span>
+                            </button>
+                          </>
+                        )}
+
                         <button
                           type="button"
-                          onClick={() => setEditingNoteId(null)}
-                          className="neu-btn px-3 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 cursor-pointer"
+                          onClick={() => handleInstructorReply(note, 'replied')}
+                          className="neu-btn-indigo px-4 py-2 rounded-xl text-xs font-extrabold text-white flex items-center gap-1.5 cursor-pointer"
                         >
-                          မပြင်တော့ပါ (Cancel)
+                          <Reply className="w-3.5 h-3.5" />
+                          <span>အဖြေပေးပို့မည် (Send Reply)</span>
                         </button>
-                      )}
-
-                      {note.category === 'leave_request' && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => handleInstructorReply(note, 'approved')}
-                            className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-xs cursor-pointer"
-                          >
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>✓ ခွင့်ပြုသည် (Approve Leave)</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => handleInstructorReply(note, 'rejected')}
-                            className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer"
-                          >
-                            <XCircle className="w-3.5 h-3.5" />
-                            <span>ငြင်းပယ်သည် (Decline)</span>
-                          </button>
-                        </>
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={() => handleInstructorReply(note, 'replied')}
-                        className="neu-btn-indigo px-4 py-2 rounded-xl text-xs font-extrabold text-white flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <Reply className="w-3.5 h-3.5" />
-                        <span>အဖြေပေးပို့မည် (Send Reply)</span>
-                      </button>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
             );
           })
