@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Course, User, StudentProgress } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
+import { resolveCourseBannerUrl, isSwanArhOfficialBanner } from './CourseBannerModal';
 import { ArrowRight, Trash2, AlertTriangle, ArrowUp, ArrowDown, Lock } from 'lucide-react';
 
 interface CourseCardProps {
@@ -57,6 +58,8 @@ export const CourseCard: React.FC<CourseCardProps> = ({
   };
 
   const currentPosition = courseIndex + 1;
+  const resolvedBanner = resolveCourseBannerUrl(course.bannerImage);
+  const isOfficialBanner = isSwanArhOfficialBanner(resolvedBanner);
 
   return (
     <>
@@ -67,12 +70,18 @@ export const CourseCard: React.FC<CourseCardProps> = ({
         <div className="min-w-0">
           {/* Framed 4:1 Google Classroom Header Photo Well */}
           <div className="neu-inset-sm p-1.5 rounded-2xl">
-            <div className="relative w-full aspect-[4/1] bg-slate-900 rounded-xl overflow-hidden">
+            <div
+              className={`relative w-full aspect-[4/1] rounded-xl overflow-hidden ${
+                isOfficialBanner ? 'bg-white' : 'bg-slate-900'
+              }`}
+            >
               <img
-                src={course.bannerImage}
+                src={resolvedBanner}
                 alt={course.title}
                 referrerPolicy="no-referrer"
-                className="w-full h-full object-cover object-center group-hover:scale-103 transition-transform duration-500"
+                className={`w-full h-full object-center transition-transform duration-500 ${
+                  isOfficialBanner ? 'object-contain' : 'object-cover group-hover:scale-103'
+                }`}
               />
               {/* Order Badge & Reorder Controls Overlay for Admin / Co-Admin */}
               {isInstructor && (

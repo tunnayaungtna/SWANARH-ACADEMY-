@@ -13,10 +13,14 @@ import {
 
 export interface PresetBannerItem {
   id: string;
+  presetKey: string;
   label: string;
   category: string;
   url: string;
 }
+
+export const SWANARH_ENGLISH_BANNER_URL = '/assets/aistudio/6_5512722b.jpg';
+export const SWANARH_EXAM_BANNER_URL = '/assets/aistudio/5_343ef14a.jpg';
 
 function makeClassroomBannerSvg(c1: string, c2: string, accent: string): string {
   const s1 = encodeURIComponent(c1);
@@ -27,54 +31,141 @@ function makeClassroomBannerSvg(c1: string, c2: string, accent: string): string 
 
 export const PRESET_CLASSROOM_BANNERS: PresetBannerItem[] = [
   {
+    id: 'banner-swanarh-english',
+    presetKey: 'preset:swanarh-english',
+    label: 'စွမ်းအား အင်္ဂလိပ်စာသင်တန်း',
+    category: 'SwanArh Official (Default)',
+    url: SWANARH_ENGLISH_BANNER_URL,
+  },
+  {
+    id: 'banner-swanarh-exam',
+    presetKey: 'preset:swanarh-exam',
+    label: 'စွမ်းအား ရာထူးဝင်ခွင့်သင်တန်း',
+    category: 'SwanArh Official (Default)',
+    url: SWANARH_EXAM_BANNER_URL,
+  },
+  {
     id: 'banner-collaborative-campus',
+    presetKey: 'preset:banner-campus',
     label: 'Modern Collaborative Campus',
     category: 'Featured Header',
     url: makeClassroomBannerSvg('#1e1b4b', '#4338ca', '#818cf8'),
   },
   {
     id: 'banner-digital-classroom',
+    presetKey: 'preset:banner-digital',
     label: 'Interactive Digital Classroom',
     category: 'Academic',
     url: makeClassroomBannerSvg('#064e3b', '#0d9488', '#34d399'),
   },
   {
     id: 'banner-tech-innovation',
+    presetKey: 'preset:banner-tech',
     label: 'Technology & Innovation Lab',
     category: 'Technology',
     url: makeClassroomBannerSvg('#0f172a', '#0284c7', '#38bdf8'),
   },
   {
     id: 'banner-academy-hall',
+    presetKey: 'preset:banner-university',
     label: 'University Lecture Hall',
     category: 'University',
     url: makeClassroomBannerSvg('#311042', '#7e22ce', '#c084fc'),
   },
   {
     id: 'banner-medical-science',
+    presetKey: 'preset:banner-medical',
     label: 'Medical & Laboratory Science',
     category: 'Science & Medicine',
     url: makeClassroomBannerSvg('#134e4a', '#0f766e', '#2dd4bf'),
   },
   {
     id: 'banner-library-books',
+    presetKey: 'preset:banner-library',
     label: 'Classic Library & Research',
     category: 'Literature',
     url: makeClassroomBannerSvg('#451a03', '#b45309', '#fbbf24'),
   },
   {
     id: 'banner-modern-campus',
+    presetKey: 'preset:banner-executive',
     label: 'Executive Study Workspace',
     category: 'General',
     url: makeClassroomBannerSvg('#1e293b', '#334155', '#94a3b8'),
   },
   {
     id: 'banner-biotech',
+    presetKey: 'preset:banner-biotech',
     label: 'Clinical & Microscope Study',
     category: 'Biology',
     url: makeClassroomBannerSvg('#3b0764', '#be185d', '#f472b6'),
   },
 ];
+
+const BANNER_BY_KEY = new Map<string, PresetBannerItem>(
+  PRESET_CLASSROOM_BANNERS.map((item) => [item.presetKey, item])
+);
+
+const BANNER_BY_URL = new Map<string, PresetBannerItem>(
+  PRESET_CLASSROOM_BANNERS.map((item) => [item.url, item])
+);
+
+/**
+ * Resolves any stored course banner value (compact `preset:...` key, relative asset path, or data/https URL)
+ * into a browser-renderable image URL.
+ */
+export function resolveCourseBannerUrl(raw?: string | null, fallback?: string): string {
+  const defaultBanner = fallback || SWANARH_ENGLISH_BANNER_URL;
+  if (!raw || !raw.trim()) return defaultBanner;
+  const trimmed = raw.trim();
+
+  const byKey = BANNER_BY_KEY.get(trimmed);
+  if (byKey) return byKey.url;
+
+  if (
+    trimmed.endsWith('6_5512722b.jpg') ||
+    trimmed === 'preset:swanarh-english' ||
+    trimmed === 'banner-swanarh-english'
+  ) {
+    return SWANARH_ENGLISH_BANNER_URL;
+  }
+
+  if (
+    trimmed.endsWith('5_343ef14a.jpg') ||
+    trimmed === 'preset:swanarh-exam' ||
+    trimmed === 'banner-swanarh-exam'
+  ) {
+    return SWANARH_EXAM_BANNER_URL;
+  }
+
+  if (trimmed.startsWith('/src/assets/images/') || trimmed.includes('images.unsplash.com')) {
+    return defaultBanner;
+  }
+
+  return trimmed;
+}
+
+/**
+ * Compacts any preset banner URL into a tiny ~20-byte `preset:...` key for Supabase SQL storage,
+ * reducing `public.courses.banner_image` Egress by >99.9%.
+ */
+export function toCloudBannerKeyOrUrl(raw?: string | null, fallback?: string): string {
+  const resolved = resolveCourseBannerUrl(raw, fallback);
+  const byUrl = BANNER_BY_URL.get(resolved);
+  if (byUrl) {
+    return byUrl.presetKey;
+  }
+  const byKey = BANNER_BY_KEY.get((raw || '').trim());
+  if (byKey) {
+    return byKey.presetKey;
+  }
+  return resolved;
+}
+
+export function isSwanArhOfficialBanner(raw?: string | null): boolean {
+  const resolved = resolveCourseBannerUrl(raw, '');
+  return resolved === SWANARH_ENGLISH_BANNER_URL || resolved === SWANARH_EXAM_BANNER_URL;
+}
 
 /**
  * Formats an uploaded image file to exact Google Classroom Header dimensions:
@@ -176,11 +267,13 @@ export const CourseBannerModal: React.FC<CourseBannerModalProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const [selectedBanner, setSelectedBanner] = useState<string>(course.bannerImage);
+  const [selectedBanner, setSelectedBanner] = useState<string>(
+    resolveCourseBannerUrl(course.bannerImage)
+  );
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [cropAlign, setCropAlign] = useState<'top' | 'center' | 'bottom' | 'contain'>('center');
   const [customUrl, setCustomUrl] = useState<string>('');
-  const [applyToAllCourses, setApplyToAllCourses] = useState<boolean>(true);
+  const [applyToAllCourses, setApplyToAllCourses] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -234,10 +327,17 @@ export const CourseBannerModal: React.FC<CourseBannerModalProps> = ({
 
   const handleSaveBanner = () => {
     if (!selectedBanner.trim()) return;
-    ClassroomDB.updateCourseBanner(course.id, selectedBanner, applyToAllCourses);
+    ClassroomDB.updateCourseBanner(
+      course.id,
+      resolveCourseBannerUrl(selectedBanner),
+      applyToAllCourses
+    );
     onSuccess();
     onClose();
   };
+
+  const resolvedPreviewBanner = resolveCourseBannerUrl(selectedBanner);
+  const isOfficialPreview = isSwanArhOfficialBanner(resolvedPreviewBanner);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-sm">
@@ -281,12 +381,18 @@ export const CourseBannerModal: React.FC<CourseBannerModalProps> = ({
             </div>
 
             <div className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-md bg-white dark:bg-slate-900">
-              <div className="relative w-full aspect-[4/1] bg-slate-900 overflow-hidden">
+              <div
+                className={`relative w-full aspect-[4/1] overflow-hidden ${
+                  isOfficialPreview ? 'bg-white' : 'bg-slate-900'
+                }`}
+              >
                 <img
-                  src={selectedBanner}
+                  src={resolvedPreviewBanner}
                   alt="Header Preview"
                   referrerPolicy="no-referrer"
-                  className="w-full h-full object-cover object-center"
+                  className={`w-full h-full object-center ${
+                    isOfficialPreview ? 'object-contain' : 'object-cover'
+                  }`}
                 />
               </div>
               <div className="px-4 py-2.5 bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
@@ -375,14 +481,62 @@ export const CourseBannerModal: React.FC<CourseBannerModalProps> = ({
 
           {/* Preset Classroom Themes Gallery */}
           <div className="space-y-2.5">
-            <div className="flex items-center gap-1.5 font-bold text-slate-900 dark:text-slate-100">
-              <Sparkles className="w-4 h-4 text-amber-500" />
-              <span>၂။ အသင့်သုံး Google Classroom Header ပုံများမှ ရွေးချယ်ရန် (Preset Themes)</span>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5 font-bold text-slate-900 dark:text-slate-100">
+                <Sparkles className="w-4 h-4 text-amber-500" />
+                <span>၂။ အသင့်သုံး Default Classroom Header ပုံများမှ ရွေးချယ်ရန် (Preset Themes)</span>
+              </div>
+              <span className="text-[10px] font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                ⚡ Ultra-Low Supabase Egress (20 Bytes)
+              </span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-              {PRESET_CLASSROOM_BANNERS.map((item) => {
-                const isSelected = selectedBanner === item.url;
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {PRESET_CLASSROOM_BANNERS.slice(0, 2).map((item) => {
+                const isSelected = resolvedPreviewBanner === item.url;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      setUploadedFile(null);
+                      setSelectedBanner(item.url);
+                    }}
+                    className={`group relative rounded-xl overflow-hidden border-2 text-left transition-all cursor-pointer ${
+                      isSelected
+                        ? 'border-emerald-600 ring-2 ring-emerald-500/30'
+                        : 'border-emerald-200 dark:border-emerald-900/60 hover:border-emerald-500'
+                    }`}
+                  >
+                    <div className="aspect-[4/1] w-full bg-white overflow-hidden">
+                      <img
+                        src={item.url}
+                        alt={item.label}
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-contain object-center"
+                      />
+                    </div>
+                    <div className="p-2.5 bg-emerald-50/70 dark:bg-slate-900 flex items-center justify-between gap-1 border-t border-emerald-100 dark:border-slate-800">
+                      <div className="truncate">
+                        <div className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
+                          {item.label}
+                        </div>
+                        <div className="text-[10px] font-medium text-emerald-700 dark:text-emerald-400 truncate">
+                          {item.category}
+                        </div>
+                      </div>
+                      {isSelected && (
+                        <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
+              {PRESET_CLASSROOM_BANNERS.slice(2).map((item) => {
+                const isSelected = resolvedPreviewBanner === item.url;
                 return (
                   <button
                     key={item.id}

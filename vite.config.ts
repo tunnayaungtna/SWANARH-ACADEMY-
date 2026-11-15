@@ -67,6 +67,26 @@ function syncGhPagesBundlePlugin(): Plugin {
         fs.writeFileSync(path.resolve(rootDir, 'dist/CNAME'), cnameDomain);
         fs.writeFileSync(path.resolve(rootDir, 'CNAME'), cnameDomain);
         fs.writeFileSync(path.resolve(rootDir, 'public/CNAME'), cnameDomain);
+
+        // Sync official static classroom header banner images across public, root, dist, and gh-pages
+        const publicAistudioDir = path.resolve(rootDir, 'public/assets/aistudio');
+        if (fs.existsSync(publicAistudioDir)) {
+          const assetTargets = [
+            path.resolve(rootDir, 'assets/aistudio'),
+            path.resolve(rootDir, 'dist/assets/aistudio'),
+            path.resolve(rootDir, 'gh-pages/assets/aistudio'),
+          ];
+          const assetFiles = fs.readdirSync(publicAistudioDir);
+          for (const targetDir of assetTargets) {
+            fs.mkdirSync(targetDir, {recursive: true});
+            for (const f of assetFiles) {
+              const srcFile = path.join(publicAistudioDir, f);
+              if (fs.statSync(srcFile).isFile()) {
+                fs.copyFileSync(srcFile, path.join(targetDir, f));
+              }
+            }
+          }
+        }
       } catch {
         // ignore
       }

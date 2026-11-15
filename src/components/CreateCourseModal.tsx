@@ -1,7 +1,12 @@
 import React, { useState, useRef } from 'react';
 import { ClassroomDB } from '../services/storage';
 import { User, Course } from '../types/classroom';
-import { PRESET_CLASSROOM_BANNERS, resizeToGoogleClassroomBanner } from './CourseBannerModal';
+import {
+  PRESET_CLASSROOM_BANNERS,
+  resizeToGoogleClassroomBanner,
+  resolveCourseBannerUrl,
+  isSwanArhOfficialBanner,
+} from './CourseBannerModal';
 import { PlusCircle, Upload, Image as ImageIcon } from 'lucide-react';
 
 interface CreateCourseModalProps {
@@ -56,7 +61,7 @@ export const CreateCourseModal: React.FC<CreateCourseModalProps> = ({
       description: description.trim() || 'Comprehensive academic course curriculum.',
       instructorName: currentUser.name,
       instructorEmail: currentUser.email,
-      bannerImage,
+      bannerImage: resolveCourseBannerUrl(bannerImage),
       themeColor,
       enrolledStudentIds: [],
       totalLessons: 1,
@@ -67,6 +72,9 @@ export const CreateCourseModal: React.FC<CreateCourseModalProps> = ({
     onCourseCreated(newCourse);
     onClose();
   };
+
+  const resolvedBanner = resolveCourseBannerUrl(bannerImage);
+  const isOfficial = isSwanArhOfficialBanner(resolvedBanner);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm">
@@ -110,12 +118,18 @@ export const CreateCourseModal: React.FC<CreateCourseModalProps> = ({
             </div>
 
             <div className="rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
-              <div className="relative w-full aspect-[4/1] bg-slate-900 overflow-hidden">
+              <div
+                className={`relative w-full aspect-[4/1] overflow-hidden ${
+                  isOfficial ? 'bg-white' : 'bg-slate-900'
+                }`}
+              >
                 <img
-                  src={bannerImage}
+                  src={resolvedBanner}
                   alt="Class Header Preview"
                   referrerPolicy="no-referrer"
-                  className="w-full h-full object-cover object-center"
+                  className={`w-full h-full object-center ${
+                    isOfficial ? 'object-contain' : 'object-cover'
+                  }`}
                 />
               </div>
               <div className="px-3 py-2 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-200 dark:border-slate-700">
@@ -129,26 +143,31 @@ export const CreateCourseModal: React.FC<CreateCourseModalProps> = ({
             </div>
 
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-              {PRESET_CLASSROOM_BANNERS.slice(0, 5).map((preset) => (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => setBannerImage(preset.url)}
-                  className={`relative w-20 aspect-[4/1] rounded-lg overflow-hidden border-2 shrink-0 cursor-pointer ${
-                    bannerImage === preset.url
-                      ? 'border-indigo-600 ring-1 ring-indigo-500'
-                      : 'border-slate-200 dark:border-slate-700 opacity-75 hover:opacity-100'
-                  }`}
-                  title={preset.label}
-                >
-                  <img
-                    src={preset.url}
-                    alt={preset.label}
-                    referrerPolicy="no-referrer"
-                    className="w-full h-full object-cover"
-                  />
-                </button>
-              ))}
+              {PRESET_CLASSROOM_BANNERS.map((preset) => {
+                const isOfficialPreset = isSwanArhOfficialBanner(preset.url);
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => setBannerImage(preset.url)}
+                    className={`relative w-24 aspect-[4/1] rounded-lg overflow-hidden border-2 shrink-0 cursor-pointer ${
+                      resolvedBanner === preset.url
+                        ? 'border-indigo-600 ring-1 ring-indigo-500'
+                        : 'border-slate-200 dark:border-slate-700 opacity-80 hover:opacity-100'
+                    } ${isOfficialPreset ? 'bg-white' : 'bg-slate-900'}`}
+                    title={preset.label}
+                  >
+                    <img
+                      src={preset.url}
+                      alt={preset.label}
+                      referrerPolicy="no-referrer"
+                      className={`w-full h-full ${
+                        isOfficialPreset ? 'object-contain' : 'object-cover'
+                      }`}
+                    />
+                  </button>
+                );
+              })}
             </div>
           </div>
 

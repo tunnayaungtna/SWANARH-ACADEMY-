@@ -21,6 +21,10 @@ import {
   toCloudAvatarKeyOrUrl,
   DEFAULT_AVATAR_PRESET_KEY,
 } from '../data/presetAvatars';
+import {
+  resolveCourseBannerUrl,
+  toCloudBannerKeyOrUrl,
+} from '../components/CourseBannerModal';
 
 export const NOTIFICATION_TTL_MS = 30 * 60 * 1000; // 30 minutes auto-delete window
 export const AUDIT_LOG_TTL_MS = 2 * 24 * 60 * 60 * 1000; // 2 days (48 hours) security audit auto-delete window
@@ -693,8 +697,9 @@ function compactBannerForCloud(banner?: string): string {
   if (!banner || banner.startsWith('/src/assets/images/') || banner.includes('images.unsplash.com')) {
     return DEFAULT_FALLBACK_BANNER;
   }
-  if (banner.length > 65_000) return DEFAULT_FALLBACK_BANNER;
-  return banner;
+  const compacted = toCloudBannerKeyOrUrl(banner, DEFAULT_FALLBACK_BANNER);
+  if (compacted.length > 65_000) return DEFAULT_FALLBACK_BANNER;
+  return compacted;
 }
 
 const RULES_MARKER_PREFIX = '||RULES_OK:';
@@ -777,7 +782,7 @@ function encodeCourseThemeWithOrder(course: Course): string {
       .split(COURSE_ORDER_MARKER_PREFIX)[0]
       .split('~B')[0]
       .trim() || 'indigo';
-  const bannerStr = course.bannerImage || '';
+  const bannerStr = resolveCourseBannerUrl(course.bannerImage, DEFAULT_FALLBACK_BANNER);
   const bannerLen = bannerStr.length;
   const bannerHash = bannerLen > 0 ? computeFastStringHash(bannerStr) : '0';
   const orderVal =
@@ -2370,14 +2375,16 @@ export class SupabaseService {
           const idsNeedingBanner: string[] = [];
           for (const row of rows) {
             const cId = String(row.id || '');
-            const localBanner = mergedBanners.get(cId);
+            const rawLocalBanner = mergedBanners.get(cId);
+            const localBanner = rawLocalBanner
+              ? resolveCourseBannerUrl(rawLocalBanner, DEFAULT_FALLBACK_BANNER)
+              : '';
             const decodedTheme = decodeCourseThemeAndOrder(row.theme_color as string | null);
             const remoteBannerLen = decodedTheme.bannerLen;
             const remoteBannerHash = decodedTheme.bannerHash;
             const localBannerHash = localBanner ? computeFastStringHash(localBanner) : '';
             if (
               !localBanner ||
-              localBanner === DEFAULT_FALLBACK_BANNER ||
               (remoteBannerLen && remoteBannerLen !== localBanner.length) ||
               (remoteBannerHash && remoteBannerHash !== '0' && remoteBannerHash !== localBannerHash)
             ) {
@@ -2394,7 +2401,10 @@ export class SupabaseService {
             if (Array.isArray(bannerRows)) {
               bannerRows.forEach((br) => {
                 if (br.id && br.banner_image) {
-                  const bStr = String(br.banner_image);
+                  const bStr = resolveCourseBannerUrl(
+                    String(br.banner_image),
+                    DEFAULT_FALLBACK_BANNER
+                  );
                   fetchedBannerMap.set(String(br.id), bStr);
                   this.cachedCourseBanners.set(String(br.id), bStr);
                   bannerCacheChanged = true;
@@ -2409,14 +2419,10 @@ export class SupabaseService {
           const rawBanner = String(
             row.banner_image || fetchedBannerMap.get(cId) || mergedBanners.get(cId) || ''
           );
-          const resolvedBanner =
-            !rawBanner || rawBanner.startsWith('/src/assets/images/') || rawBanner.includes('images.unsplash.com')
-              ? DEFAULT_FALLBACK_BANNER
-              : rawBanner;
+          const resolvedBanner = resolveCourseBannerUrl(rawBanner, DEFAULT_FALLBACK_BANNER);
 
           if (
             resolvedBanner &&
-            resolvedBanner !== DEFAULT_FALLBACK_BANNER &&
             this.cachedCourseBanners.get(cId) !== resolvedBanner
           ) {
             this.cachedCourseBanners.set(cId, resolvedBanner);

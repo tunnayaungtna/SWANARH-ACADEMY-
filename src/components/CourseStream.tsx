@@ -2,7 +2,11 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Course, CoursePost, User, Attachment, AttendanceStatus } from '../types/classroom';
 import { EditPostModal } from './EditPostModal';
 import { PinSwapModal } from './PinSwapModal';
-import { CourseBannerModal } from './CourseBannerModal';
+import {
+  CourseBannerModal,
+  resolveCourseBannerUrl,
+  isSwanArhOfficialBanner,
+} from './CourseBannerModal';
 import { useBackHandler } from '../utils/backNavigation';
 import { formatFileSize, getFileTypeCategory } from '../utils/fileHelpers';
 import { renderTextWithLinks } from '../utils/linkify';
@@ -626,13 +630,24 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
       {/* Course Banner Hero — Full Unobstructed 4:1 Google Classroom Header Photo for Mobile, Computer & Web */}
       <div className="neu-card rounded-3xl p-3 sm:p-4 overflow-hidden">
         {/* Pure 4:1 Header Image Container (1000 × 250 proportion on all devices, 100% bright & clear) */}
-        <div className="relative w-full aspect-[4/1] bg-slate-900 rounded-2xl overflow-hidden group neu-inset-sm p-1">
+        <div
+          className={`relative w-full aspect-[4/1] rounded-2xl overflow-hidden group neu-inset-sm p-1 ${
+            isSwanArhOfficialBanner(course.bannerImage) ? 'bg-white' : 'bg-slate-900'
+          }`}
+        >
           <img
-            src={course.bannerImage}
+            src={resolveCourseBannerUrl(course.bannerImage)}
             alt={course.title}
             referrerPolicy="no-referrer"
-            onClick={() => setPreviewImage({ url: course.bannerImage, name: `${course.title} - Header Photo` })}
-            className="w-full h-full object-cover object-center rounded-xl cursor-zoom-in transition-transform duration-300"
+            onClick={() =>
+              setPreviewImage({
+                url: resolveCourseBannerUrl(course.bannerImage),
+                name: `${course.title} - Header Photo`,
+              })
+            }
+            className={`w-full h-full object-center rounded-xl cursor-zoom-in transition-transform duration-300 ${
+              isSwanArhOfficialBanner(course.bannerImage) ? 'object-contain bg-white' : 'object-cover'
+            }`}
             title="ပုံအကြီးချဲ့ကြည့်ရန် နှိပ်ပါ (Click to view full header photo)"
           />
 
