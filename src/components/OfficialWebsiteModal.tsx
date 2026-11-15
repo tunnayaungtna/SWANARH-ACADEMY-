@@ -3,66 +3,242 @@ import { AcademyLogo } from './AcademyLogo';
 import { Globe, ExternalLink, RotateCw, Copy, Check, X } from 'lucide-react';
 
 export const OFFICIAL_ACADEMY_WEBSITE_URL = 'https://www.swanarhacademy.com/';
+const OFFICIAL_ORIGIN = 'https://www.swanarhacademy.com';
 
 interface OfficialWebsiteModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-// In-memory cache so reopening the modal within the same session is instant
+// In-memory cache so reopening the modal within the same session is instant (0ms)
 let cachedWebsiteSrcDoc: string | null = null;
 
-function buildPlayableSrcDoc(rawHtml: string): string {
-  const injectedHead = `
+function patchWebsiteBundleJs(rawJs: string): string {
+  return rawJs
+    // Route React Router's browser history & router instance to our virtual window
+    .replace(
+      /history:([A-Za-z0-9_$]+)\(\{window:([A-Za-z0-9_$]+)\?\.window\}\)/g,
+      'history:$1({window:window.__swanarhVirtualWindow})'
+    )
+    .replace(
+      /,window:([A-Za-z0-9_$]+)\?\.window,/g,
+      ',window:window.__swanarhVirtualWindow,'
+    )
+    // Ensure Link relative URL checks use the virtual window location href
+    .replace(
+      /new URL\(window\.location\.href\)/g,
+      'new URL(window.__swanarhVirtualWindow.location.href)'
+    )
+    // Ensure all relative photo paths resolve directly to the official domain
+    .replace(/(["'`])\/photos\//g, `$1${OFFICIAL_ORIGIN}/photos/`);
+}
+
+function buildPlayableSrcDoc(rawHtml: string, patchedBundleJs?: string): string {
+  const virtualEnvScript = `
     <base href="${OFFICIAL_ACADEMY_WEBSITE_URL}" />
     <script>
       (function() {
-        var origPush = history.pushState;
-        var origReplace = history.replaceState;
-        history.pushState = function(state, title, url) {
-          try {
-            return origPush.call(history, state, title, url);
-          } catch (e) {
-            try {
-              if (typeof url === 'string' && url.indexOf('#') !== -1) {
-                window.location.hash = url.slice(url.indexOf('#'));
-              }
-            } catch (_) {}
-          }
-        };
-        history.replaceState = function(state, title, url) {
-          try {
-            return origReplace.call(history, state, title, url);
-          } catch (e) {
-            try {
-              if (typeof url === 'string' && url.indexOf('#') !== -1) {
-                window.location.hash = url.slice(url.indexOf('#'));
-              }
-            } catch (_) {}
-          }
-        };
-        document.addEventListener('click', function(e) {
-          var anchor = e.target && e.target.closest ? e.target.closest('a') : null;
-          if (!anchor) return;
-          var href = anchor.getAttribute('href') || '';
+        var ORIGIN = "${OFFICIAL_ORIGIN}";
+        var OrigURL = window.URL;
+
+        function SafeURL(url, base) {
           if (
-            href.indexOf('http://') === 0 ||
-            href.indexOf('https://') === 0 ||
-            href.indexOf('mailto:') === 0 ||
-            href.indexOf('tel:') === 0
+            base === "about:srcdoc" ||
+            base === "null" ||
+            (typeof base === "string" && base.indexOf("about:") === 0)
           ) {
-            anchor.setAttribute('target', '_blank');
-            anchor.setAttribute('rel', 'noopener noreferrer');
+            base = ORIGIN + "/";
           }
-        }, true);
+          if (typeof url === "string" && url.indexOf("about:srcdoc") === 0) {
+            url = url.replace("about:srcdoc", ORIGIN);
+          }
+          return base !== undefined ? new OrigURL(url, base) : new OrigURL(url);
+        }
+        SafeURL.prototype = OrigURL.prototype;
+        Object.setPrototypeOf(SafeURL, OrigURL);
+        window.URL = SafeURL;
+
+        var historyStack = [
+          {
+            pathname: "/",
+            search: "",
+            hash: "",
+            state: { idx: 0, key: "default", usr: null }
+          }
+        ];
+        var currentIndex = 0;
+
+        function parseTargetUrl(url) {
+          if (!url) return historyStack[currentIndex];
+          try {
+            var parsed = new OrigURL(String(url), ORIGIN);
+            return {
+              pathname: parsed.pathname || "/",
+              search: parsed.search || "",
+              hash: parsed.hash || ""
+            };
+          } catch (_) {
+            return { pathname: "/", search: "", hash: "" };
+          }
+        }
+
+        var virtualLocation = {
+          get href() {
+            var cur = historyStack[currentIndex];
+            return ORIGIN + cur.pathname + cur.search + cur.hash;
+          },
+          set href(val) {
+            if (typeof val === "string" && (val.indexOf("tel:") === 0 || val.indexOf("mailto:") === 0 || val.indexOf("http") === 0)) {
+              window.open(val, "_blank", "noopener,noreferrer");
+            }
+          },
+          origin: ORIGIN,
+          protocol: "https:",
+          host: "www.swanarhacademy.com",
+          hostname: "www.swanarhacademy.com",
+          port: "",
+          get pathname() {
+            return historyStack[currentIndex].pathname;
+          },
+          get search() {
+            return historyStack[currentIndex].search;
+          },
+          get hash() {
+            return historyStack[currentIndex].hash;
+          },
+          assign: function(url) {
+            if (typeof url === "string" && (url.indexOf("http") === 0 && url.indexOf(ORIGIN) !== 0)) {
+              window.open(url, "_blank", "noopener,noreferrer");
+              return;
+            }
+            virtualHistory.pushState({ idx: currentIndex + 1 }, "", url);
+            window.dispatchEvent(new PopStateEvent("popstate", { state: virtualHistory.state }));
+          },
+          replace: function(url) {
+            virtualHistory.replaceState({ idx: currentIndex }, "", url);
+            window.dispatchEvent(new PopStateEvent("popstate", { state: virtualHistory.state }));
+          },
+          reload: function() {}
+        };
+
+        var virtualHistory = {
+          get length() {
+            return historyStack.length;
+          },
+          get state() {
+            return historyStack[currentIndex].state;
+          },
+          scrollRestoration: "auto",
+          pushState: function(state, _title, url) {
+            var parsed = parseTargetUrl(url);
+            historyStack = historyStack.slice(0, currentIndex + 1);
+            historyStack.push({
+              pathname: parsed.pathname,
+              search: parsed.search,
+              hash: parsed.hash,
+              state: state !== undefined ? state : { idx: historyStack.length }
+            });
+            currentIndex = historyStack.length - 1;
+            window.scrollTo(0, 0);
+          },
+          replaceState: function(state, _title, url) {
+            var cur = historyStack[currentIndex];
+            var parsed = url !== undefined && url !== "" ? parseTargetUrl(url) : cur;
+            historyStack[currentIndex] = {
+              pathname: parsed.pathname,
+              search: parsed.search,
+              hash: parsed.hash,
+              state: state !== undefined ? state : cur.state
+            };
+          },
+          go: function(delta) {
+            var nextIdx = currentIndex + (Number(delta) || 0);
+            if (nextIdx >= 0 && nextIdx < historyStack.length) {
+              currentIndex = nextIdx;
+              window.dispatchEvent(new PopStateEvent("popstate", { state: historyStack[currentIndex].state }));
+            }
+          },
+          back: function() {
+            this.go(-1);
+          },
+          forward: function() {
+            this.go(1);
+          }
+        };
+
+        var memorySessionStorage = {};
+        var safeSessionStorage = {
+          getItem: function(k) {
+            return Object.prototype.hasOwnProperty.call(memorySessionStorage, k) ? memorySessionStorage[k] : null;
+          },
+          setItem: function(k, v) {
+            memorySessionStorage[k] = String(v);
+          },
+          removeItem: function(k) {
+            delete memorySessionStorage[k];
+          }
+        };
+
+        var virtualWindow = new Proxy(window, {
+          get: function(target, prop) {
+            if (prop === "location") return virtualLocation;
+            if (prop === "history") return virtualHistory;
+            if (prop === "sessionStorage") return safeSessionStorage;
+            if (prop === "origin") return ORIGIN;
+            var value = Reflect.get(target, prop, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          }
+        });
+
+        window.__swanarhVirtualWindow = virtualWindow;
+
+        try {
+          Object.defineProperty(Document.prototype, "defaultView", {
+            configurable: true,
+            get: function() {
+              return virtualWindow;
+            }
+          });
+        } catch (_) {}
+
+        document.addEventListener(
+          "click",
+          function(e) {
+            var anchor = e.target && e.target.closest ? e.target.closest("a") : null;
+            if (!anchor) return;
+            var href = anchor.getAttribute("href") || "";
+            if (
+              href.indexOf("http://") === 0 ||
+              href.indexOf("https://") === 0 ||
+              href.indexOf("mailto:") === 0 ||
+              href.indexOf("tel:") === 0
+            ) {
+              anchor.setAttribute("target", "_blank");
+              anchor.setAttribute("rel", "noopener noreferrer");
+            }
+          },
+          true
+        );
       })();
     </script>
   `;
 
-  if (/<head[^>]*>/i.test(rawHtml)) {
-    return rawHtml.replace(/<head[^>]*>/i, (match) => `${match}${injectedHead}`);
+  let processedHtml = rawHtml
+    // Remove Cloudflare beacon script which is not needed inside embedded preview
+    .replace(/<script[^>]*static\.cloudflareinsights\.com[^>]*><\/script>/gi, '');
+
+  if (patchedBundleJs) {
+    const safeInlineJs = patchedBundleJs.replace(/<\/script/gi, '<\\/script');
+    processedHtml = processedHtml.replace(
+      /<script[^>]+src=["']\/assets\/[^"']+\.js["'][^>]*><\/script>/i,
+      () => `<script type="module">${safeInlineJs}</script>`
+    );
   }
-  return `<!DOCTYPE html><html><head>${injectedHead}</head><body>${rawHtml}</body></html>`;
+
+  if (/<head[^>]*>/i.test(processedHtml)) {
+    return processedHtml.replace(/<head[^>]*>/i, (match) => `${match}${virtualEnvScript}`);
+  }
+  return `<!DOCTYPE html><html><head>${virtualEnvScript}</head><body>${processedHtml}</body></html>`;
 }
 
 export const OfficialWebsiteModal: React.FC<OfficialWebsiteModalProps> = ({
@@ -95,7 +271,25 @@ export const OfficialWebsiteModal: React.FC<OfficialWebsiteModalProps> = ({
         throw new Error(`HTTP ${response.status}`);
       }
       const htmlText = await response.text();
-      const preparedDoc = buildPlayableSrcDoc(htmlText);
+
+      let patchedBundleJs: string | undefined;
+      const scriptMatch = htmlText.match(
+        /<script[^>]+src=["'](\/assets\/[^"']+\.js)["'][^>]*><\/script>/i
+      );
+      if (scriptMatch && scriptMatch[1]) {
+        const scriptUrl = `${OFFICIAL_ORIGIN}${scriptMatch[1]}`;
+        const jsResp = await fetch(scriptUrl, {
+          method: 'GET',
+          mode: 'cors',
+          cache: forceRefresh ? 'reload' : 'default',
+        });
+        if (jsResp.ok) {
+          const rawJs = await jsResp.text();
+          patchedBundleJs = patchWebsiteBundleJs(rawJs);
+        }
+      }
+
+      const preparedDoc = buildPlayableSrcDoc(htmlText, patchedBundleJs);
       cachedWebsiteSrcDoc = preparedDoc;
       setSrcDoc(preparedDoc);
       setIsLoading(false);
@@ -264,7 +458,7 @@ export const OfficialWebsiteModal: React.FC<OfficialWebsiteModalProps> = ({
         {/* Bottom Helper Bar */}
         <div className="px-4 py-2 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-slate-400 shrink-0">
           <span>
-            💡 Classroom App ထဲမှ ထွက်စရာမလိုဘဲ သင်တန်း Website ကို တိုက်ရိုက် ကြည့်ရှုနိုင်ပါသည်။
+            💡 Classroom App ထဲမှ ထွက်စရာမလိုဘဲ သင်တန်း Website ရှိ Courses, Gallery, About, Contact စာမျက်နှာအားလုံးကို တိုက်ရိုက် ကြည့်ရှုနိုင်ပါသည်။
           </span>
           <a
             href={OFFICIAL_ACADEMY_WEBSITE_URL}
