@@ -42,22 +42,22 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
   // (Realtime WebSocket handles instant <320ms live updates; this 35s timer is a quiet fallback)
   useEffect(() => {
     let mounted = true;
-    const syncCourseLiveState = () => {
+    const syncCourseLiveState = (forcePull: boolean = false) => {
       if (document.visibilityState === 'visible' && navigator.onLine !== false) {
-        ClassroomDB.syncAttendanceFromCloud().then((changed) => {
+        ClassroomDB.syncAttendanceFromCloud(forcePull).then((changed) => {
           if (mounted && changed) {
             onRefresh();
           }
         });
-        ClassroomDB.syncPrivateNotesFromCloud().then((changed) => {
+        ClassroomDB.syncPrivateNotesFromCloud(forcePull).then((changed) => {
           if (mounted && changed) {
             onRefresh();
           }
         });
       }
     };
-    syncCourseLiveState();
-    const timer = setInterval(syncCourseLiveState, 35_000);
+    syncCourseLiveState(false);
+    const timer = setInterval(() => syncCourseLiveState(false), 45_000);
     return () => {
       mounted = false;
       clearInterval(timer);
@@ -70,14 +70,17 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
     if (typeof navigator === 'undefined' || navigator.onLine !== false) {
       if (nextTab === 'attendance') {
         ClassroomDB.syncApprovedLeavesIntoLocalAttendance();
-        ClassroomDB.syncAttendanceFromCloud().then((updated) => {
+        ClassroomDB.syncAttendanceFromCloud(true).then((updated) => {
           if (updated) onRefresh();
         });
       } else if (nextTab === 'private_notes') {
-        ClassroomDB.syncPrivateNotesFromCloud().then((updated) => {
+        ClassroomDB.syncPrivateNotesFromCloud(true).then((updated) => {
           if (updated) onRefresh();
         });
       } else {
+        ClassroomDB.syncAttendanceFromCloud(true).then((attUpdated) => {
+          if (attUpdated) onRefresh();
+        });
         ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
           if (updated) onRefresh();
         });

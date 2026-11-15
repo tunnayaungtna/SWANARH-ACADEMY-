@@ -150,13 +150,32 @@ export default function App() {
       ClassroomDB.purgeExpiredComments();
       ClassroomDB.purgeExpiredAuditLogs(false);
       refreshData();
+
+      let isWakeUpdateReload = false;
+      try {
+        const currentUrl = new URL(window.location.href);
+        if (currentUrl.searchParams.has('wake')) {
+          isWakeUpdateReload = true;
+          currentUrl.searchParams.delete('wake');
+          window.history.replaceState({}, '', currentUrl.toString());
+        }
+      } catch {
+        // ignore
+      }
+
       const loggedUser = ClassroomDB.getCurrentUser();
       if (loggedUser) {
-        ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
-          if (updated || !ClassroomDB.getCurrentUser()) {
+        if (isWakeUpdateReload) {
+          ClassroomDB.purgeStaleCacheAndForceSync().then(() => {
             refreshData();
-          }
-        });
+          });
+        } else {
+          ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
+            if (updated || !ClassroomDB.getCurrentUser()) {
+              refreshData();
+            }
+          });
+        }
       }
     }, 30);
 

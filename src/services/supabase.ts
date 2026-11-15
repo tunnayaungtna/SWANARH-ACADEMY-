@@ -1701,6 +1701,24 @@ export class SupabaseService {
     }
   }
 
+  /**
+   * Completely clears all in-memory and localStorage query/signature caches
+   * so 'Update App & Sync' fetches 100% fresh authoritative rows from Supabase.
+   */
+  static clearAllClientCaches(): void {
+    this.clientQueryCache.clear();
+    this.inflightGetRequests.clear();
+    this.lastUpsertSignatures.clear();
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(this.QUERY_CACHE_STORAGE_KEY);
+        localStorage.removeItem('classroom_os_pull_meta_v2');
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   static getClientCacheStats(): {
     cacheHits: number;
     savedBytesTotal: number;
@@ -2311,7 +2329,10 @@ export class SupabaseService {
    * Automatically uses Persistent Client-Side Asset Cache (`cachedCourseBanners`) so heavy 65KB+
    * `banner_image` strings are NEVER re-downloaded across page reloads unless their banner length changed!
    */
-  static async getRemoteCourses(knownBanners?: Map<string, string>): Promise<Course[] | null> {
+  static async getRemoteCourses(
+    knownBanners?: Map<string, string>,
+    forceRefresh: boolean = false
+  ): Promise<Course[] | null> {
     this.ensureClientCacheLoaded();
     const mergedBanners = new Map<string, string>(this.cachedCourseBanners);
     if (knownBanners) {
@@ -2321,8 +2342,10 @@ export class SupabaseService {
     }
     const useLiteColumns = mergedBanners.size > 0;
     const cacheKey = useLiteColumns ? 'courses:lite' : 'courses:all';
-    const cached = this.getCachedQuery<Course[]>(cacheKey);
-    if (cached) return cached;
+    if (!forceRefresh) {
+      const cached = this.getCachedQuery<Course[]>(cacheKey);
+      if (cached) return cached;
+    }
 
     return this.dedupeGet(cacheKey, async () => {
       try {
@@ -2453,7 +2476,8 @@ export class SupabaseService {
         isPinned?: boolean;
         pinOrder?: number;
       }
-    >
+    >,
+    forceRefresh: boolean = false
   ): Promise<CoursePost[] | null> {
     if (courseIds && courseIds.length === 0) {
       return [];
@@ -2463,8 +2487,10 @@ export class SupabaseService {
       courseIds && courseIds.length > 0 ? courseIds.slice().sort().join(',') : 'all'
     }:${useDeltaPosts ? 'delta' : 'full'}`;
     const cacheKey = `posts:${scopeKey}`;
-    const cached = this.getCachedQuery<CoursePost[]>(cacheKey);
-    if (cached) return cached;
+    if (!forceRefresh) {
+      const cached = this.getCachedQuery<CoursePost[]>(cacheKey);
+      if (cached) return cached;
+    }
 
     return this.dedupeGet(cacheKey, async () => {
       try {
@@ -2841,11 +2867,15 @@ export class SupabaseService {
           ? 'id,course_id,date,display_date,title,is_open,opened_by,created_at'
           : 'id,course_id,date,display_date,title,is_open,opened_by,records,created_at';
 
+        // Order by is_open DESC first so any currently OPEN attendance session is guaranteed to be at the top,
+        // followed by date DESC and created_at DESC!
         let query = supabase
           .from('attendance_sessions')
           .select(selectCols)
+          .order('is_open', { ascending: false })
+          .order('date', { ascending: false })
           .order('created_at', { ascending: false })
-          .limit(60);
+          .limit(50);
 
         if (courseIds && courseIds.length > 0 && courseIds.length <= 25) {
           query = query.in('course_id', courseIds);
@@ -2956,7 +2986,7 @@ export class SupabaseService {
             records: cleanRecords,
           };
         });
-        this.setCachedQuery(cacheKey, mappedSessions, 3_000);
+        this.setCachedQuery(cacheKey, mappedSessions, 10_000);
         return mappedSessions;
       } catch {
         return null;
@@ -2967,13 +2997,18 @@ export class SupabaseService {
   /**
    * Fetch active (non-expired) notifications for a user from Supabase
    */
-  static async getRemoteNotifications(userId?: string): Promise<NotificationItem[] | null> {
+  static async getRemoteNotifications(
+    userId?: string,
+    forceRefresh: boolean = false
+  ): Promise<NotificationItem[] | null> {
     if (this.notificationsTableStatus === 'missing') {
       return null;
     }
     const cacheKey = `notifs:${userId || 'all'}`;
-    const cached = this.getCachedQuery<NotificationItem[]>(cacheKey);
-    if (cached) return cached;
+    if (!forceRefresh) {
+      const cached = this.getCachedQuery<NotificationItem[]>(cacheKey);
+      if (cached) return cached;
+    }
 
     return this.dedupeGet(cacheKey, async () => {
       try {

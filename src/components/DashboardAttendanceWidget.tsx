@@ -54,11 +54,11 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
         });
       }
     };
-    syncNow(true);
+    syncNow(false);
     const hasOpen = courses.some((c) =>
       ClassroomDB.getAttendanceSessions(c.id).some((s) => s.isOpen)
     );
-    const intervalMs = isInstructor && hasOpen ? 8_000 : 15_000;
+    const intervalMs = isInstructor && hasOpen ? 25_000 : 45_000;
     const timer = setInterval(() => syncNow(false), intervalMs);
     return () => {
       mounted = false;

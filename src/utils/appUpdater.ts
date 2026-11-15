@@ -34,9 +34,10 @@ export async function performQuickUpdateAndSync(
       }
     })();
 
-    // 2. Pull latest authoritative data from Supabase (Courses, Posts, Attendance, Profiles, Notifications)
+    // 2. Purge all stale local/query caches and pull latest authoritative data from Supabase
+    // (Courses, Attendance Sessions, Posts, Private Notes, Profiles, Notifications)
     const [pulled] = await Promise.all([
-      ClassroomDB.pullFromSupabase({ force: true }),
+      ClassroomDB.purgeStaleCacheAndForceSync(),
       swCheckPromise,
     ]);
 
@@ -54,19 +55,16 @@ export async function performQuickUpdateAndSync(
 }
 
 /**
- * Performs a full application shell & Service Worker cache refresh while preserving
- * the user's login session and local classroom state.
+ * Performs a full application shell & Service Worker cache refresh while wiping stale
+ * classroom caches and preserving the user's login session and attendance check-in ledger.
  */
 export async function performFullAppVersionUpdate(
-  onDataRefreshed?: () => void
+  _onDataRefreshed?: () => void
 ): Promise<void> {
   try {
-    await performQuickUpdateAndSync(onDataRefreshed);
-  } catch {
-    // continue to reload
-  }
-
-  try {
+    // Clear stale local/query caches in 0ms before reloading; the reloaded page (?wake=)
+    // immediately executes a single authoritative purgeStaleCacheAndForceSync() pass!
+    ClassroomDB.prepareStaleCachePurgeForReload();
     if (typeof window !== 'undefined') {
       if ('serviceWorker' in navigator) {
         const registrations = await navigator.serviceWorker.getRegistrations();

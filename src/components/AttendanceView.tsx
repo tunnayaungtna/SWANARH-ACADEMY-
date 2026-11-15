@@ -87,11 +87,13 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
             onRefresh();
           }
         });
-        ClassroomDB.syncPrivateNotesFromCloud(forcePull).then((notesChanged) => {
-          if (mounted && notesChanged) {
-            onRefresh();
-          }
-        });
+        if (forcePull || isInstructor) {
+          ClassroomDB.syncPrivateNotesFromCloud(forcePull).then((notesChanged) => {
+            if (mounted && notesChanged) {
+              onRefresh();
+            }
+          });
+        }
       }
     };
     const handleRemoteClosed = () => {
@@ -108,7 +110,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
     };
     syncNow(true);
     const hasOpenNow = sessions.some((s) => s.isOpen);
-    const pollIntervalMs = hasOpenNow ? 6_000 : 12_000;
+    const pollIntervalMs = hasOpenNow ? 25_000 : 45_000;
     const timer = setInterval(() => syncNow(false), pollIntervalMs);
     window.addEventListener('attendance-closed-remotely', handleRemoteClosed);
     window.addEventListener('private-note-realtime-update', handleRealtimePrivateNote);
