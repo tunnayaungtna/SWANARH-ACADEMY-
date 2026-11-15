@@ -5,6 +5,7 @@ import {
   AttendanceSession,
   AttendanceStatus,
   CertificateData,
+  PrivateNote,
 } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
 import {
@@ -37,6 +38,7 @@ interface AttendanceViewProps {
   currentUser: User;
   onRefresh: () => void;
   onOpenCertificate?: (cert: CertificateData) => void;
+  onOpenPrivateNotes?: () => void;
 }
 
 export const AttendanceView: React.FC<AttendanceViewProps> = ({
@@ -44,6 +46,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   currentUser,
   onRefresh,
   onOpenCertificate,
+  onOpenPrivateNotes,
 }) => {
   const isInstructor = currentUser.role === 'admin' || currentUser.role === 'co_admin';
   const sessions = ClassroomDB.getAttendanceSessions(course.id);
@@ -66,19 +69,26 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
     'all' | 'checked_in' | 'not_checked_in' | 'present' | 'late' | 'excused' | 'absent'
   >('all');
   const [rollCallSearch, setRollCallSearch] = useState<string>('');
+  const [blockedLeaveAlert, setBlockedLeaveAlert] = useState<string | null>(null);
+  const [quickReplyDrafts, setQuickReplyDrafts] = useState<Record<string, string>>({});
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
-    setTimeout(() => setToastMsg(null), 3200);
+    setTimeout(() => setToastMsg(null), 3800);
   };
 
-  // Real-time multi-device Attendance synchronization (instant WebSocket patch + 6s delta verification)
+  // Real-time multi-device Attendance & Leave Request synchronization (instant WebSocket patch + 6s delta verification)
   useEffect(() => {
     let mounted = true;
     const syncNow = (forcePull: boolean = false) => {
       if (document.visibilityState === 'visible' && navigator.onLine !== false) {
         ClassroomDB.syncAttendanceFromCloud(forcePull).then((changed) => {
           if (mounted && changed) {
+            onRefresh();
+          }
+        });
+        ClassroomDB.syncPrivateNotesFromCloud(forcePull).then((notesChanged) => {
+          if (mounted && notesChanged) {
             onRefresh();
           }
         });
@@ -92,15 +102,21 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       );
       onRefresh();
     };
+    const handleRealtimePrivateNote = () => {
+      if (!mounted) return;
+      onRefresh();
+    };
     syncNow(true);
     const hasOpenNow = sessions.some((s) => s.isOpen);
     const pollIntervalMs = hasOpenNow ? 6_000 : 12_000;
     const timer = setInterval(() => syncNow(false), pollIntervalMs);
     window.addEventListener('attendance-closed-remotely', handleRemoteClosed);
+    window.addEventListener('private-note-realtime-update', handleRealtimePrivateNote);
     return () => {
       mounted = false;
       clearInterval(timer);
       window.removeEventListener('attendance-closed-remotely', handleRemoteClosed);
+      window.removeEventListener('private-note-realtime-update', handleRealtimePrivateNote);
     };
   }, [course.id, isInstructor, sessions.some((s) => s.isOpen)]);
 
@@ -137,17 +153,39 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       openImmediately,
       currentUser
     );
+    const autoExcusedCount = Object.values(created.records || {}).filter(
+      (r) => r.status === 'excused'
+    ).length;
     setNewTitle('');
     setSelectedSessionId(created.id);
+    setBlockedLeaveAlert(null);
     showToast(
       openImmediately
-        ? 'Open Attendance ဖွင့်လှစ်ပြီးပါပြီ! ကျောင်းသားများ "Present" နှိပ်နိုင်ပါပြီ။'
-        : 'Attendance Session အသစ် ဖန်တီးပြီးပါပြီ။'
+        ? `Open Attendance ဖွင့်လှစ်ပြီးပါပြီ!${
+            autoExcusedCount > 0
+              ? ` (ကြိုတင်ခွင့်ပြုထားသော ကျောင်းသား ${autoExcusedCount} ဦးအား အလိုအလျောက် Excused သတ်မှတ်ပေးပြီး)`
+              : ' ကျောင်းသားများ "Present" နှိပ်နိုင်ပါပြီ။'
+          }`
+        : `Attendance Session အသစ် ဖန်တီးပြီးပါပြီ။${
+            autoExcusedCount > 0
+              ? ` (ကြိုတင်ခွင့်ပြုထားသော ကျောင်းသား ${autoExcusedCount} ဦး Auto Excused ဖြစ်ပြီး)`
+              : ''
+          }`
     );
     onRefresh();
   };
 
   const handleToggleOpen = (session: AttendanceSession) => {
+    const check = ClassroomDB.checkCanToggleAttendanceSession(session.id);
+    if (!check.allowed) {
+      const msg =
+        check.error ||
+        '⚠️ ဤနေ့အတွက် ကျောင်းသားခွင့်တိုင်စာကို Approve သို့မဟုတ် Reject မလုပ်ရသေးသောကြောင့် Attendance ပိတ်ခွင့် နှင့် ပြန်ဖွင့်ခွင့် မရသေးပါ။';
+      setBlockedLeaveAlert(msg);
+      showToast(msg);
+      return;
+    }
+    setBlockedLeaveAlert(null);
     const nextState = !session.isOpen;
     if (!nextState) {
       ClassroomDB.closeAllOpenAttendanceForCourse(course.id, currentUser);
@@ -164,6 +202,16 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   };
 
   const handleCloseAllOpenAttendance = () => {
+    const check = ClassroomDB.checkCanCloseCourseAttendance(course.id);
+    if (!check.allowed) {
+      const msg =
+        check.error ||
+        '⚠️ ကျောင်းသားခွင့်တိုင်စာကို Approve သို့မဟုတ် Reject မလုပ်ရသေးသောကြောင့် Attendance ပိတ်၍ မရသေးပါ။';
+      setBlockedLeaveAlert(msg);
+      showToast(msg);
+      return;
+    }
+    setBlockedLeaveAlert(null);
     const count = ClassroomDB.closeAllOpenAttendanceForCourse(course.id, currentUser);
     if (count > 0) {
       showToast(
@@ -171,6 +219,39 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       );
       onRefresh();
     }
+  };
+
+  const handleQuickResolveLeaveRequest = (
+    note: PrivateNote,
+    decision: 'approved' | 'rejected'
+  ) => {
+    const draft = (quickReplyDrafts[note.id] || '').trim();
+    ClassroomDB.replyToPrivateNote(note.id, draft, decision, currentUser);
+    setQuickReplyDrafts((prev) => {
+      const next = { ...prev };
+      delete next[note.id];
+      return next;
+    });
+    const remainingPending = activeSession
+      ? ClassroomDB.getPendingLeaveRequestsForDate(course.id, activeSession.date)
+      : [];
+    if (remainingPending.length === 0) {
+      setBlockedLeaveAlert(null);
+    }
+    showToast(
+      decision === 'approved'
+        ? `✅ ${note.studentName} ၏ ခွင့်တိုင်စာကို Approve (ခွင့်ပြု) ပေးပြီး Attendance တွင် အလိုအလျောက် Excused သတ်မှတ်ပေးလိုက်ပါပြီ!${
+            remainingPending.length === 0
+              ? ' ယခု Attendance ပိတ်/ဖွင့် နိုင်ပါပြီ။'
+              : ''
+          }`
+        : `✕ ${note.studentName} ၏ ခွင့်တိုင်စာကို Reject (ငြင်းပယ်) သတ်မှတ်ပြီးပါပြီ!${
+            remainingPending.length === 0
+              ? ' ယခု Attendance ပိတ်/ဖွင့် နိုင်ပါပြီ။'
+              : ''
+          }`
+    );
+    onRefresh();
   };
 
   const handleDeleteSession = (session: AttendanceSession) => {
@@ -501,6 +582,13 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                 {openSessions.map((sess) => {
                   const myRecord = ClassroomDB.getStudentAttendanceRecord(sess, currentUser);
                   const isEditingThis = Boolean(editingStudentSessionIds[sess.id]);
+                  const isInstructorApprovedExcused =
+                    myRecord?.status === 'excused' && myRecord?.checkedInBy === 'instructor';
+                  const myLeaveNotesForDate = ClassroomDB.getLeaveRequestsForCourseDate(
+                    course.id,
+                    sess.date
+                  ).filter((n) => n.studentId === currentUser.id);
+                  const myPendingLeave = myLeaveNotesForDate.find((n) => n.status === 'pending');
 
                   return (
                     <div
@@ -518,8 +606,22 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                             </h4>
                           </div>
                           <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                            ဆရာ {sess.openedBy} မှ Attendance ဖွင့်ပေးထားပါသည်။ Attendance မပိတ်ခင် မိမိနှိပ်ထားသည်ကို ပြန်ပြင်နိုင်ပါသည်။
+                            ဆရာ {sess.openedBy} မှ Attendance ဖွင့်ပေးထားပါသည်။ ခွင့်တိုင်လိုပါက <strong>"သီးသန့်စာ"</strong> Tab မှ ခွင့်တိုင်ကြားပြီး ဆရာ Approve ပေးသည့်အခါ အလိုအလျောက် Excused (ခွင့်) ဖြစ်သွားပါမည်။
                           </p>
+                          {myPendingLeave && (
+                            <div className="mt-1.5 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-100/90 dark:bg-amber-950/70 border border-amber-300 dark:border-amber-800 text-[11px] font-bold text-amber-800 dark:text-amber-300">
+                              <Clock className="w-3.5 h-3.5 animate-pulse shrink-0" />
+                              <span>
+                                ⏳ သင်တင်ပြထားသော ခွင့်တိုင်စာ ({myPendingLeave.subject}) ကို ဆရာ စစ်ဆေးနေဆဲဖြစ်ပါသည် (Approve ပေးပါက အလိုအလျောက် Excused ဖြစ်ပါမည်)
+                              </span>
+                            </div>
+                          )}
+                          {isInstructorApprovedExcused && myRecord?.note && (
+                            <div className="mt-1.5 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-indigo-100/90 dark:bg-indigo-950/70 border border-indigo-300 dark:border-indigo-800 text-[11px] font-bold text-indigo-800 dark:text-indigo-300">
+                              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                              <span>✅ {myRecord.note} (Auto Excused)</span>
+                            </div>
+                          )}
                         </div>
 
                         {myRecord ? (
@@ -531,19 +633,21 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                                 <span>နှိပ်သည့်အချိန်: {myRecord.checkedInAt}</span>
                               </span>
                             )}
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setEditingStudentSessionIds((prev) => ({
-                                  ...prev,
-                                  [sess.id]: !prev[sess.id],
-                                }))
-                              }
-                              className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-indigo-600 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                              <span>{isEditingThis ? 'မပြင်တော့ပါ (Cancel)' : 'ပြန်ပြင်မည် (Edit)'}</span>
-                            </button>
+                            {!isInstructorApprovedExcused && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setEditingStudentSessionIds((prev) => ({
+                                    ...prev,
+                                    [sess.id]: !prev[sess.id],
+                                  }))
+                                }
+                                className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-indigo-600 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                                <span>{isEditingThis ? 'မပြင်တော့ပါ (Cancel)' : 'ပြန်ပြင်မည် (Edit)'}</span>
+                              </button>
+                            )}
                           </div>
                         ) : (
                           <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -563,20 +667,23 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                               <Clock className="w-3.5 h-3.5" />
                               <span>Late (နောက်ကျ)</span>
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => handleStudentCheckIn(sess.id, 'excused')}
-                              className="px-3 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 text-indigo-800 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-700 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
-                            >
-                              <AlertCircle className="w-3.5 h-3.5" />
-                              <span>Excused (ခွင့်တိုင်)</span>
-                            </button>
+                            {onOpenPrivateNotes && (
+                              <button
+                                type="button"
+                                onClick={onOpenPrivateNotes}
+                                className="px-3 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 text-indigo-800 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-700 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                                title="သီးသန့်စာ Tab မှတစ်ဆင့် ခွင့်တိုင်ကြားစာ ပေးပို့ရန်"
+                              >
+                                <Lock className="w-3.5 h-3.5" />
+                                <span>📩 ခွင့်တိုင်ရန် (သီးသန့်စာ Tab သို့)</span>
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
 
                       {/* Edit Attendance Drawer when student clicks "ပြန်ပြင်မည် (Edit)" while session is open */}
-                      {myRecord && isEditingThis && (
+                      {myRecord && isEditingThis && !isInstructorApprovedExcused && (
                         <div className="pt-2.5 border-t border-slate-200/70 dark:border-slate-700/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 animate-fade-in">
                           <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
                             ✏️ Attendance မပိတ်မီ ပြောင်းလဲလိုသော အခြေအနေကို ရွေးချယ်ပါ -
@@ -608,18 +715,6 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                             </button>
                             <button
                               type="button"
-                              onClick={() => handleStudentCheckIn(sess.id, 'excused')}
-                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                                myRecord.status === 'excused'
-                                  ? 'bg-indigo-600 text-white shadow-xs ring-2 ring-indigo-400/50'
-                                  : 'bg-white dark:bg-slate-800 text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-700 hover:bg-indigo-50'
-                              }`}
-                            >
-                              <AlertCircle className="w-3.5 h-3.5" />
-                              <span>Excused (ခွင့်တိုင်)</span>
-                            </button>
-                            <button
-                              type="button"
                               onClick={() => handleStudentCheckIn(sess.id, 'clear')}
                               className="px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-700 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
                             >
@@ -647,13 +742,25 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                     </h4>
                   </div>
                   <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Admin / Co-Admin များမှ Attendance ဖွင့်ပေးထားသည့် အချိန်တွင်သာ ကျောင်းသားများ ကိုယ်တိုင် Attendance နှိပ်နိုင်ပါသည်။
+                    Admin / Co-Admin များမှ Attendance ဖွင့်ပေးထားသည့် အချိန်တွင်သာ ကျောင်းသားများ ကိုယ်တိုင် Attendance နှိပ်နိုင်ပါသည်။ ကြိုတင်ခွင့်တိုင်လိုပါက "သီးသန့်စာ" Tab တွင် ပေးပို့ထားနိုင်ပါသည်။
                   </p>
                 </div>
               </div>
-              <span className="self-start sm:self-center text-[11px] font-bold px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shrink-0">
-                🔒 Attendance ပိတ်ထားဆဲ
-              </span>
+              <div className="flex items-center gap-2 self-start sm:self-center shrink-0">
+                {onOpenPrivateNotes && (
+                  <button
+                    type="button"
+                    onClick={onOpenPrivateNotes}
+                    className="px-3 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/70 hover:bg-indigo-100 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-[11px] font-bold cursor-pointer flex items-center gap-1"
+                  >
+                    <Lock className="w-3 h-3" />
+                    <span>ကြိုတင်ခွင့်တိုင်ရန် (သီးသန့်စာ)</span>
+                  </button>
+                )}
+                <span className="text-[11px] font-bold px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                  🔒 Attendance ပိတ်ထားဆဲ
+                </span>
+              </div>
             </div>
           )}
 
@@ -676,6 +783,8 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
               <div className="divide-y divide-slate-100 dark:divide-slate-800">
                 {sessions.map((sess) => {
                   const myRec = ClassroomDB.getStudentAttendanceRecord(sess, currentUser);
+                  const isInstructorApprovedExcused =
+                    myRec?.status === 'excused' && myRec?.checkedInBy === 'instructor';
                   return (
                     <div
                       key={sess.id}
@@ -706,7 +815,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                               နှိပ်သည့်အချိန်: {myRec.checkedInAt} (
                               {myRec.checkedInBy === 'student'
                                 ? 'ကျောင်းသားကိုယ်တိုင် နှိပ်ထားသည်'
-                                : 'ဆရာမှ ခြစ်ပေးထားသည်'}
+                                : myRec.note || 'ဆရာမှ ခြစ်ပေးထားသည်'}
                               )
                             </span>
                           </div>
@@ -724,7 +833,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                             <span>Present (တက်ရောက်သည်)</span>
                           </button>
                         )}
-                        {sess.isOpen && myRec && (
+                        {sess.isOpen && myRec && !isInstructorApprovedExcused && (
                           <div className="flex flex-wrap items-center gap-1.5">
                             {myRec.status !== 'present' && (
                               <button
@@ -742,15 +851,6 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                                 className="px-2.5 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/70 hover:bg-amber-100 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-700 text-[11px] font-bold cursor-pointer"
                               >
                                 Late
-                              </button>
-                            )}
-                            {myRec.status !== 'excused' && (
-                              <button
-                                type="button"
-                                onClick={() => handleStudentCheckIn(sess.id, 'excused')}
-                                className="px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/70 hover:bg-indigo-100 text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-700 text-[11px] font-bold cursor-pointer"
-                              >
-                                Excused
                               </button>
                             )}
                             <button
@@ -778,178 +878,314 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       {/* ===================================================================== */}
       {/* INSTRUCTOR VIEW (Admin & Co-Admin): Open Attendance & Roll Call       */}
       {/* ===================================================================== */}
-      {isInstructor && (
-        <div className="space-y-6">
-          {/* Active Open Attendance Quick-Close Banner for Admin / Co-Admin */}
-          {openSessions.length > 0 && (
-            <div className="neu-card rounded-3xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ring-2 ring-emerald-400/60">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-extrabold text-xs sm:text-sm flex-wrap">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-                  <span>
-                    🟢 လက်ရှိတွင် Attendance ဖွင့်ထားဆဲဖြစ်ပါသည် ({openSessions[0]?.displayDate} — {openSessions[0]?.title})
-                  </span>
-                </div>
-                <p className="text-xs text-slate-600 dark:text-slate-300">
-                  ကျောင်းသားများ ယခုချိန်တွင် မိမိတို့အကောင့်မှ Attendance နှိပ်နိုင်ပါသည်။ ပိတ်လိုပါက ညာဘက်ရှိ <strong>"Attendance ပိတ်မည်"</strong> ခလုတ်ကို နှိပ်ပါ။
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={handleCloseAllOpenAttendance}
-                className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs sm:text-sm font-extrabold shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0"
-              >
-                <Lock className="w-4 h-4" />
-                <span>🔒 Attendance ပိတ်မည် (Close For All Students)</span>
-              </button>
-            </div>
-          )}
+      {isInstructor && (() => {
+        const pendingLeavesForActive = activeSession
+          ? ClassroomDB.getPendingLeaveRequestsForDate(course.id, activeSession.date)
+          : [];
+        const approvedLeavesForActive = activeSession
+          ? ClassroomDB.getApprovedLeaveRequestsForDate(course.id, activeSession.date)
+          : [];
+        const closeCheckForCourse = ClassroomDB.checkCanCloseCourseAttendance(course.id);
+        const allPendingLeavesMap = new Map<string, PrivateNote>();
+        pendingLeavesForActive.forEach((p) => allPendingLeavesMap.set(p.id, p));
+        closeCheckForCourse.pendingLeaves.forEach((p) => allPendingLeavesMap.set(p.id, p));
+        const pendingLeavesToReview = Array.from(allPendingLeavesMap.values());
 
-          {/* 1. Open New Daily Attendance Card */}
-          <div className="neu-card rounded-3xl p-5 sm:p-6">
-            <div className="flex items-center justify-between gap-2 mb-4">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2.5 rounded-xl bg-indigo-600 text-white shadow-xs">
-                  <CalendarCheck className="w-5 h-5" />
-                </div>
-                <div>
-                  <h2 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white">
-                    Open Daily Attendance (အတန်းချိန် တက်ရောက်မှု ဖွင့်လှစ်ရန်)
-                  </h2>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    "Open Attendance" ဖွင့်ပေးထားပါက သင်တန်းသားများကိုယ်တိုင် "Present (တက်ရောက်သည်)" နှိပ်နိုင်သလို ဆရာကိုယ်တိုင်လည်း အမည်စာရင်းဖြင့် ခြစ်ပေးနိုင်ပါသည်။
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <form
-              onSubmit={handleCreateSession}
-              className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end neu-inset-sm p-4 rounded-2xl"
-            >
-              <div className="md:col-span-5">
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                  Session / Lecture Title (သင်ခန်းစာ / အတန်းချိန် အမည်)
-                </label>
-                <input
-                  type="text"
-                  placeholder="ဥပမာ - Lecture 04: Daily Class Check-in..."
-                  value={newTitle}
-                  onChange={(e) => setNewTitle(e.target.value)}
-                  className="w-full px-3.5 py-2.5 text-xs sm:text-sm neu-input rounded-xl text-slate-900 dark:text-slate-100"
-                />
-              </div>
-
-              <div className="md:col-span-3">
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                  Date (နေ့စွဲ)
-                </label>
-                <input
-                  type="date"
-                  value={newDate}
-                  onChange={(e) => setNewDate(e.target.value)}
-                  className="w-full px-3.5 py-2.5 text-xs sm:text-sm neu-input rounded-xl text-slate-900 dark:text-slate-100 font-mono"
-                  required
-                />
-              </div>
-
-              <div className="md:col-span-4 flex items-center justify-between md:justify-end gap-2.5">
-                <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={openImmediately}
-                    onChange={(e) => setOpenImmediately(e.target.checked)}
-                    className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                  />
-                  <span>Open Self Check-in</span>
-                </label>
-
-                <button
-                  type="submit"
-                  className="px-4 py-2.5 neu-btn-emerald text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Open Attendance</span>
-                </button>
-              </div>
-            </form>
-          </div>
-
-          {/* 2. Daily Roll Call & Self Check-in Control Panel */}
-          <div className="neu-card rounded-3xl overflow-hidden">
-            <div className="p-4 sm:p-5 border-b border-slate-200/50 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
-                  <Calendar className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                  <span>Daily Roll Call Sheet (အမည်စာရင်းဖြင့် Attendance ခြစ်ရန်)</span>
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  နေ့စွဲအလိုက် အတန်းချိန်ကို ရွေးချယ်ပြီး ကျောင်းသားတစ်ဦးချင်းစီအတွက် Present / Late / Excused / Absent သတ်မှတ်နိုင်ပါသည်။
-                </p>
-              </div>
-
-              {/* Session Selector Dropdown */}
-              {sessions.length > 0 && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <select
-                    value={activeSession?.id || ''}
-                    onChange={(e) => setSelectedSessionId(e.target.value)}
-                    className="px-3.5 py-2 text-xs font-semibold neu-input rounded-xl text-slate-900 dark:text-slate-100"
-                  >
-                    {sessions.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.displayDate} — {s.title} {s.isOpen ? '(🟢 OPEN)' : '(🔒 Closed)'}
-                      </option>
-                    ))}
-                  </select>
-
-                  {activeSession && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => handleToggleOpen(activeSession)}
-                        className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer ${
-                          activeSession.isOpen
-                            ? 'bg-rose-600 hover:bg-rose-700 border-rose-600 text-white shadow-xs'
-                            : 'bg-emerald-600 hover:bg-emerald-700 border-emerald-600 text-white shadow-xs'
-                        }`}
-                        title="Toggle student self check-in"
-                      >
-                        {activeSession.isOpen ? (
-                          <>
-                            <Lock className="w-3.5 h-3.5" />
-                            <span>🔒 Attendance ပိတ်မည် (Close Attendance)</span>
-                          </>
-                        ) : (
-                          <>
-                            <Unlock className="w-3.5 h-3.5" />
-                            <span>🔓 Attendance ပြန်ဖွင့်မည် (Open Attendance)</span>
-                          </>
-                        )}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleMarkAllPresent(activeSession.id)}
-                        className="px-3 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <CheckCheck className="w-3.5 h-3.5" />
-                        <span>Mark All Present</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteSession(activeSession)}
-                        className="p-2 text-slate-400 hover:text-rose-600 rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
-                        title="Delete this attendance session"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </>
+        return (
+          <div className="space-y-6">
+            {/* Blocked Attendance Close / Re-Open Warning & Direct Leave Approval Card */}
+            {(pendingLeavesToReview.length > 0 || blockedLeaveAlert) && (
+              <div className="neu-card rounded-3xl p-4 sm:p-5 space-y-4 ring-2 ring-amber-500/60 border border-amber-400/50 animate-fade-in">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2.5 rounded-2xl bg-amber-600 text-white shrink-0 shadow-xs">
+                      <AlertCircle className="w-5 h-5 animate-pulse" />
+                    </div>
+                    <div>
+                      <h3 className="text-xs sm:text-sm font-extrabold text-amber-900 dark:text-amber-200">
+                        ⚠️ ဤနေ့အတွက် ကျောင်းသား ခွင့်တိုင်ကြားစာ ({pendingLeavesToReview.length} စောင်) စစ်ဆေးရန် ကျန်ရှိနေပါသည်!
+                      </h3>
+                      <p className="text-[11px] sm:text-xs text-slate-600 dark:text-slate-300 mt-0.5 leading-relaxed">
+                        {blockedLeaveAlert ||
+                          'ကျောင်းသားတင်ပြထားသော ခွင့်တိုင်စာကို Approve (ခွင့်ပြု) သို့မဟုတ် Reject (ငြင်းပယ်) လုပ်ပြီးမှသာ Attendance ပိတ်ခွင့် နှင့် ပြန်ဖွင့်ခွင့် ရရှိပါမည်။ အောက်တွင် တိုက်ရိုက် Approve သို့မဟုတ် Reject နှိပ်နိုင်ပါသည်။'}
+                      </p>
+                    </div>
+                  </div>
+                  {onOpenPrivateNotes && (
+                    <button
+                      type="button"
+                      onClick={onOpenPrivateNotes}
+                      className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-800 hover:bg-amber-50 dark:hover:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700 text-xs font-bold shrink-0 cursor-pointer self-start sm:self-center"
+                    >
+                      သီးသန့်စာ Tab သို့ သွားကြည့်မည် →
+                    </button>
                   )}
                 </div>
-              )}
+
+                {pendingLeavesToReview.length > 0 && (
+                  <div className="space-y-2.5">
+                    {pendingLeavesToReview.map((leaveNote) => (
+                      <div
+                        key={leaveNote.id}
+                        className="p-3.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/35 border border-amber-300/70 dark:border-amber-800/70 space-y-2.5"
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white">
+                                🎓 {leaveNote.studentName}
+                              </span>
+                              <span className="text-[11px] font-mono text-indigo-600 dark:text-indigo-400">
+                                @{leaveNote.studentUsername}
+                              </span>
+                              <span className="px-2 py-0.5 rounded-lg bg-amber-200/80 dark:bg-amber-900 text-amber-900 dark:text-amber-200 text-[10px] font-bold">
+                                📅 ခွင့်ရက်: {leaveNote.leaveDate || activeSession?.date}
+                              </span>
+                            </div>
+                            <div className="text-xs font-bold text-slate-800 dark:text-slate-200 mt-1">
+                              {leaveNote.subject}
+                            </div>
+                            <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5 whitespace-pre-wrap">
+                              "{leaveNote.content}"
+                            </p>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleQuickResolveLeaveRequest(leaveNote, 'approved')}
+                              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-xs cursor-pointer"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>✓ ခွင့်ပြုသည် (Approve → Auto Excused)</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleQuickResolveLeaveRequest(leaveNote, 'rejected')}
+                              className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              <span>✕ ငြင်းပယ်သည် (Reject)</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        <input
+                          type="text"
+                          value={quickReplyDrafts[leaveNote.id] || ''}
+                          onChange={(e) =>
+                            setQuickReplyDrafts((prev) => ({
+                              ...prev,
+                              [leaveNote.id]: e.target.value,
+                            }))
+                          }
+                          placeholder="ကျောင်းသားထံ ပြန်ကြားလိုသော မှတ်ချက် (မထည့်ဘဲ တိုက်ရိုက် Approve / Reject နှိပ်လျှင်လည်း ရပါသည်)..."
+                          className="w-full px-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-amber-300/80 dark:border-amber-800 text-xs text-slate-900 dark:text-slate-100"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Active Open Attendance Quick-Close Banner for Admin / Co-Admin */}
+            {openSessions.length > 0 && (
+              <div className="neu-card rounded-3xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ring-2 ring-emerald-400/60">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-extrabold text-xs sm:text-sm flex-wrap">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                    <span>
+                      🟢 လက်ရှိတွင် Attendance ဖွင့်ထားဆဲဖြစ်ပါသည် ({openSessions[0]?.displayDate} — {openSessions[0]?.title})
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-300">
+                    ကျောင်းသားများ ယခုချိန်တွင် မိမိတို့အကောင့်မှ Attendance နှိပ်နိုင်ပါသည်။ ပိတ်လိုပါက ညာဘက်ရှိ <strong>"Attendance ပိတ်မည်"</strong> ခလုတ်ကို နှိပ်ပါ။
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCloseAllOpenAttendance}
+                  className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs sm:text-sm font-extrabold shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0"
+                >
+                  <Lock className="w-4 h-4" />
+                  <span>
+                    🔒 Attendance ပိတ်မည်{' '}
+                    {!closeCheckForCourse.allowed
+                      ? `(⚠️ ခွင့်စာ ${closeCheckForCourse.pendingLeaves.length} စောင် စစ်ဆေးရန်ကျန်)`
+                      : '(Close For All Students)'}
+                  </span>
+                </button>
+              </div>
+            )}
+
+            {/* 1. Open New Daily Attendance Card */}
+            <div className="neu-card rounded-3xl p-5 sm:p-6">
+              <div className="flex items-center justify-between gap-2 mb-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2.5 rounded-xl bg-indigo-600 text-white shadow-xs">
+                    <CalendarCheck className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white">
+                      Open Daily Attendance (အတန်းချိန် တက်ရောက်မှု ဖွင့်လှစ်ရန်)
+                    </h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      "Open Attendance" ဖွင့်ပေးထားပါက သင်တန်းသားများကိုယ်တိုင် "Present (တက်ရောက်သည်)" နှိပ်နိုင်ပြီး ကြိုတင်ခွင့်တိုင်၍ Approve ပေးထားသော ကျောင်းသားများကို အလိုအလျောက် "Excused (ခွင့်)" သတ်မှတ်ပေးပါသည်။
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <form
+                onSubmit={handleCreateSession}
+                className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end neu-inset-sm p-4 rounded-2xl"
+              >
+                <div className="md:col-span-5">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    Session / Lecture Title (သင်ခန်းစာ / အတန်းချိန် အမည်)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="ဥပမာ - Lecture 04: Daily Class Check-in..."
+                    value={newTitle}
+                    onChange={(e) => setNewTitle(e.target.value)}
+                    className="w-full px-3.5 py-2.5 text-xs sm:text-sm neu-input rounded-xl text-slate-900 dark:text-slate-100"
+                  />
+                </div>
+
+                <div className="md:col-span-3">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    Date (နေ့စွဲ)
+                  </label>
+                  <input
+                    type="date"
+                    value={newDate}
+                    onChange={(e) => setNewDate(e.target.value)}
+                    className="w-full px-3.5 py-2.5 text-xs sm:text-sm neu-input rounded-xl text-slate-900 dark:text-slate-100 font-mono"
+                    required
+                  />
+                </div>
+
+                <div className="md:col-span-4 flex items-center justify-between md:justify-end gap-2.5">
+                  <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={openImmediately}
+                      onChange={(e) => setOpenImmediately(e.target.checked)}
+                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <span>Open Self Check-in</span>
+                  </label>
+
+                  <button
+                    type="submit"
+                    className="px-4 py-2.5 neu-btn-emerald text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Open Attendance</span>
+                  </button>
+                </div>
+              </form>
             </div>
+
+            {/* 2. Daily Roll Call & Self Check-in Control Panel */}
+            <div className="neu-card rounded-3xl overflow-hidden">
+              <div className="p-4 sm:p-5 border-b border-slate-200/50 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Calendar className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                    <span>Daily Roll Call Sheet (အမည်စာရင်းဖြင့် Attendance ခြစ်ရန်)</span>
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    နေ့စွဲအလိုက် အတန်းချိန်ကို ရွေးချယ်ပြီး ကျောင်းသားတစ်ဦးချင်းစီအတွက် Present / Late / Excused / Absent သတ်မှတ်နိုင်ပါသည်။
+                  </p>
+                  {approvedLeavesForActive.length > 0 && (
+                    <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-indigo-50 dark:bg-indigo-950/70 border border-indigo-200 dark:border-indigo-800 text-[11px] font-bold text-indigo-800 dark:text-indigo-300">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                      <span>
+                        ✅ ဤနေ့ ({activeSession?.displayDate}) အတွက် ခွင့်ပြုထားပြီးသော ကျောင်းသား ({approvedLeavesForActive.length} ဦး):{' '}
+                        {approvedLeavesForActive.map((a) => a.studentName).join('၊ ')} — အလိုအလျောက် Excused (ခွင့်) သတ်မှတ်ပေးထားပြီးဖြစ်ပါသည်။
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Session Selector Dropdown */}
+                {sessions.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={activeSession?.id || ''}
+                      onChange={(e) => {
+                        setSelectedSessionId(e.target.value);
+                        setBlockedLeaveAlert(null);
+                      }}
+                      className="px-3.5 py-2 text-xs font-semibold neu-input rounded-xl text-slate-900 dark:text-slate-100"
+                    >
+                      {sessions.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.displayDate} — {s.title} {s.isOpen ? '(🟢 OPEN)' : '(🔒 Closed)'}
+                        </option>
+                      ))}
+                    </select>
+
+                    {activeSession && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleOpen(activeSession)}
+                          className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer ${
+                            activeSession.isOpen
+                              ? 'bg-rose-600 hover:bg-rose-700 border-rose-600 text-white shadow-xs'
+                              : 'bg-emerald-600 hover:bg-emerald-700 border-emerald-600 text-white shadow-xs'
+                          }`}
+                          title="Toggle student self check-in"
+                        >
+                          {activeSession.isOpen ? (
+                            <>
+                              <Lock className="w-3.5 h-3.5" />
+                              <span>
+                                🔒 Attendance ပိတ်မည်{' '}
+                                {pendingLeavesForActive.length > 0
+                                  ? `(⚠️ ခွင့်စာ ${pendingLeavesForActive.length} စောင် ကျန်)`
+                                  : '(Close Attendance)'}
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <Unlock className="w-3.5 h-3.5" />
+                              <span>
+                                🔓 Attendance ပြန်ဖွင့်မည်{' '}
+                                {pendingLeavesForActive.length > 0
+                                  ? `(⚠️ ခွင့်စာ ${pendingLeavesForActive.length} စောင် ကျန်)`
+                                  : '(Open Attendance)'}
+                              </span>
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleMarkAllPresent(activeSession.id)}
+                          className="px-3 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <CheckCheck className="w-3.5 h-3.5" />
+                          <span>Mark All Present</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSession(activeSession)}
+                          className="p-2 text-slate-400 hover:text-rose-600 rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                          title="Delete this attendance session"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
 
             {/* Active Session Roll Call Roster */}
             {!activeSession ? (
@@ -1533,7 +1769,8 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
             )}
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Delete Attendance Session Confirmation Modal */}
       {sessionToDelete && (

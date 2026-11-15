@@ -92,6 +92,14 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
       : undefined;
 
     if (existingTodayClosed) {
+      const toggleCheck = ClassroomDB.checkCanToggleAttendanceSession(existingTodayClosed.id);
+      if (!toggleCheck.allowed) {
+        showToast(
+          toggleCheck.error ||
+            '⚠️ ခွင့်တိုင်စာများကို အရင် Approve သို့မဟုတ် Reject လုပ်ပြီးမှသာ Attendance ပြန်ဖွင့်ခွင့်ရရှိပါမည်။'
+        );
+        return;
+      }
       ClassroomDB.toggleAttendanceSessionOpen(existingTodayClosed.id, true, currentUser);
       setSessionTitle('');
       showToast(
@@ -118,6 +126,14 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
   };
 
   const handleCloseClassAttendance = (sessionId: string, courseId: string, courseCode: string) => {
+    const closeCheck = ClassroomDB.checkCanCloseCourseAttendance(courseId);
+    if (!closeCheck.allowed) {
+      showToast(
+        closeCheck.error ||
+          '⚠️ ခွင့်တိုင်စာများကို အရင် Approve သို့မဟုတ် Reject လုပ်ပြီးမှသာ Attendance ပိတ်ခွင့်ရရှိပါမည်။'
+      );
+      return;
+    }
     const closedCount = ClassroomDB.closeAllOpenAttendanceForCourse(courseId, currentUser);
     if (closedCount === 0) {
       ClassroomDB.toggleAttendanceSessionOpen(sessionId, false, currentUser);
@@ -303,71 +319,64 @@ export const DashboardAttendanceWidget: React.FC<DashboardAttendanceWidgetProps>
                                 </span>
                               )}
                             </div>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setEditingSessionIds((prev) => ({
-                                  ...prev,
-                                  [openSession.id]: !prev[openSession.id],
-                                }))
-                              }
-                              className="py-2 px-3 rounded-xl bg-white dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950 text-indigo-600 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 text-xs font-bold flex items-center gap-1 cursor-pointer shrink-0"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                              <span>{editingSessionIds[openSession.id] ? 'ပိတ်မည်' : 'ပြန်ပြင်မည်'}</span>
-                            </button>
-                          </div>
-
-                          {editingSessionIds[openSession.id] && (
-                            <div className="p-2.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 space-y-2">
-                              <div className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
-                                Attendance မပိတ်မီ ပြန်လည်ရွေးချယ်ရန် -
-                              </div>
-                              <div className="grid grid-cols-2 gap-1.5">
+                              {!(myRecord.status === 'excused' && myRecord.checkedInBy === 'instructor') && (
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    handleStudentMarkPresent(openSession.id, course.title, 'present')
+                                    setEditingSessionIds((prev) => ({
+                                      ...prev,
+                                      [openSession.id]: !prev[openSession.id],
+                                    }))
                                   }
-                                  className="py-1.5 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                                  className="py-2 px-3 rounded-xl bg-white dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950 text-indigo-600 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 text-xs font-bold flex items-center gap-1 cursor-pointer shrink-0"
                                 >
-                                  <CheckCircle2 className="w-3 h-3" />
-                                  <span>Present</span>
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                  <span>{editingSessionIds[openSession.id] ? 'ပိတ်မည်' : 'ပြန်ပြင်မည်'}</span>
                                 </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleStudentMarkPresent(openSession.id, course.title, 'late')
-                                  }
-                                  className="py-1.5 px-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
-                                >
-                                  <Clock className="w-3 h-3" />
-                                  <span>Late</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleStudentMarkPresent(openSession.id, course.title, 'excused')
-                                  }
-                                  className="py-1.5 px-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
-                                >
-                                  <AlertCircle className="w-3 h-3" />
-                                  <span>Excused</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleStudentMarkPresent(openSession.id, course.title, 'clear')
-                                  }
-                                  className="py-1.5 px-2 rounded-lg bg-rose-50 dark:bg-rose-950/70 hover:bg-rose-100 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-700 text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
-                                >
-                                  <RotateCcw className="w-3 h-3" />
-                                  <span>ပြန်ဖျက်မည်</span>
-                                </button>
-                              </div>
+                              )}
                             </div>
-                          )}
-                        </div>
+
+                            {editingSessionIds[openSession.id] &&
+                              !(myRecord.status === 'excused' && myRecord.checkedInBy === 'instructor') && (
+                                <div className="p-2.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 space-y-2">
+                                  <div className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                                    Attendance မပိတ်မီ ပြန်လည်ရွေးချယ်ရန် -
+                                  </div>
+                                  <div className="grid grid-cols-3 gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleStudentMarkPresent(openSession.id, course.title, 'present')
+                                      }
+                                      className="py-1.5 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                                    >
+                                      <CheckCircle2 className="w-3 h-3" />
+                                      <span>Present</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleStudentMarkPresent(openSession.id, course.title, 'late')
+                                      }
+                                      className="py-1.5 px-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                                    >
+                                      <Clock className="w-3 h-3" />
+                                      <span>Late</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleStudentMarkPresent(openSession.id, course.title, 'clear')
+                                      }
+                                      className="py-1.5 px-2 rounded-lg bg-rose-50 dark:bg-rose-950/70 hover:bg-rose-100 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-700 text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                                    >
+                                      <RotateCcw className="w-3 h-3" />
+                                      <span>ပြန်ဖျက်မည်</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                          </div>
                       ) : (
                         <button
                           type="button"

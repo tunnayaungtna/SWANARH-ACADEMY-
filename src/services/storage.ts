@@ -2867,11 +2867,35 @@ export class ClassroomDB {
     for (const rec of Object.values(records)) {
       if (!rec || typeof rec !== 'object' || !('status' in rec)) continue;
       if (stuId && rec.studentId === stuId) {
-        return rec;
+        if (rec.status !== 'absent') return rec;
       }
       if (stuName && (rec.studentName || '').trim().toLowerCase() === stuName) {
-        return rec;
+        if (rec.status !== 'absent') return rec;
       }
+    }
+
+    // Fallback: If the student has an APPROVED leave request for this course & session.date,
+    // automatically treat them as 'excused' (Auto Excused) even if the session was created before/after
+    const approvedLeaves = this.getApprovedLeaveRequestsForDate(session.courseId, session.date);
+    const matchingLeave = approvedLeaves.find(
+      (n) =>
+        (stuId && n.studentId === stuId) ||
+        (stuName && (n.studentName || '').trim().toLowerCase() === stuName)
+    );
+    if (matchingLeave) {
+      return {
+        studentId: matchingLeave.studentId,
+        studentName: matchingLeave.studentName,
+        status: 'excused',
+        checkedInAt: matchingLeave.repliedAt,
+        checkedInAtMs: matchingLeave.repliedAtMs || matchingLeave.updatedAtMs,
+        checkedInBy: 'instructor',
+        note: `ခွင့်တိုင်ကြားစာ ခွင့်ပြုပြီး (${matchingLeave.repliedByName || 'Instructor'})`,
+      };
+    }
+
+    if (stuId && records[stuId]) {
+      return records[stuId];
     }
     return undefined;
   }
@@ -5543,6 +5567,7 @@ export class ClassroomDB {
     );
     if (JSON.stringify(merged) !== prevJson) {
       this.setItem(STORAGE_KEYS.PRIVATE_NOTES, merged);
+      this.syncApprovedLeavesIntoLocalAttendance();
       return true;
     }
     return false;
@@ -5763,6 +5788,7 @@ export class ClassroomDB {
     const notesChanged = JSON.stringify(localNotes) !== prevJson;
     if (notesChanged) {
       this.setItem(STORAGE_KEYS.PRIVATE_NOTES, localNotes);
+      this.syncApprovedLeavesIntoLocalAttendance();
     }
 
     if ((notesChanged || typingChanged) && typeof window !== 'undefined') {
@@ -7097,6 +7123,191 @@ export class ClassroomDB {
     return filtered.sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
   }
 
+  /**
+   * Converts a timestamp in ms to local YYYY-MM-DD string.
+   */
+  private static getLocalIsoDateFromMs(ms?: number): string {
+    if (!ms || isNaN(ms)) return '';
+    const d = new Date(ms);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
+  /**
+   * Returns all Leave Requests (category === 'leave_request') for a specific course and date (YYYY-MM-DD).
+   */
+  static getLeaveRequestsForCourseDate(courseId: string, date: string): PrivateNote[] {
+    if (!courseId || !date) return [];
+    const targetDate = date.trim();
+    const deletedSet = new Set(this.getDeletedIds());
+    const allNotes = this.getItem<PrivateNote[]>(STORAGE_KEYS.PRIVATE_NOTES, []).filter(
+      (n) =>
+        n &&
+        n.id &&
+        n.courseId === courseId &&
+        n.category === 'leave_request' &&
+        !deletedSet.has(n.id) &&
+        !deletedSet.has(n.courseId) &&
+        !deletedSet.has(n.studentId)
+    );
+    return allNotes.filter((n) => {
+      const noteDate = (n.leaveDate || '').trim() || this.getLocalIsoDateFromMs(n.createdAtMs);
+      return noteDate === targetDate;
+    });
+  }
+
+  /**
+   * Returns all PENDING (unanswered) Leave Requests for a specific course and date (YYYY-MM-DD).
+   * Admin / Co-Admin MUST Approve or Reject these before closing or re-opening Attendance for that date.
+   */
+  static getPendingLeaveRequestsForDate(courseId: string, date: string): PrivateNote[] {
+    return this.getLeaveRequestsForCourseDate(courseId, date).filter(
+      (n) => n.status === 'pending'
+    );
+  }
+
+  /**
+   * Returns all APPROVED Leave Requests for a specific course and date (YYYY-MM-DD).
+   * Students with approved leave requests are automatically marked 'excused' when Attendance is opened.
+   */
+  static getApprovedLeaveRequestsForDate(courseId: string, date: string): PrivateNote[] {
+    return this.getLeaveRequestsForCourseDate(courseId, date).filter(
+      (n) => n.status === 'approved'
+    );
+  }
+
+  /**
+   * Builds updated AttendanceRecord map with auto-excused entries for any student who has
+   * an approved leave request for `(courseId, date)`.
+   */
+  static buildAutoExcusedRecordsForDate(
+    courseId: string,
+    date: string,
+    existingRecords: Record<string, AttendanceRecord> = {}
+  ): { records: Record<string, AttendanceRecord>; addedCount: number } {
+    const approvedLeaves = this.getApprovedLeaveRequestsForDate(courseId, date);
+    if (approvedLeaves.length === 0) {
+      return { records: { ...existingRecords }, addedCount: 0 };
+    }
+    const nextRecords: Record<string, AttendanceRecord> = { ...existingRecords };
+    let addedCount = 0;
+    const nowMs = Date.now();
+    const fallbackTime = this.formatCheckInTimestamp(new Date(nowMs));
+
+    for (const leaveNote of approvedLeaves) {
+      const prev = nextRecords[leaveNote.studentId];
+      // Do not overwrite if student already has an excused, present, or late record
+      if (prev && (prev.status === 'excused' || prev.status === 'present' || prev.status === 'late')) {
+        continue;
+      }
+      nextRecords[leaveNote.studentId] = {
+        studentId: leaveNote.studentId,
+        studentName: leaveNote.studentName,
+        status: 'excused',
+        checkedInAt: leaveNote.repliedAt || fallbackTime,
+        checkedInAtMs: leaveNote.repliedAtMs || leaveNote.updatedAtMs || nowMs,
+        checkedInBy: 'instructor',
+        note: `ခွင့်တိုင်ကြားစာ ခွင့်ပြုပြီး (${leaveNote.repliedByName || 'Instructor'})`,
+      };
+      addedCount++;
+    }
+    return { records: nextRecords, addedCount };
+  }
+
+  /**
+   * Synchronizes all locally stored approved leave requests into matching local Attendance Sessions
+   * without triggering extra network traffic.
+   */
+  static syncApprovedLeavesIntoLocalAttendance(): boolean {
+    const sessions = this.getItem<AttendanceSession[]>(
+      STORAGE_KEYS.ATTENDANCE,
+      INITIAL_ATTENDANCE_SESSIONS
+    );
+    let anyChanged = false;
+    const updated = sessions.map((sess) => {
+      const { records, addedCount } = this.buildAutoExcusedRecordsForDate(
+        sess.courseId,
+        sess.date,
+        sess.records || {}
+      );
+      if (addedCount > 0) {
+        anyChanged = true;
+        return {
+          ...sess,
+          records,
+        };
+      }
+      return sess;
+    });
+    if (anyChanged) {
+      this.setItem(STORAGE_KEYS.ATTENDANCE, updated);
+    }
+    return anyChanged;
+  }
+
+  /**
+   * Checks whether an Attendance Session can be closed or re-opened.
+   * Blocks closing or re-opening if there are pending (unanswered) student leave requests for that session's date.
+   */
+  static checkCanToggleAttendanceSession(sessionId: string): {
+    allowed: boolean;
+    session?: AttendanceSession;
+    pendingLeaves: PrivateNote[];
+    error?: string;
+  } {
+    const sessions = this.getItem<AttendanceSession[]>(
+      STORAGE_KEYS.ATTENDANCE,
+      INITIAL_ATTENDANCE_SESSIONS
+    );
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) {
+      return { allowed: false, pendingLeaves: [], error: 'Attendance session မတွေ့ရှိပါ။' };
+    }
+    const pendingLeaves = this.getPendingLeaveRequestsForDate(session.courseId, session.date);
+    if (pendingLeaves.length > 0) {
+      const names = pendingLeaves.map((p) => p.studentName).join('၊ ');
+      return {
+        allowed: false,
+        session,
+        pendingLeaves,
+        error: `⚠️ ဤနေ့ (${session.displayDate}) အတွက် ကျောင်းသား (${names}) တင်ပြထားသော ခွင့်တိုင်ကြားစာ (${pendingLeaves.length} စောင်) ကို Approve သို့မဟုတ် Reject မလုပ်ရသေးပါ။ ခွင့်တိုင်စာကို အရင် Approve သို့မဟုတ် Reject လုပ်ပြီးမှသာ Attendance ပိတ်ခွင့် နှင့် ပြန်ဖွင့်ခွင့် ရရှိပါမည်။`,
+      };
+    }
+    return { allowed: true, session, pendingLeaves: [] };
+  }
+
+  /**
+   * Checks whether all open Attendance Sessions for a course can be closed.
+   */
+  static checkCanCloseCourseAttendance(courseId: string): {
+    allowed: boolean;
+    pendingLeaves: PrivateNote[];
+    error?: string;
+  } {
+    const sessions = this.getItem<AttendanceSession[]>(
+      STORAGE_KEYS.ATTENDANCE,
+      INITIAL_ATTENDANCE_SESSIONS
+    ).filter((s) => s.courseId === courseId && s.isOpen);
+
+    const pendingMap = new Map<string, PrivateNote>();
+    for (const sess of sessions) {
+      const pending = this.getPendingLeaveRequestsForDate(courseId, sess.date);
+      pending.forEach((p) => pendingMap.set(p.id, p));
+    }
+    const pendingLeaves = Array.from(pendingMap.values());
+    if (pendingLeaves.length > 0) {
+      const names = pendingLeaves.map((p) => p.studentName).join('၊ ');
+      return {
+        allowed: false,
+        pendingLeaves,
+        error: `⚠️ ကျောင်းသား (${names}) တင်ပြထားသော ခွင့်တိုင်ကြားစာ (${pendingLeaves.length} စောင်) ကို Approve သို့မဟုတ် Reject မလုပ်ရသေးပါ။ ခွင့်တိုင်စာကို အရင် Approve သို့မဟုတ် Reject လုပ်ပြီးမှသာ Attendance ပိတ်ခွင့် ရရှိပါမည်။`,
+      };
+    }
+    return { allowed: true, pendingLeaves: [] };
+  }
+
   static createAttendanceSession(
     courseId: string,
     title: string,
@@ -7125,6 +7336,11 @@ export class ClassroomDB {
       0
     );
     const nowMs = Math.max(Date.now(), maxExistingStatusMs + 1000);
+
+    // Automatically pre-populate 'excused' records for any students who have advance approved leave requests for this date!
+    const { records: autoExcusedRecords, addedCount: autoExcusedCount } =
+      this.buildAutoExcusedRecordsForDate(courseId, date, {});
+
     const newSession: AttendanceSession = {
       id: `att-sess-${Date.now()}`,
       courseId,
@@ -7135,7 +7351,7 @@ export class ClassroomDB {
       openedBy: currentUser.name,
       createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       statusUpdatedAtMs: nowMs,
-      records: {},
+      records: autoExcusedRecords,
     };
 
     // If creating a new OPEN session for this course, automatically close any previous open sessions for the same course
@@ -7158,6 +7374,11 @@ export class ClassroomDB {
 
     this.markLocalWrite(newSession.id);
     this.markLocalWrite(`att-open:${newSession.id}`);
+    if (autoExcusedCount > 0) {
+      Object.keys(autoExcusedRecords).forEach((stuId) => {
+        this.markLocalWrite(`att-rec:${newSession.id}:${stuId}`);
+      });
+    }
     this.setItem(STORAGE_KEYS.ATTENDANCE, [newSession, ...updatedExisting]);
 
     try {
@@ -7192,7 +7413,7 @@ export class ClassroomDB {
         }
         const ok = await SupabaseService.upsertAttendanceSession(newSession, {
           force: true,
-          onlyUpdateOpenState: Boolean(isOpen),
+          onlyUpdateOpenState: autoExcusedCount === 0 && Boolean(isOpen),
         }).catch(() => false);
         if (ok) {
           this.markAttendanceCloudConfirmed(newSession.id);
@@ -7216,7 +7437,11 @@ export class ClassroomDB {
       courseId: course?.id || courseId,
       courseCode: course?.code,
       courseTitle: course?.title,
-      summary: `"${course ? `${course.code} — ${course.title}` : courseId}" အတန်းအတွက် "${newSession.title}" (${displayDate}) Attendance Session ဖွင့်လှစ်ခဲ့ပါသည်။`,
+      summary: `"${course ? `${course.code} — ${course.title}` : courseId}" အတန်းအတွက် "${newSession.title}" (${displayDate}) Attendance Session ဖွင့်လှစ်ခဲ့ပါသည်။${
+        autoExcusedCount > 0
+          ? ` (ကြိုတင်ခွင့်ပြုပြီးသော ကျောင်းသား ${autoExcusedCount} ဦးအား အလိုအလျောက် Excused သတ်မှတ်ပေးပြီး)`
+          : ''
+      }`,
     });
 
     return newSession;
@@ -7231,6 +7456,13 @@ export class ClassroomDB {
     if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
       return null;
     }
+
+    // Block closing or re-opening if there are pending leave requests for this session's date!
+    const toggleCheck = this.checkCanToggleAttendanceSession(sessionId);
+    if (!toggleCheck.allowed) {
+      return null;
+    }
+
     const sessions = this.getItem<AttendanceSession[]>(
       STORAGE_KEYS.ATTENDANCE,
       INITIAL_ATTENDANCE_SESSIONS
@@ -7242,14 +7474,22 @@ export class ClassroomDB {
     );
     const nowMs = Math.max(Date.now(), maxExistingStatusMs + 1000);
     let updatedSession: AttendanceSession | null = null;
+    let addedAutoExcusedCount = 0;
     const otherModifiedSessions: AttendanceSession[] = [];
 
     const updated = sessions.map((s) => {
       if (s.id === sessionId) {
+        const { records: mergedRecords, addedCount } = this.buildAutoExcusedRecordsForDate(
+          s.courseId,
+          s.date,
+          s.records || {}
+        );
+        addedAutoExcusedCount = addedCount;
         updatedSession = {
           ...s,
           isOpen,
           statusUpdatedAtMs: nowMs,
+          records: mergedRecords,
         };
         return updatedSession;
       }
@@ -7304,7 +7544,7 @@ export class ClassroomDB {
           }
           const ok = await SupabaseService.upsertAttendanceSession(targetSess, {
             force: true,
-            onlyUpdateOpenState: Boolean(isOpen),
+            onlyUpdateOpenState: addedAutoExcusedCount === 0 && Boolean(isOpen),
           }).catch(() => false);
           if (ok) {
             this.markAttendanceCloudConfirmed(targetSess.id);
@@ -7338,13 +7578,20 @@ export class ClassroomDB {
   }
 
   /**
-   * Closes ALL open attendance sessions for a given courseId across local storage and Supabase SQL database
+   * Closes ALL open attendance sessions for a given courseId across local storage and Supabase SQL database.
+   * Returns 0 if blocked by pending leave requests for an open session's date.
    */
   static closeAllOpenAttendanceForCourse(courseId: string, actorUser?: User): number {
     const currentLogged = actorUser || this.getCurrentUser();
     if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
       return 0;
     }
+
+    const closeCheck = this.checkCanCloseCourseAttendance(courseId);
+    if (!closeCheck.allowed) {
+      return 0;
+    }
+
     const sessions = this.getItem<AttendanceSession[]>(
       STORAGE_KEYS.ATTENDANCE,
       INITIAL_ATTENDANCE_SESSIONS
@@ -7357,10 +7604,16 @@ export class ClassroomDB {
     const closedList: AttendanceSession[] = [];
     const updated = sessions.map((s) => {
       if (s.courseId === courseId && s.isOpen) {
+        const { records: mergedRecords } = this.buildAutoExcusedRecordsForDate(
+          s.courseId,
+          s.date,
+          s.records || {}
+        );
         const nextSess: AttendanceSession = {
           ...s,
           isOpen: false,
           statusUpdatedAtMs: nowMs,
+          records: mergedRecords,
         };
         this.markLocalWrite(nextSess.id);
         this.markLocalWrite(`att-open:${nextSess.id}`);
@@ -7522,7 +7775,27 @@ export class ClassroomDB {
       }
     }
 
+    if (status === 'excused') {
+      return {
+        success: false,
+        error:
+          '⚠️ ကျောင်းသားများ ကိုယ်တိုင် Excused (ခွင့်) တိုက်ရိုက်နှိပ်ခွင့် မရှိပါ။ "သီးသန့်စာ" Tab မှတစ်ဆင့် ခွင့်တိုင်ကြားစာ ပေးပို့ပြီး Admin / Co-Admin မှ Approve ပေးသည့်အခါမှသာ အလိုအလျောက် Excused ဖြစ်သွားပါမည်။',
+      };
+    }
+
     const previousRecordForStudent = target.records ? target.records[student.id] : undefined;
+    if (
+      status === 'clear' &&
+      previousRecordForStudent?.status === 'excused' &&
+      previousRecordForStudent?.checkedInBy === 'instructor'
+    ) {
+      return {
+        success: false,
+        error:
+          '⚠️ ဆရာ (Admin / Co-Admin) မှ ခွင့်ပြုပေးထားသော Excused (ခွင့်) မှတ်တမ်းကို ကျောင်းသားဘက်မှ ဖျက်၍ မရပါ။',
+      };
+    }
+
     const nowMs = Date.now();
     const nowTime = this.formatCheckInTimestamp(new Date(nowMs));
     let updatedSession: AttendanceSession | null = null;
@@ -7785,8 +8058,12 @@ export class ClassroomDB {
       if (s.id === sessionId) {
         const nextRecords: Record<string, AttendanceRecord> = { ...s.records };
         students.forEach((stu) => {
-          this.markLocalWrite(`att-rec:${sessionId}:${stu.id}`);
           const prevRec = nextRecords[stu.id];
+          // Preserve instructor-approved Excused leave when bulk marking all students Present
+          if (status === 'present' && prevRec?.status === 'excused' && prevRec?.checkedInBy === 'instructor') {
+            return;
+          }
+          this.markLocalWrite(`att-rec:${sessionId}:${stu.id}`);
           const preserveStudentSelfCheckIn =
             prevRec?.checkedInBy === 'student' && prevRec?.status === status;
           nextRecords[stu.id] = {
@@ -8717,23 +8994,47 @@ export class ClassroomDB {
     this.markLocalWrite(noteId);
     this.setItem(STORAGE_KEYS.PRIVATE_NOTES, updatedList);
 
-    // If this is an approved Leave Request and an Attendance Session exists for that course & date,
-    // automatically mark the student as 'excused' (ခွင့်ဖြင့်ပျက်ကွက်) in that session!
-    if (
-      target.category === 'leave_request' &&
-      newStatus === 'approved' &&
-      target.leaveDate
-    ) {
-      const sessions = this.getAttendanceSessions(target.courseId);
-      const matchingSession = sessions.find((s) => s.date === target.leaveDate);
-      const studentUser = this.getAllUsers().find((u) => u.id === target.studentId);
-      if (matchingSession && studentUser) {
-        this.instructorMarkAttendance(
-          matchingSession.id,
-          studentUser,
-          'excused',
-          `ခွင့်တိုင်ကြားစာ ခွင့်ပြုပြီး (${instructor.name})`
+    // If this is a Leave Request and an Attendance Session exists for that course & date:
+    // - When APPROVED: automatically mark the student as 'excused' (ခွင့်ဖြင့်ပျက်ကွက်) in all sessions for that date!
+    // - When REJECTED (if previously approved): revert the auto-excused record to 'absent'
+    if (target.category === 'leave_request') {
+      const targetLeaveDate =
+        (target.leaveDate || '').trim() || this.getLocalIsoDateFromMs(target.createdAtMs);
+      if (targetLeaveDate) {
+        const matchingSessions = this.getAttendanceSessions(target.courseId).filter(
+          (s) => s.date === targetLeaveDate
         );
+        const studentUser: User = this.getAllUsers().find((u) => u.id === target.studentId) || {
+          id: target.studentId,
+          name: target.studentName,
+          username: target.studentUsername,
+          email: '',
+          phone: '',
+          role: 'student',
+          avatar: '',
+        };
+        if (newStatus === 'approved') {
+          matchingSessions.forEach((matchingSession) => {
+            this.instructorMarkAttendance(
+              matchingSession.id,
+              studentUser,
+              'excused',
+              `ခွင့်တိုင်ကြားစာ ခွင့်ပြုပြီး (${instructor.name})`
+            );
+          });
+        } else if (newStatus === 'rejected' && target.status === 'approved') {
+          matchingSessions.forEach((matchingSession) => {
+            const existingRec = matchingSession.records?.[target.studentId];
+            if (existingRec?.status === 'excused' && existingRec?.checkedInBy === 'instructor') {
+              this.instructorMarkAttendance(
+                matchingSession.id,
+                studentUser,
+                'absent',
+                `ခွင့်တိုင်ကြားစာ ငြင်းပယ်ထားသည် (${instructor.name})`
+              );
+            }
+          });
+        }
       }
     }
 

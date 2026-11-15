@@ -69,6 +69,7 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
     setTabHistory((prev) => [...prev, nextTab]);
     if (typeof navigator === 'undefined' || navigator.onLine !== false) {
       if (nextTab === 'attendance') {
+        ClassroomDB.syncApprovedLeavesIntoLocalAttendance();
         ClassroomDB.syncAttendanceFromCloud().then((updated) => {
           if (updated) onRefresh();
         });
@@ -193,6 +194,7 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
             posts={posts}
             onRefresh={onRefresh}
             onOpenAttendance={() => handleSwitchTab('attendance')}
+            onOpenPrivateNotes={() => handleSwitchTab('private_notes')}
           />
         )}
 
@@ -202,6 +204,7 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
             currentUser={currentUser}
             onRefresh={onRefresh}
             onOpenCertificate={onOpenCertificate}
+            onOpenPrivateNotes={() => handleSwitchTab('private_notes')}
           />
         )}
 

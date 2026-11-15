@@ -56,6 +56,7 @@ interface CourseStreamProps {
   posts: CoursePost[];
   onRefresh: () => void;
   onOpenAttendance?: () => void;
+  onOpenPrivateNotes?: () => void;
 }
 
 export const CourseStream: React.FC<CourseStreamProps> = ({
@@ -64,6 +65,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   posts,
   onRefresh,
   onOpenAttendance,
+  onOpenPrivateNotes,
 }) => {
   // Post Composer State (for Admin/Instructor)
   const [isComposing, setIsComposing] = useState(false);
@@ -148,6 +150,18 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   }, [course.id]);
 
   const handleStreamCloseAllAttendance = () => {
+    const check = ClassroomDB.checkCanCloseCourseAttendance(course.id);
+    if (!check.allowed) {
+      setRateLimitError(
+        check.error ||
+          '⚠️ ခွင့်တိုင်စာများကို အရင် Approve သို့မဟုတ် Reject လုပ်ပြီးမှသာ Attendance ပိတ်ခွင့်ရရှိပါမည်။'
+      );
+      setTimeout(() => setRateLimitError(null), 5500);
+      if (onOpenAttendance) {
+        onOpenAttendance();
+      }
+      return;
+    }
     const closedCount = ClassroomDB.closeAllOpenAttendanceForCourse(course.id, currentUser);
     if (closedCount > 0) {
       setSuccessToast(
@@ -732,8 +746,10 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
 
           <div className="space-y-2.5">
             {openAttendanceSessions.map((sess) => {
-              const myRec = sess.records[currentUser.id];
+              const myRec = ClassroomDB.getStudentAttendanceRecord(sess, currentUser);
               const isEditingThis = Boolean(editingStreamAttIds[sess.id]);
+              const isInstructorApprovedExcused =
+                myRec?.status === 'excused' && myRec?.checkedInBy === 'instructor';
 
               return (
                 <div
@@ -751,7 +767,7 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                         </h4>
                       </div>
                       <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                        ဆရာ {sess.openedBy} မှ Attendance ဖွင့်ပေးထားပါသည်။ Attendance မပိတ်ခင် မိမိနှိပ်ထားသည်ကို ပြန်ပြင်နိုင်ပါသည်။
+                        ဆရာ {sess.openedBy} မှ Attendance ဖွင့်ပေးထားပါသည်။ ခွင့်တိုင်လိုပါက "သီးသန့်စာ" Tab မှ ပေးပို့ပြီး ဆရာ Approve ပေးသည့်အခါ အလိုအလျောက် Excused ဖြစ်ပါမည်။
                       </p>
                     </div>
 
@@ -765,24 +781,26 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                               : myRec.status === 'late'
                               ? 'Late (နောက်ကျ)'
                               : myRec.status === 'excused'
-                              ? 'Excused (ခွင့်တိုင်)'
+                              ? 'Excused (ခွင့်ပြုပြီး)'
                               : 'Absent'}
                             {myRec.checkedInAt ? ` (${myRec.checkedInAt})` : ''}
                           </span>
                         </span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setEditingStreamAttIds((prev) => ({
-                              ...prev,
-                              [sess.id]: !prev[sess.id],
-                            }))
-                          }
-                          className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950 text-indigo-600 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                          <span>{isEditingThis ? 'မပြင်တော့ပါ' : 'ပြန်ပြင်မည် (Edit)'}</span>
-                        </button>
+                        {!isInstructorApprovedExcused && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setEditingStreamAttIds((prev) => ({
+                                ...prev,
+                                [sess.id]: !prev[sess.id],
+                              }))
+                            }
+                            className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950 text-indigo-600 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                            <span>{isEditingThis ? 'မပြင်တော့ပါ' : 'ပြန်ပြင်မည် (Edit)'}</span>
+                          </button>
+                        )}
                       </div>
                     ) : (
                       <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -802,19 +820,22 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                           <Clock className="w-3.5 h-3.5" />
                           <span>Late</span>
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => handleStreamStudentAttendance(sess.id, 'excused')}
-                          className="px-3 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 text-indigo-800 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-700 text-xs font-bold flex items-center gap-1 cursor-pointer"
-                        >
-                          <AlertCircle className="w-3.5 h-3.5" />
-                          <span>Excused</span>
-                        </button>
+                        {onOpenPrivateNotes && (
+                          <button
+                            type="button"
+                            onClick={onOpenPrivateNotes}
+                            className="px-3 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 text-indigo-800 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-700 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                            title="သီးသန့်စာ Tab မှတစ်ဆင့် ခွင့်တိုင်ကြားရန်"
+                          >
+                            <Lock className="w-3.5 h-3.5" />
+                            <span>ခွင့်တိုင်ရန် (သီးသန့်စာ)</span>
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
 
-                  {myRec && isEditingThis && (
+                  {myRec && isEditingThis && !isInstructorApprovedExcused && (
                     <div className="pt-2 border-t border-slate-200/70 dark:border-slate-700/70 flex flex-wrap items-center justify-between gap-2">
                       <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
                         ✏️ Attendance မပိတ်မီ ပြောင်းလဲရွေးချယ်ရန် -
@@ -843,18 +864,6 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                         >
                           <Clock className="w-3.5 h-3.5" />
                           <span>Late (နောက်ကျ)</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleStreamStudentAttendance(sess.id, 'excused')}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer ${
-                            myRec.status === 'excused'
-                              ? 'bg-indigo-600 text-white'
-                              : 'bg-white dark:bg-slate-800 text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-700'
-                          }`}
-                        >
-                          <AlertCircle className="w-3.5 h-3.5" />
-                          <span>Excused (ခွင့်တိုင်)</span>
                         </button>
                         <button
                           type="button"
