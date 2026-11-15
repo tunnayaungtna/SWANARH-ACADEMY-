@@ -676,6 +676,8 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     }
     lines.push(`🌐 Login ဝင်ရန် လင့်ခ် (Login Link):`);
     lines.push(loginLink);
+    lines.push(`🏛️ သင်တန်း Official Website:`);
+    lines.push(`https://www.swanarhacademy.com/`);
     lines.push(`━━━━━━━━━━━━━━━━━━━━`);
     lines.push(`📌 သတိပြုရန် အချက်များ -`);
     lines.push(

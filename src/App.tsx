@@ -16,6 +16,7 @@ import { AdminStudentDirectoryModal } from './components/AdminStudentDirectoryMo
 import { SupabaseModal } from './components/SupabaseModal';
 import { AcademyRulesModal } from './components/AcademyRulesModal';
 import { AdminAuditLogModal } from './components/AdminAuditLogModal';
+import { OfficialWebsiteModal, OFFICIAL_ACADEMY_WEBSITE_URL } from './components/OfficialWebsiteModal';
 import {
   BookOpen,
   Plus,
@@ -36,6 +37,8 @@ import {
   GripVertical,
   Check,
   History,
+  Globe,
+  ExternalLink,
 } from 'lucide-react';
 
 export default function App() {
@@ -75,6 +78,7 @@ export default function App() {
   const [showResetConfirmModal, setShowResetConfirmModal] = useState(false);
   const [showRulesModal, setShowRulesModal] = useState(false);
   const [showAuditLogModal, setShowAuditLogModal] = useState(false);
+  const [showWebsiteModal, setShowWebsiteModal] = useState(false);
   const [showReorderPanel, setShowReorderPanel] = useState(false);
   const [draggedCourseId, setDraggedCourseId] = useState<string | null>(null);
   const [appBannerError, setAppBannerError] = useState<string | null>(null);
@@ -92,6 +96,7 @@ export default function App() {
   useBackHandler(showResetConfirmModal, () => setShowResetConfirmModal(false));
   useBackHandler(showRulesModal, () => setShowRulesModal(false));
   useBackHandler(showAuditLogModal, () => setShowAuditLogModal(false));
+  useBackHandler(showWebsiteModal, () => setShowWebsiteModal(false));
 
   // Performance & Theme Settings
   const [isLowBandwidth, setIsLowBandwidth] = useState(false);
@@ -613,6 +618,7 @@ export default function App() {
           onOpenStudentDirectory={() => setShowStudentDirectoryModal(true)}
           onOpenAuditLog={() => setShowAuditLogModal(true)}
           onOpenRules={() => setShowRulesModal(true)}
+          onOpenWebsite={() => setShowWebsiteModal(true)}
           onResetData={handleResetData}
           onNavigateHome={() => setSelectedCourse(null)}
           notifications={notifications}
@@ -923,6 +929,43 @@ export default function App() {
                   <LogOut className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
                   <span>Sign Out</span>
                 </button>
+              </div>
+            </div>
+
+            {/* Official Academy Website Bar — Positioned Directly Above All Managed Classes */}
+            <div className="neu-raised rounded-2xl px-4 sm:px-5 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-emerald-500/20">
+              <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm text-slate-700 dark:text-slate-200 font-semibold min-w-0">
+                <div className="w-7 h-7 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shrink-0">
+                  <Globe className="w-4 h-4" />
+                </div>
+                <span>စွမ်းအားသင်တန်း တရားဝင် ဝက်ဘ်ဆိုဒ် (Official Website):</span>
+                <a
+                  href={OFFICIAL_ACADEMY_WEBSITE_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-bold text-emerald-700 dark:text-emerald-400 hover:underline font-mono truncate"
+                >
+                  www.swanarhacademy.com
+                </a>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowWebsiteModal(true)}
+                  className="flex-1 sm:flex-initial justify-center px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                >
+                  <Globe className="w-3.5 h-3.5 shrink-0" />
+                  <span>App ထဲတွင် ကြည့်ရန်</span>
+                </button>
+                <a
+                  href={OFFICIAL_ACADEMY_WEBSITE_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 sm:flex-initial justify-center neu-btn px-3.5 py-2 rounded-xl text-slate-700 dark:text-slate-200 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <span>Tab အသစ်ဖြင့် ဖွင့်ရန်</span>
+                  <ExternalLink className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                </a>
               </div>
             </div>
 
@@ -1246,6 +1289,12 @@ export default function App() {
             onLogout={handleLogout}
           />
         )}
+
+        {/* Official Academy Website In-App Viewer Modal (Method 3) */}
+        <OfficialWebsiteModal
+          isOpen={showWebsiteModal}
+          onClose={() => setShowWebsiteModal(false)}
+        />
 
         {/* Primary Admin Local Cache Reset Confirmation Modal */}
         {showResetConfirmModal && currentUser.role === 'admin' && (

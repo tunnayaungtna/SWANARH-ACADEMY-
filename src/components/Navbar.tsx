@@ -27,7 +27,10 @@ import {
   ScrollText,
   CheckCircle2,
   UserCog,
+  Globe,
+  ExternalLink,
 } from 'lucide-react';
+import { OFFICIAL_ACADEMY_WEBSITE_URL } from './OfficialWebsiteModal';
 
 interface NavbarProps {
   currentUser: User;
@@ -38,6 +41,7 @@ interface NavbarProps {
   onOpenStudentDirectory?: () => void;
   onOpenAuditLog?: () => void;
   onOpenRules?: () => void;
+  onOpenWebsite?: () => void;
   onResetData: () => void;
   onNavigateHome: () => void;
   notifications: NotificationItem[];
@@ -60,6 +64,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenStudentDirectory,
   onOpenAuditLog,
   onOpenRules,
+  onOpenWebsite,
   onResetData: _onResetData,
   onNavigateHome,
   notifications,
@@ -241,6 +246,21 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <ScrollText className="w-3.5 h-3.5" />
               <span>စည်းကမ်းချက်များ</span>
+            </button>
+          )}
+          {onOpenWebsite && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowUserDropdown(false);
+                setShowNotifications(false);
+                onOpenWebsite();
+              }}
+              className="text-sky-700 dark:text-sky-400 hover:text-sky-800 dark:hover:text-sky-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5"
+              title="စွမ်းအားသင်တန်း Official Website (www.swanarhacademy.com)"
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span>သင်တန်း Website</span>
             </button>
           )}
           {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
@@ -627,6 +647,46 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <span className="truncate">သင်တန်းစည်းကမ်းချက်များ (Academy Rules)</span>
                     </button>
                   )}
+
+                  {/* Official Academy Website (Method 3: In-App Viewer + External Tab) */}
+                  <div className="w-full rounded-xl bg-sky-50/80 dark:bg-sky-950/40 border border-sky-200/70 dark:border-sky-800/50 p-2 flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between gap-2 px-0.5">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Globe className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
+                        <span className="text-xs font-bold text-sky-800 dark:text-sky-200 truncate">
+                          သင်တန်း Official Website
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-mono text-sky-600 dark:text-sky-400 truncate">
+                        swanarhacademy.com
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {onOpenWebsite && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowUserDropdown(false);
+                            onOpenWebsite();
+                          }}
+                          className="flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-[11px] font-bold bg-sky-600 hover:bg-sky-500 text-white transition-colors cursor-pointer"
+                        >
+                          <Globe className="w-3 h-3 shrink-0" />
+                          <span className="truncate">App ထဲတွင် ကြည့်မည်</span>
+                        </button>
+                      )}
+                      <a
+                        href={OFFICIAL_ACADEMY_WEBSITE_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={() => setShowUserDropdown(false)}
+                        className="flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-[11px] font-bold bg-white dark:bg-slate-800 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-700/60 hover:bg-sky-100/60 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                      >
+                        <span className="truncate">Tab အသစ်ဖြင့်</span>
+                        <ExternalLink className="w-3 h-3 shrink-0" />
+                      </a>
+                    </div>
+                  </div>
 
                   {/* Manage Users & Add Students (Staff Only) */}
                   {(currentUser.role === 'admin' || currentUser.role === 'co_admin') &&
