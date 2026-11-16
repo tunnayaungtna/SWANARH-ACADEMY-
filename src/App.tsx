@@ -208,13 +208,26 @@ export default function App() {
           ? [payload.kind]
           : ['all'];
 
-      // 1. Fast path for Attendance-only events (already applied in 0ms via attendancePatches, plus 0.3KB delta verification)
+      // 1. Fast path for Attendance-only events (already applied in 0ms via attendancePatches, plus delayed 0.3KB delta verification)
       if (kinds.length === 1 && kinds[0] === 'attendance') {
-        ClassroomDB.syncAttendanceFromCloud(true).then((attChanged) => {
-          if (attChanged) {
-            refreshData();
-          }
-        });
+        const hasEmbeddedPatches = Boolean(
+          payload?.attendancePatches && payload.attendancePatches.length > 0
+        );
+        if (hasEmbeddedPatches) {
+          setTimeout(() => {
+            ClassroomDB.syncAttendanceFromCloud(true).then((attChanged) => {
+              if (attChanged) {
+                refreshData();
+              }
+            });
+          }, 700);
+        } else {
+          ClassroomDB.syncAttendanceFromCloud(true).then((attChanged) => {
+            if (attChanged) {
+              refreshData();
+            }
+          });
+        }
         return;
       }
 
@@ -335,11 +348,14 @@ export default function App() {
       });
     });
 
-    // Multi-user / multi-tab synchronization
+    // Multi-user / multi-tab & live attendance synchronization
     const handleStorageChange = () => {
       refreshData();
     };
     window.addEventListener('storage', handleStorageChange);
+    window.addEventListener('attendance-realtime-updated', handleStorageChange);
+    window.addEventListener('attendance-opened-remotely', handleStorageChange);
+    window.addEventListener('attendance-closed-remotely', handleStorageChange);
 
     let lastUserInteractionAt = Date.now();
     let lastWakeUpPullAt = Date.now();
@@ -387,6 +403,11 @@ export default function App() {
 
         const loggedUser = ClassroomDB.getCurrentUser();
         if (loggedUser && navigator.onLine !== false && !isLowBandwidthRef.current) {
+          ClassroomDB.syncAttendanceFromCloud(true).then((attUpdated) => {
+            if (attUpdated) {
+              refreshData();
+            }
+          });
           if (now - lastWakeUpPullAt >= 45_000) {
             lastWakeUpPullAt = now;
             ClassroomDB.pullFromSupabase({ background: true }).then((updated) => {
@@ -402,11 +423,31 @@ export default function App() {
     window.addEventListener('pageshow', handleWakeUp);
     window.addEventListener('focus', handleWakeUp);
 
+    // Lightweight 8-second live Attendance check while visible so even if a mobile carrier
+    // drops a WebSocket packet, newly opened or closed Attendance appears within seconds
+    const liveAttendanceCheckInterval = setInterval(() => {
+      if (
+        document.visibilityState === 'visible' &&
+        navigator.onLine !== false &&
+        !isLowBandwidthRef.current
+      ) {
+        const loggedUser = ClassroomDB.getCurrentUser();
+        if (loggedUser) {
+          SupabaseService.resumeRealtimeConnection();
+          ClassroomDB.syncAttendanceFromCloud(false).then((attChanged) => {
+            if (attChanged) {
+              refreshData();
+            }
+          });
+        }
+      }
+    }, 8_000);
+
     // 240s (4-minute) delta background sync fallback when user is active;
-    // automatically pauses idle student WebSocket connections after 3 minutes of inactivity to save Realtime Messages & Connections
+    // keeps Realtime WebSocket connected whenever the classroom tab is visible (up to 45 minutes)
     const syncInterval = setInterval(() => {
       const idleMs = Date.now() - lastUserInteractionAt;
-      const isUserActive = idleMs <= 180_000;
+      const isUserActive = idleMs <= 45 * 60_000;
       const loggedUser = ClassroomDB.getCurrentUser();
       if (!loggedUser || (!isUserActive && loggedUser.role === 'student')) {
         SupabaseService.pauseRealtimeConnection();
@@ -448,6 +489,7 @@ export default function App() {
     // Automatically sync immediately whenever internet connection is restored
     const handleOnline = () => {
       lastUserInteractionAt = Date.now();
+      SupabaseService.resumeRealtimeConnection();
       const loggedUser = ClassroomDB.getCurrentUser();
       if (loggedUser) {
         ClassroomDB.pullFromSupabase({ force: true }).then((updated) => {
@@ -463,6 +505,9 @@ export default function App() {
       clearTimeout(initTimer);
       unsubscribeRealtime();
       window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('attendance-realtime-updated', handleStorageChange);
+      window.removeEventListener('attendance-opened-remotely', handleStorageChange);
+      window.removeEventListener('attendance-closed-remotely', handleStorageChange);
       window.removeEventListener('pointerdown', markUserActive);
       window.removeEventListener('keydown', markUserActive);
       window.removeEventListener('touchstart', markUserActive);
@@ -470,6 +515,7 @@ export default function App() {
       window.removeEventListener('pageshow', handleWakeUp);
       window.removeEventListener('focus', handleWakeUp);
       window.removeEventListener('online', handleOnline);
+      clearInterval(liveAttendanceCheckInterval);
       clearInterval(syncInterval);
       clearInterval(scheduledPostsInterval);
       clearInterval(notifCleanupInterval);

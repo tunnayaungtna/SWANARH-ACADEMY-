@@ -158,6 +158,17 @@ export class ClassroomDB {
     if (key === STORAGE_KEYS.ATTENDANCE) {
       this.attendanceStatsCache.clear();
     }
+    if (key === STORAGE_KEYS.CURRENT_USER) {
+      try {
+        if (value) {
+          setTimeout(() => SupabaseService.resumeRealtimeConnection(), 0);
+        } else {
+          SupabaseService.pauseRealtimeConnection();
+        }
+      } catch {
+        // ignore
+      }
+    }
     try {
       localStorage.setItem(key, JSON.stringify(value));
     } catch (e) {
@@ -5152,6 +5163,9 @@ export class ClassroomDB {
       INITIAL_ATTENDANCE_SESSIONS
     ).filter((att) => !deletedSet.has(att.id) && !deletedSet.has(att.courseId));
     const prevJson = JSON.stringify(localAttendance);
+    const prevOpenCourseIds = new Set(
+      localAttendance.filter((a) => Boolean(a.isOpen)).map((a) => a.courseId)
+    );
     const attMap = new Map<string, AttendanceSession>();
     const attToPushToCloud: AttendanceSession[] = [];
 
@@ -5159,7 +5173,9 @@ export class ClassroomDB {
       const isInQueriedScope = !scopedCourseSet || scopedCourseSet.has(att.courseId);
       const isInitialDemo = /^att-sess-\d{1,4}$/.test(att.id || '');
       const wasConfirmedInCloud = confirmedCloudAtt.has(att.id);
-      const isRecentAttWrite = this.isRecentLocalWrite(att.id, 20_000);
+      const isRecentAttWrite =
+        this.isRecentLocalWrite(att.id, 20_000) ||
+        this.isRecentLocalWrite(`att-open:${att.id}`, 20_000);
       const normalizedLocalAtt =
         isInitialDemo && !remoteAttIds.has(att.id) && att.isOpen
           ? { ...att, isOpen: false }
@@ -5177,14 +5193,10 @@ export class ClassroomDB {
         );
       } else if (
         !cloudActive ||
-        (isInstructorForAtt && isRecentAttWrite && !isInitialDemo)
+        (isRecentAttWrite && !isInitialDemo)
       ) {
-        attMap.set(
-          att.id,
-          !isInstructorForAtt && normalizedLocalAtt.isOpen
-            ? { ...normalizedLocalAtt, isOpen: false }
-            : normalizedLocalAtt
-        );
+        // Preserve recently created or recently Realtime-patched sessions while the instructor's DB write is still in-flight!
+        attMap.set(att.id, normalizedLocalAtt);
         if (isRecentAttWrite && isInstructorForAtt && !isInitialDemo) {
           attToPushToCloud.push(normalizedLocalAtt);
         }
@@ -5216,27 +5228,25 @@ export class ClassroomDB {
       }
 
       const existing = attMap.get(ratt.id);
-      const isRecentOpenToggle =
-        isInstructorForAtt && this.isRecentLocalWrite(`att-open:${ratt.id}`, 10_000);
+      const isRecentOpenToggle = this.isRecentLocalWrite(`att-open:${ratt.id}`, 12_000);
       const localStatusMs = existing?.statusUpdatedAtMs || 0;
       const remoteStatusMs = ratt.statusUpdatedAtMs || 0;
 
       // Authoritative Open/Close Resolution:
-      // - Students (`!isInstructorForAtt`) MUST ALWAYS accept `Boolean(ratt.isOpen)` from Supabase unconditionally!
-      //   A student browser can NEVER override `ratt.isOpen` or push an attendance session back to Supabase.
-      // - Instructors (`isInstructorForAtt`) only keep local `existing.isOpen` if THIS specific device toggled Open/Close
-      //   within the last 10 seconds (`isRecentOpenToggle`); otherwise `Boolean(ratt.isOpen)` from Supabase always wins!
+      // - If this client just received a Realtime WebSocket patch or toggled Open/Close within the last 12s (`isRecentOpenToggle`)
+      //   AND `localStatusMs > remoteStatusMs`, keep `existing.isOpen` so an in-flight/cached HTTP read never reverts a fresh Realtime patch!
+      // - Otherwise, `Boolean(ratt.isOpen)` from Supabase wins!
       let resolvedIsOpen = Boolean(ratt.isOpen);
       let resolvedStatusMs = Math.max(remoteStatusMs, localStatusMs) || undefined;
 
-      if (isInstructorForAtt && existing && isRecentOpenToggle) {
+      if (existing && isRecentOpenToggle && localStatusMs >= remoteStatusMs) {
         resolvedIsOpen = Boolean(existing.isOpen);
-        resolvedStatusMs = Math.max(localStatusMs, remoteStatusMs + 1000, Date.now());
-        if (Boolean(existing.isOpen) !== Boolean(ratt.isOpen)) {
+        resolvedStatusMs = Math.max(localStatusMs, remoteStatusMs);
+        if (isInstructorForAtt && Boolean(existing.isOpen) !== Boolean(ratt.isOpen)) {
           attToPushToCloud.push({
             ...existing,
             isOpen: resolvedIsOpen,
-            statusUpdatedAtMs: resolvedStatusMs,
+            statusUpdatedAtMs: Math.max(localStatusMs, remoteStatusMs + 1000, Date.now()),
           });
         }
       }
@@ -5400,6 +5410,31 @@ export class ClassroomDB {
 
     if (JSON.stringify(merged) !== prevJson) {
       this.setItem(STORAGE_KEYS.ATTENDANCE, merged);
+      if (typeof window !== 'undefined') {
+        const nextOpenCourseIds = new Set(
+          merged.filter((a) => Boolean(a.isOpen)).map((a) => a.courseId)
+        );
+        for (const oldCourseId of prevOpenCourseIds) {
+          if (!nextOpenCourseIds.has(oldCourseId)) {
+            window.dispatchEvent(
+              new CustomEvent('attendance-closed-remotely', {
+                detail: { courseId: oldCourseId },
+              })
+            );
+          }
+        }
+        for (const newCourseId of nextOpenCourseIds) {
+          if (!prevOpenCourseIds.has(newCourseId)) {
+            const openedSess = merged.find((a) => a.courseId === newCourseId && a.isOpen);
+            window.dispatchEvent(
+              new CustomEvent('attendance-opened-remotely', {
+                detail: { courseId: newCourseId, session: openedSess },
+              })
+            );
+          }
+        }
+        window.dispatchEvent(new CustomEvent('attendance-realtime-updated'));
+      }
       return true;
     }
     return false;
@@ -5423,6 +5458,9 @@ export class ClassroomDB {
       INITIAL_ATTENDANCE_SESSIONS
     ).filter((s) => !deletedSet.has(s.id));
     const prevJson = JSON.stringify(currentSessions);
+    const prevOpenCourseIds = new Set(
+      currentSessions.filter((s) => Boolean(s.isOpen)).map((s) => s.courseId)
+    );
     const sessMap = new Map<string, AttendanceSession>();
     currentSessions.forEach((s) => sessMap.set(s.id, s));
 
@@ -5443,6 +5481,8 @@ export class ClassroomDB {
         if (incoming.isOpen && incoming.courseId) {
           for (const [id, existing] of sessMap.entries()) {
             if (id !== incoming.id && existing.courseId === incoming.courseId && existing.isOpen) {
+              this.markLocalWrite(id);
+              this.markLocalWrite(`att-open:${id}`);
               sessMap.set(id, {
                 ...existing,
                 isOpen: false,
@@ -5459,14 +5499,19 @@ export class ClassroomDB {
           ...(prev?.records || {}),
           ...(incoming.records || {}),
         };
+        const resolvedStatusMs =
+          Math.max(
+            incoming.statusUpdatedAtMs || 0,
+            patch.statusUpdatedAtMs || 0,
+            prev?.statusUpdatedAtMs || 0
+          ) || Date.now();
+        this.markLocalWrite(incoming.id);
+        this.markLocalWrite(`att-open:${incoming.id}`);
         sessMap.set(incoming.id, {
           ...prev,
           ...incoming,
           isOpen: Boolean(incoming.isOpen),
-          statusUpdatedAtMs: Math.max(
-            incoming.statusUpdatedAtMs || 0,
-            prev?.statusUpdatedAtMs || 0
-          ) || Date.now(),
+          statusUpdatedAtMs: resolvedStatusMs,
           records: mergedRecs,
         });
         this.markAttendanceCloudConfirmed(incoming.id);
@@ -5474,6 +5519,8 @@ export class ClassroomDB {
         const closeTs = patch.statusUpdatedAtMs || Date.now();
         for (const [id, existing] of sessMap.entries()) {
           if (existing.courseId === patch.courseId && existing.isOpen) {
+            this.markLocalWrite(id);
+            this.markLocalWrite(`att-open:${id}`);
             sessMap.set(id, {
               ...existing,
               isOpen: false,
@@ -5511,6 +5558,31 @@ export class ClassroomDB {
     );
     if (JSON.stringify(updatedList) !== prevJson) {
       this.setItem(STORAGE_KEYS.ATTENDANCE, updatedList);
+      if (typeof window !== 'undefined') {
+        const nextOpenCourseIds = new Set(
+          updatedList.filter((s) => Boolean(s.isOpen)).map((s) => s.courseId)
+        );
+        for (const oldCourseId of prevOpenCourseIds) {
+          if (!nextOpenCourseIds.has(oldCourseId)) {
+            window.dispatchEvent(
+              new CustomEvent('attendance-closed-remotely', {
+                detail: { courseId: oldCourseId },
+              })
+            );
+          }
+        }
+        for (const newCourseId of nextOpenCourseIds) {
+          if (!prevOpenCourseIds.has(newCourseId)) {
+            const openedSess = updatedList.find((s) => s.courseId === newCourseId && s.isOpen);
+            window.dispatchEvent(
+              new CustomEvent('attendance-opened-remotely', {
+                detail: { courseId: newCourseId, session: openedSess },
+              })
+            );
+          }
+        }
+        window.dispatchEvent(new CustomEvent('attendance-realtime-updated'));
+      }
       return true;
     }
     return false;
@@ -5546,7 +5618,7 @@ export class ClassroomDB {
 
   /**
    * Fast, lightweight live Attendance sync from Supabase (called while viewing Attendance or Dashboard)
-   * with a 2.5s deduplication cooldown and course scoping for students so Egress remains minimal.
+   * with a short deduplication cooldown and course scoping for students so Egress remains minimal.
    */
   private static activeAttendanceSyncPromise: Promise<boolean> | null = null;
   private static lastAttendanceSyncAt = 0;
@@ -5555,10 +5627,10 @@ export class ClassroomDB {
       return false;
     }
     const now = Date.now();
-    if (!force && now - this.lastAttendanceSyncAt < 10_000) {
+    if (!force && now - this.lastAttendanceSyncAt < 3_000) {
       return false;
     }
-    if (force && now - this.lastAttendanceSyncAt < 1_500 && !this.activeAttendanceSyncPromise) {
+    if (force && now - this.lastAttendanceSyncAt < 350 && !this.activeAttendanceSyncPromise) {
       return false;
     }
     if (this.activeAttendanceSyncPromise) {

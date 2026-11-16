@@ -1040,6 +1040,7 @@ export class SupabaseService {
       clearTimeout(this.hiddenDisconnectTimer);
       this.hiddenDisconnectTimer = null;
     }
+    this.isRealtimeChannelSubscribed = false;
     if (this.activeRealtimeChannel) {
       try {
         supabase.removeChannel(this.activeRealtimeChannel).catch(() => {});
@@ -1055,6 +1056,9 @@ export class SupabaseService {
       this.ensureRealtimeChannel();
     }
   }
+
+  private static isRealtimeChannelSubscribed = false;
+  private static queuedRealtimePayloads: Record<string, unknown>[] = [];
 
   private static ensureRealtimeChannel(): void {
     if (typeof window === 'undefined') return;
@@ -1105,7 +1109,7 @@ export class SupabaseService {
     const activeRole = this.getLoggedUserRole();
     if (!activeRole) return;
     try {
-      // Lightweight Broadcast-only channel (eliminates wildcard postgres_changes WAL replication fan-out across 90+ peers)
+      this.isRealtimeChannelSubscribed = false;
       const ch = supabase
         .channel('classroom-live-sync-v1', {
           config: { broadcast: { self: false } },
@@ -1123,7 +1127,97 @@ export class SupabaseService {
           };
           this.triggerRealtimeListeners(data);
         })
-        .subscribe();
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'attendance_sessions' },
+          (pgPayload) => {
+            try {
+              const eventType = String(pgPayload?.eventType || '').toUpperCase();
+              if (eventType === 'DELETE') {
+                const oldRow = (pgPayload?.old || {}) as Record<string, unknown>;
+                const delId = String(oldRow.id || '');
+                if (delId) {
+                  this.triggerRealtimeListeners({
+                    kind: 'delete',
+                    deletedIds: [delId],
+                  });
+                }
+                return;
+              }
+              const row = (pgPayload?.new || {}) as Record<string, unknown>;
+              const sId = String(row.id || '');
+              const courseId = String(row.course_id || '');
+              if (!sId || !courseId) return;
+
+              const decodedState = decodeAttendanceOpenedBy(
+                row.opened_by as string | null,
+                row.is_open
+              );
+              const resolvedOpenState = Boolean(row.is_open) && decodedState.isOpen;
+              const cleanRecords: Record<string, AttendanceRecord> = {};
+              if (row.records && typeof row.records === 'object') {
+                const rawRecords = row.records as Record<string, AttendanceRecord>;
+                for (const [k, v] of Object.entries(rawRecords)) {
+                  if (k !== '__session_meta__' && v && typeof v === 'object' && 'status' in v) {
+                    cleanRecords[k] = v;
+                  }
+                }
+              }
+
+              const liveSession: AttendanceSession = {
+                id: sId,
+                courseId,
+                date: String(row.date || ''),
+                displayDate: String(row.display_date || row.date || ''),
+                title: String(row.title || 'Class Attendance'),
+                isOpen: resolvedOpenState,
+                openedBy: decodedState.openedBy,
+                createdAt: String(row.created_at || new Date().toISOString()),
+                statusUpdatedAtMs: decodedState.statusUpdatedAtMs || Date.now(),
+                records: cleanRecords,
+              };
+
+              this.triggerRealtimeListeners({
+                kind: 'attendance',
+                attendancePatches: [
+                  {
+                    type: 'session_upsert',
+                    sessionId: liveSession.id,
+                    courseId: liveSession.courseId,
+                    session: liveSession,
+                    statusUpdatedAtMs: liveSession.statusUpdatedAtMs,
+                  },
+                ],
+              });
+            } catch {
+              // ignore malformed postgres_changes payload
+            }
+          }
+        )
+        .subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            this.isRealtimeChannelSubscribed = true;
+            if (this.queuedRealtimePayloads.length > 0 && this.activeRealtimeChannel) {
+              const pending = [...this.queuedRealtimePayloads];
+              this.queuedRealtimePayloads = [];
+              pending.forEach((payload) => {
+                try {
+                  this.activeRealtimeChannel
+                    ?.send({
+                      type: 'broadcast',
+                      event: 'classroom_update',
+                      payload,
+                    })
+                    .catch(() => {});
+                } catch {
+                  // ignore
+                }
+              });
+            }
+          } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            this.isRealtimeChannelSubscribed = false;
+          }
+        });
       this.activeRealtimeChannel = ch;
     } catch {
       // ignore if WebSocket is unavailable
@@ -1267,7 +1361,7 @@ export class SupabaseService {
           }
         });
       },
-      isFastRealtime ? 40 : 300
+      isFastRealtime ? 15 : 280
     );
   }
 
@@ -1364,15 +1458,19 @@ export class SupabaseService {
       this.pendingOutboundPrivateNotePatches.push(...meta.privateNotePatches);
     }
 
+    const isAttendanceToggle = kind === 'attendance';
     const isUrgentKind =
-      kind === 'attendance' ||
+      isAttendanceToggle ||
       kind === 'attendance_checkin' ||
       kind === 'private_note' ||
       kind === 'delete';
     const now = Date.now();
     const lastSent = this.lastBroadcastSentByKind.get(kind) || 0;
-    const minIntervalMs = isUrgentKind ? 180 : 2_000;
-    const delayMs = Math.max(isUrgentKind ? 50 : 350, minIntervalMs - (now - lastSent));
+    const minIntervalMs = isAttendanceToggle ? 30 : isUrgentKind ? 150 : 2_000;
+    const delayMs = Math.max(
+      isAttendanceToggle ? 10 : isUrgentKind ? 40 : 350,
+      minIntervalMs - (now - lastSent)
+    );
 
     if (this.outboundBroadcastTimer && !isUrgentKind) {
       return;
@@ -1422,7 +1520,7 @@ export class SupabaseService {
       this.pendingOutboundPrivateNotePatches = [];
 
       try {
-        if (this.activeRealtimeChannel) {
+        if (this.activeRealtimeChannel && this.isRealtimeChannelSubscribed) {
           this.activeRealtimeChannel
             .send({
               type: 'broadcast',
@@ -1430,6 +1528,12 @@ export class SupabaseService {
               payload: coalescedPayload,
             })
             .catch(() => {});
+        } else {
+          this.queuedRealtimePayloads.push(coalescedPayload);
+          if (this.queuedRealtimePayloads.length > 10) {
+            this.queuedRealtimePayloads.shift();
+          }
+          this.ensureRealtimeChannel();
         }
       } catch {
         // ignore

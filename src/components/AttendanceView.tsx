@@ -77,50 +77,76 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
     setTimeout(() => setToastMsg(null), 3800);
   };
 
-  // Real-time multi-device Attendance & Leave Request synchronization (instant WebSocket patch + 6s delta verification)
+  const [, setAttendanceTick] = useState(0);
+
+  // Real-time multi-device Attendance & Leave Request synchronization (instant WebSocket patch + 5s delta verification)
   useEffect(() => {
     let mounted = true;
     const syncNow = (forcePull: boolean = false) => {
       if (document.visibilityState === 'visible' && navigator.onLine !== false) {
         ClassroomDB.syncAttendanceFromCloud(forcePull).then((changed) => {
           if (mounted && changed) {
+            setAttendanceTick((t) => t + 1);
             onRefresh();
           }
         });
         if (forcePull || isInstructor) {
           ClassroomDB.syncPrivateNotesFromCloud(forcePull).then((notesChanged) => {
             if (mounted && notesChanged) {
+              setAttendanceTick((t) => t + 1);
               onRefresh();
             }
           });
         }
       }
     };
-    const handleRemoteClosed = () => {
+    const handleRemoteClosed = (ev: Event) => {
       if (!mounted) return;
+      const detail = (ev as CustomEvent)?.detail as { courseId?: string } | undefined;
+      if (detail?.courseId && detail.courseId !== course.id) return;
       setEditingStudentSessionIds({});
       showToast(
         '🔒 ဆရာ (Admin / Co-Admin) မှ Attendance ပိတ်လိုက်ပြီဖြစ်သောကြောင့် နှိပ်၍ မရနိုင်တော့ပါ။'
       );
+      setAttendanceTick((t) => t + 1);
+      onRefresh();
+    };
+    const handleRemoteOpened = (ev: Event) => {
+      if (!mounted) return;
+      const detail = (ev as CustomEvent)?.detail as { courseId?: string } | undefined;
+      if (detail?.courseId && detail.courseId !== course.id) return;
+      if (!isInstructor) {
+        showToast('🟢 ဆရာ (Admin / Co-Admin) မှ Attendance ဖွင့်ပေးလိုက်ပါပြီ! ယခု Present နှိပ်နိုင်ပါပြီ။');
+      }
+      setAttendanceTick((t) => t + 1);
+      onRefresh();
+    };
+    const handleRealtimeAttendanceUpdate = () => {
+      if (!mounted) return;
+      setAttendanceTick((t) => t + 1);
       onRefresh();
     };
     const handleRealtimePrivateNote = () => {
       if (!mounted) return;
+      setAttendanceTick((t) => t + 1);
       onRefresh();
     };
     syncNow(true);
-    const hasOpenNow = sessions.some((s) => s.isOpen);
-    const pollIntervalMs = hasOpenNow ? 25_000 : 45_000;
+    const pollIntervalMs = 5_000;
     const timer = setInterval(() => syncNow(false), pollIntervalMs);
     window.addEventListener('attendance-closed-remotely', handleRemoteClosed);
+    window.addEventListener('attendance-opened-remotely', handleRemoteOpened);
+    window.addEventListener('attendance-realtime-updated', handleRealtimeAttendanceUpdate);
     window.addEventListener('private-note-realtime-update', handleRealtimePrivateNote);
     return () => {
       mounted = false;
       clearInterval(timer);
       window.removeEventListener('attendance-closed-remotely', handleRemoteClosed);
+      window.removeEventListener('attendance-opened-remotely', handleRemoteOpened);
+      window.removeEventListener('attendance-realtime-updated', handleRealtimeAttendanceUpdate);
       window.removeEventListener('private-note-realtime-update', handleRealtimePrivateNote);
     };
-  }, [course.id, isInstructor, sessions.some((s) => s.isOpen)]);
+  }, [course.id, isInstructor]);
 
   // Open sessions where student can self check-in
   const openSessions = sessions.filter((s) => s.isOpen);

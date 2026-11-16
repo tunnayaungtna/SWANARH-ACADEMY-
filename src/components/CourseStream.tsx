@@ -136,22 +136,46 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   );
   const [editingStreamAttIds, setEditingStreamAttIds] = useState<Record<string, boolean>>({});
 
-  // Immediately close student check-in editing UI & notify student if Admin/Co-Admin closes attendance remotely
+  const [, setStreamAttTick] = useState(0);
+
+  // Immediately update student check-in UI & notify student when Admin/Co-Admin opens or closes attendance remotely
   useEffect(() => {
-    const handleRemoteAttendanceClosed = () => {
+    const handleRemoteAttendanceClosed = (ev: Event) => {
+      const detail = (ev as CustomEvent)?.detail as { courseId?: string } | undefined;
+      if (detail?.courseId && detail.courseId !== course.id) return;
       setEditingStreamAttIds({});
       setSuccessToast(null);
       setRateLimitError(
         '🔒 ဆရာ (Admin / Co-Admin) မှ Attendance ပိတ်လိုက်ပြီဖြစ်သောကြောင့် နှိပ်၍ မရနိုင်တော့ပါ။'
       );
       setTimeout(() => setRateLimitError(null), 4500);
+      setStreamAttTick((t) => t + 1);
+      onRefresh();
+    };
+    const handleRemoteAttendanceOpened = (ev: Event) => {
+      const detail = (ev as CustomEvent)?.detail as { courseId?: string } | undefined;
+      if (detail?.courseId && detail.courseId !== course.id) return;
+      setRateLimitError(null);
+      if (currentUser.role === 'student') {
+        setSuccessToast('🟢 ဆရာမှ Attendance ဖွင့်ပေးလိုက်ပါပြီ! ယခု Present နှိပ်နိုင်ပါပြီ။');
+        setTimeout(() => setSuccessToast(null), 4000);
+      }
+      setStreamAttTick((t) => t + 1);
+      onRefresh();
+    };
+    const handleRealtimeAttendanceUpdated = () => {
+      setStreamAttTick((t) => t + 1);
       onRefresh();
     };
     window.addEventListener('attendance-closed-remotely', handleRemoteAttendanceClosed);
+    window.addEventListener('attendance-opened-remotely', handleRemoteAttendanceOpened);
+    window.addEventListener('attendance-realtime-updated', handleRealtimeAttendanceUpdated);
     return () => {
       window.removeEventListener('attendance-closed-remotely', handleRemoteAttendanceClosed);
+      window.removeEventListener('attendance-opened-remotely', handleRemoteAttendanceOpened);
+      window.removeEventListener('attendance-realtime-updated', handleRealtimeAttendanceUpdated);
     };
-  }, [course.id]);
+  }, [course.id, currentUser.role]);
 
   const handleStreamCloseAllAttendance = () => {
     const check = ClassroomDB.checkCanCloseCourseAttendance(course.id);

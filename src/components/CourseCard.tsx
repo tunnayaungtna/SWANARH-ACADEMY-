@@ -2,7 +2,17 @@ import React, { useState } from 'react';
 import { Course, User, StudentProgress } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
 import { resolveCourseBannerUrl, isSwanArhOfficialBanner } from './CourseBannerModal';
-import { ArrowRight, Trash2, AlertTriangle, ArrowUp, ArrowDown, Lock } from 'lucide-react';
+import {
+  ArrowRight,
+  Trash2,
+  AlertTriangle,
+  ArrowUp,
+  ArrowDown,
+  Lock,
+  CalendarCheck,
+  CheckCircle2,
+  Hand,
+} from 'lucide-react';
 
 interface CourseCardProps {
   course: Course;
@@ -35,7 +45,24 @@ export const CourseCard: React.FC<CourseCardProps> = ({
       ? ClassroomDB.calculateTotalAttendancePercentage(course.id, currentUser.id)
       : 100;
 
+  const openAttendanceSession = ClassroomDB.getAttendanceSessions(course.id).find((s) =>
+    Boolean(s.isOpen)
+  );
+  const studentOpenRecord =
+    currentUser.role === 'student' && openAttendanceSession
+      ? ClassroomDB.getStudentAttendanceRecord(openAttendanceSession, currentUser)
+      : undefined;
+
   const unreadPrivateNotesCount = ClassroomDB.getUnreadPrivateNotesCount(course.id, currentUser);
+
+  const handleQuickCardCheckIn = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!openAttendanceSession) return;
+    ClassroomDB.studentCheckIn(openAttendanceSession.id, currentUser, 'present');
+    if (onRefresh) {
+      onRefresh();
+    }
+  };
 
   const handleConfirmDeleteCourse = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -65,7 +92,9 @@ export const CourseCard: React.FC<CourseCardProps> = ({
     <>
       <div
         onClick={() => onSelectCourse(course)}
-        className="group neu-card-interactive rounded-3xl p-3 sm:p-3.5 flex flex-col justify-between cursor-pointer min-w-0 overflow-hidden"
+        className={`group neu-card-interactive rounded-3xl p-3 sm:p-3.5 flex flex-col justify-between cursor-pointer min-w-0 overflow-hidden ${
+          openAttendanceSession ? 'ring-2 ring-emerald-500/60' : ''
+        }`}
       >
         <div className="min-w-0">
           {/* Framed 4:1 Google Classroom Header Photo Well */}
@@ -189,6 +218,58 @@ export const CourseCard: React.FC<CourseCardProps> = ({
             <p className="text-xs text-slate-600 dark:text-slate-300 line-clamp-2 leading-relaxed break-words">
               {course.description}
             </p>
+
+            {/* Live Open Attendance Banner on Course Card */}
+            {openAttendanceSession && (
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectCourse(course, 'attendance');
+                }}
+                className="p-2.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/70 border border-emerald-300 dark:border-emerald-700 flex items-center justify-between gap-2"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-extrabold text-emerald-800 dark:text-emerald-200 truncate">
+                      🟢 Attendance ဖွင့်ထားဆဲ ({openAttendanceSession.displayDate})
+                    </div>
+                    <div className="text-[10px] text-emerald-700 dark:text-emerald-300 truncate">
+                      {openAttendanceSession.title}
+                    </div>
+                  </div>
+                </div>
+
+                {!isInstructor ? (
+                  studentOpenRecord ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-xl bg-emerald-600 text-white text-[10px] font-extrabold shrink-0">
+                      <CheckCircle2 className="w-3 h-3 shrink-0" />
+                      <span>
+                        {studentOpenRecord.status === 'present'
+                          ? 'Present ✓'
+                          : studentOpenRecord.status === 'late'
+                          ? 'Late ✓'
+                          : 'Excused ✓'}
+                      </span>
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleQuickCardCheckIn}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-extrabold shadow-xs cursor-pointer shrink-0"
+                    >
+                      <Hand className="w-3 h-3 shrink-0" />
+                      <span>Mark Present</span>
+                    </button>
+                  )
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-xl bg-emerald-600 text-white text-[10px] font-extrabold shrink-0">
+                    <CalendarCheck className="w-3 h-3 shrink-0" />
+                    <span>LIVE</span>
+                  </span>
+                )}
+              </div>
+            )}
 
             {/* Clean Unboxed Metadata Line */}
             <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400 pt-1">
