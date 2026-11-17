@@ -94,6 +94,31 @@ self.addEventListener('message', (event) => {
   }
 });
 
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const notifData = event.notification.data || {};
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if ('focus' in client) {
+          client.focus();
+          try {
+            client.postMessage({
+              type: 'NOTIFICATION_CLICKED',
+              courseId: notifData.courseId,
+              targetTab: notifData.targetTab,
+            });
+          } catch {}
+          return;
+        }
+      }
+      if (self.clients.openWindow) {
+        return self.clients.openWindow('/');
+      }
+    })
+  );
+});
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;

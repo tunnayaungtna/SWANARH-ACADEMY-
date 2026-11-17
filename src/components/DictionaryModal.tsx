@@ -1,9 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import {
-  DICTIONARY_CATEGORY_LABELS,
-  DictionaryCategory,
-  DictionaryEntry,
-} from '../data/enMmDictionary';
+import { DictionaryEntry } from '../data/enMmDictionary';
 import {
   MASTER_STATIC_DICTIONARY,
   OxfordDictionaryData,
@@ -44,9 +40,7 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
   initialQuery = '',
 }) => {
   const [searchQuery, setSearchQuery] = useState(initialQuery);
-  const [activeTab, setActiveTab] = useState<
-    DictionaryCategory | 'all' | 'saved' | 'custom'
-  >('all');
+  const [showSavedOnly, setShowSavedOnly] = useState(false);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -99,7 +93,7 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
     if (isOpen && initialQuery.trim()) {
       setSearchQuery(initialQuery.trim());
       setSelectedEntryId(null);
-      setActiveTab('all');
+      setShowSavedOnly(false);
     }
   }, [isOpen, initialQuery]);
 
@@ -107,7 +101,7 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
     if (isOpen) {
       setTimeout(() => {
         searchInputRef.current?.focus();
-      }, 60);
+      }, 40);
     }
   }, [isOpen]);
 
@@ -135,19 +129,15 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
   const { localResults, hasExactLocalMatch } = useMemo(() => {
     let baseList = [...customEntries, ...MASTER_STATIC_DICTIONARY];
 
-    if (activeTab === 'saved') {
+    if (showSavedOnly) {
       baseList = combinedEntries.filter((item) => savedIds.includes(item.id));
-    } else if (activeTab === 'custom') {
-      baseList = customEntries;
-    } else if (activeTab !== 'all') {
-      baseList = baseList.filter((item) => item.category === activeTab);
     }
 
     const { results, hasExactMatch } = searchLocalDictionary(searchQuery, baseList);
     return { localResults: results, hasExactLocalMatch: hasExactMatch };
-  }, [customEntries, combinedEntries, activeTab, searchQuery, savedIds]);
+  }, [customEntries, combinedEntries, showSavedOnly, searchQuery, savedIds]);
 
-  // Live Autocomplete Suggestions as user types
+  // Fast Live Autocomplete Suggestions as user types
   useEffect(() => {
     const q = searchQuery.trim();
     if (!q || q.length < 2 || containsMyanmarScript(q)) {
@@ -162,7 +152,7 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
           list.filter((w) => w.toLowerCase() !== q.toLowerCase()).slice(0, 6)
         );
       }
-    }, 150);
+    }, 80);
     return () => {
       cancelled = true;
       clearTimeout(timer);
@@ -175,7 +165,15 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
     if (!q) return;
 
     setIsLookingUpLive(true);
-    const res = await fetchOxfordDictionaryEntry(q);
+    const res = await fetchOxfordDictionaryEntry(q, (preview) => {
+      setLiveLookupEntry(preview.summaryEntry);
+      setOxfordMap((prev) => ({
+        ...prev,
+        [preview.summaryEntry.id]: preview.oxfordData,
+        [preview.oxfordData.headword.toLowerCase()]: preview.oxfordData,
+        [q.toLowerCase()]: preview.oxfordData,
+      }));
+    });
     setIsLookingUpLive(false);
 
     if (res) {
@@ -200,8 +198,18 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
     let cancelled = false;
     setIsLookingUpLive(true);
 
+    // Ultra-fast 70ms debounce with progressive ~80ms fast preview callback
     const timer = setTimeout(async () => {
-      const res = await fetchOxfordDictionaryEntry(q);
+      const res = await fetchOxfordDictionaryEntry(q, (preview) => {
+        if (cancelled) return;
+        setLiveLookupEntry(preview.summaryEntry);
+        setOxfordMap((prev) => ({
+          ...prev,
+          [preview.summaryEntry.id]: preview.oxfordData,
+          [preview.oxfordData.headword.toLowerCase()]: preview.oxfordData,
+          [q.toLowerCase()]: preview.oxfordData,
+        }));
+      });
       if (cancelled) return;
       setIsLookingUpLive(false);
       if (res) {
@@ -215,7 +223,7 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
       } else {
         setLiveLookupEntry(null);
       }
-    }, 220);
+    }, 70);
 
     return () => {
       cancelled = true;
@@ -232,7 +240,6 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
     const liveEnLower = liveLookupEntry.en.trim().toLowerCase();
     const firstLocalLower = localResults[0]?.en.trim().toLowerCase();
 
-    // If first local result is already the exact same English headword, keep localResults order
     if (firstLocalLower === liveEnLower && hasExactLocalMatch) {
       return localResults;
     }
@@ -313,7 +320,7 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
     if (!clean) return;
     setSearchQuery(clean);
     setSelectedEntryId(null);
-    setActiveTab('all');
+    setShowSavedOnly(false);
     recordRecentSearch(clean);
     triggerUniversalLookup(clean);
   };
@@ -435,7 +442,7 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
     setCustomExampleMm('');
     setShowAddCustomForm(false);
     setSelectedEntryId(newEntry.id);
-    setActiveTab('all');
+    setShowSavedOnly(false);
     setSearchQuery(newEntry.en);
   };
 
@@ -465,7 +472,7 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
       >
         {/* Authentic Oxford Navy Header Bar */}
         <div className="bg-[#002147] text-white px-4 sm:px-6 pt-3.5 pb-4 space-y-3">
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center justify-between gap-2.5">
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-10 h-10 rounded-2xl bg-white/10 border border-white/20 text-amber-300 flex items-center justify-center shadow-inner shrink-0">
                 <BookA className="w-5 h-5" />
@@ -480,16 +487,34 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
                   </span>
                 </div>
                 <p className="text-[11px] sm:text-xs text-slate-300 truncate">
-                  အင်္ဂလိပ် ⇄ မြန်မာ အဘိဓာန် • မည်သည့်စာလုံးမဆို အသေးစိတ် ရှာဖွေနိုင်သည်
+                  အင်္ဂလိပ် ⇄ မြန်မာ အဘိဓာန် • မည်သည့်စာလုံးမဆို အမြန်ရှာဖွေနိုင်သည်
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSavedOnly((prev) => !prev);
+                  setSelectedEntryId(null);
+                }}
+                className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  showSavedOnly
+                    ? 'bg-amber-400 text-[#002147] shadow-xs'
+                    : 'bg-white/10 hover:bg-white/20 text-amber-200 border border-white/15'
+                }`}
+                title="မှတ်သားထားသော စာလုံးများ"
+              >
+                <Star className="w-3.5 h-3.5 fill-current" />
+                <span className="hidden md:inline">မှတ်သားထားသော</span>
+                <span>({savedIds.length})</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => setShowAddCustomForm((prev) => !prev)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
                   showAddCustomForm
                     ? 'bg-amber-400 text-[#002147]'
                     : 'bg-white/10 hover:bg-white/20 text-white border border-white/15'
@@ -499,6 +524,7 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
                 <Plus className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">စာလုံးသစ်မှတ်ရန်</span>
               </button>
+
               <button
                 type="button"
                 onClick={onClose}
@@ -536,8 +562,8 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
                 onChange={(e) => {
                   setSearchQuery(e.target.value);
                   setSelectedEntryId(null);
-                  if (activeTab !== 'all' && e.target.value.trim()) {
-                    setActiveTab('all');
+                  if (showSavedOnly && e.target.value.trim()) {
+                    setShowSavedOnly(false);
                   }
                 }}
                 placeholder="အင်္ဂလိပ် သို့မဟုတ် မြန်မာစာလုံး မည်သည့်စာလုံးမဆို ရိုက်ထည့်ရှာဖွေပါ... (ဥပမာ - run, set, serendipity, ပန်းသီး, ပညာရေး)"
@@ -567,8 +593,8 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
             </button>
           </form>
 
-          {/* Instant Live Autocomplete Suggestions */}
-          {suggestions.length > 0 && searchQuery.trim().length >= 2 && (
+          {/* Instant Live Autocomplete Suggestions or Recent Searches */}
+          {suggestions.length > 0 && searchQuery.trim().length >= 2 ? (
             <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
               <span className="text-[10px] font-bold text-amber-200/90 uppercase tracking-wider">
                 ဆက်စပ်စာလုံးများ:
@@ -584,6 +610,25 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
                 </button>
               ))}
             </div>
+          ) : (
+            recentSearches.length > 0 &&
+            !searchQuery && (
+              <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                <span className="text-[10px] font-bold text-slate-300">
+                  ပြန်ကြည့်ရန်:
+                </span>
+                {recentSearches.map((term) => (
+                  <button
+                    key={term}
+                    type="button"
+                    onClick={() => handleSelectWordJump(term)}
+                    className="px-2.5 py-0.5 rounded-lg bg-white/10 hover:bg-amber-400 hover:text-[#002147] text-[11px] font-medium text-slate-200 cursor-pointer transition-colors"
+                  >
+                    {term}
+                  </button>
+                ))}
+              </div>
+            )
           )}
         </div>
 
@@ -660,82 +705,16 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
           </form>
         )}
 
-        {/* Category Filter Bar + Recent Searches */}
-        <div className="px-4 sm:px-6 py-2.5 border-b border-slate-200/80 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900/60 flex flex-col gap-2">
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
-            {(
-              [
-                'all',
-                'civil_service',
-                'academic',
-                'grammar_idiom',
-                'business_tech',
-                'general',
-              ] as const
-            ).map((catKey) => {
-              const info = DICTIONARY_CATEGORY_LABELS[catKey];
-              const isActive = activeTab === catKey;
-              return (
-                <button
-                  key={catKey}
-                  type="button"
-                  onClick={() => {
-                    setActiveTab(catKey);
-                    setSelectedEntryId(null);
-                  }}
-                  className={`px-3 py-1 rounded-xl text-[11px] font-bold whitespace-nowrap transition-all cursor-pointer shrink-0 ${
-                    isActive
-                      ? 'bg-[#002147] text-white shadow-2xs'
-                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200/80 dark:border-slate-700 hover:border-[#002147]/40'
-                  }`}
-                >
-                  {info.labelMm}
-                </button>
-              );
-            })}
-
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab('saved');
-                setSelectedEntryId(null);
-              }}
-              className={`px-3 py-1 rounded-xl text-[11px] font-bold whitespace-nowrap flex items-center gap-1 transition-all cursor-pointer shrink-0 ${
-                activeTab === 'saved'
-                  ? 'bg-amber-500 text-white shadow-2xs'
-                  : 'bg-white dark:bg-slate-800 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60'
-              }`}
-            >
-              <Star className="w-3 h-3 fill-current" />
-              <span>မှတ်သားထားသော ({savedIds.length})</span>
-            </button>
-          </div>
-
-          {recentSearches.length > 0 && !searchQuery && (
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-[10px] font-semibold text-slate-400">
-                ပြန်ကြည့်ရန်:
-              </span>
-              {recentSearches.map((term) => (
-                <button
-                  key={term}
-                  type="button"
-                  onClick={() => handleSelectWordJump(term)}
-                  className="px-2 py-0.5 rounded-md bg-slate-200/70 dark:bg-slate-800 hover:bg-[#002147] hover:text-white text-[11px] font-medium text-slate-600 dark:text-slate-300 cursor-pointer transition-colors"
-                >
-                  {term}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
         {/* Main Split Body: Left Index List + Right Oxford Entry View */}
         <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-12 overflow-hidden">
           {/* Left Panel: Headword Index */}
           <div className="md:col-span-4 border-b md:border-b-0 md:border-r border-slate-200/80 dark:border-slate-800 overflow-y-auto max-h-44 md:max-h-full p-2.5 space-y-1 bg-slate-50/40 dark:bg-slate-900/30">
             <div className="flex items-center justify-between px-2.5 py-1 text-[11px] font-bold text-slate-400">
-              <span>ဝေါဟာရစာရင်း ({displayedEntries.length})</span>
+              <span>
+                {showSavedOnly
+                  ? `မှတ်သားထားသော စာလုံးများ (${displayedEntries.length})`
+                  : `ဝေါဟာရစာရင်း (${displayedEntries.length})`}
+              </span>
               {isLookingUpLive && (
                 <span className="text-[#002147] dark:text-sky-400 text-[10px] font-bold flex items-center gap-1">
                   <Loader2 className="w-3 h-3 animate-spin" />
@@ -756,7 +735,9 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
                 ) : (
                   <div className="space-y-2 py-3">
                     <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                      “{searchQuery}” အတွက် စာလုံးပေါင်း ပြန်လည်စစ်ဆေးပါ။
+                      {showSavedOnly
+                        ? 'မှတ်သားထားသော ဝေါဟာရ မရှိသေးပါ။'
+                        : `“${searchQuery}” အတွက် စာလုံးပေါင်း ပြန်လည်စစ်ဆေးပါ။`}
                     </p>
                     {searchQuery.trim() && (
                       <button

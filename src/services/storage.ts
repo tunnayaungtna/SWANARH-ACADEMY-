@@ -42,6 +42,10 @@ import {
   verifySessionIntegritySeal,
 } from '../utils/passwordCrypto';
 import {
+  dispatchDeviceNotification,
+  markDeviceNotifIdsSeen,
+} from '../utils/deviceNotifications';
+import {
   INITIAL_USERS,
   INITIAL_COURSES,
   INITIAL_POSTS,
@@ -5061,17 +5065,62 @@ export class ClassroomDB {
           const prevJson = JSON.stringify(localNotifs);
           const notifMap = new Map<string, NotificationItem>();
           localNotifs.forEach((n) => notifMap.set(n.id, n));
+          const readKeysForLogged = loggedUser
+            ? this.getReadNotificationKeys(loggedUser.id)
+            : new Set<string>();
+          const currentCoursesForNotif = this.getItem<Course[]>(
+            STORAGE_KEYS.COURSES,
+            INITIAL_COURSES
+          );
+          const enrolledCourseIdsForNotif = new Set(
+            currentCoursesForNotif
+              .filter(
+                (c) =>
+                  loggedUser &&
+                  (loggedUser.role === 'admin' ||
+                    loggedUser.role === 'co_admin' ||
+                    this.isStudentEnrolledInCourse(c, loggedUser))
+              )
+              .map((c) => c.id)
+          );
+
           remoteNotifications.forEach((rn) => {
             const createdMs = rn.createdAtMs || this.extractTimestampFromId(rn.id) || Date.now();
             if (Date.now() - createdMs >= NOTIFICATION_TTL_MS) {
               return;
             }
             const existing = notifMap.get(rn.id);
+            const isAlreadyRead = Boolean(
+              existing?.isRead ||
+                rn.isRead ||
+                readKeysForLogged.has(rn.id) ||
+                (rn.postId && readKeysForLogged.has(`post:${rn.postId}`))
+            );
             notifMap.set(rn.id, {
               ...existing,
               ...rn,
-              isRead: Boolean(existing?.isRead || rn.isRead),
+              isRead: isAlreadyRead,
             });
+
+            // Trigger Cross-Device Notification on Phone, Tablet, or Computer Browser if this is a fresh unread notification for this user
+            if (
+              !existing &&
+              !isAlreadyRead &&
+              loggedUser &&
+              rn.authorName !== loggedUser.name &&
+              (rn.userId === loggedUser.id ||
+                (rn.userId === 'COURSE_BROADCAST' && enrolledCourseIdsForNotif.has(rn.courseId)))
+            ) {
+              dispatchDeviceNotification({
+                id: rn.id,
+                title: rn.title,
+                body: rn.message,
+                courseId: rn.courseId,
+                targetTab: rn.targetTab || (rn.type === 'private_note' ? 'private_notes' : 'stream'),
+                variant: rn.type === 'private_note' ? 'private_note' : 'post',
+                createdAtLabel: rn.createdAt,
+              });
+            }
           });
           const mergedNotifs = Array.from(notifMap.values());
           if (JSON.stringify(mergedNotifs) !== prevJson) {
@@ -5716,6 +5765,7 @@ export class ClassroomDB {
       noteMap.set(ln.id, ln);
     });
 
+    const loggedUserForNote = this.getCurrentUser();
     remoteNotes.forEach((rn) => {
       if (!rn || !rn.id || deletedSet.has(rn.id) || deletedSet.has(rn.courseId)) {
         return;
@@ -5723,6 +5773,38 @@ export class ClassroomDB {
       const existing = noteMap.get(rn.id);
       if (!existing) {
         noteMap.set(rn.id, rn);
+        if (loggedUserForNote) {
+          if (
+            (loggedUserForNote.role === 'admin' || loggedUserForNote.role === 'co_admin') &&
+            rn.status === 'pending' &&
+            !rn.isReadByInstructor
+          ) {
+            dispatchDeviceNotification({
+              id: `pnote-new-${rn.id}`,
+              title: `📩 [${rn.courseCode}] ကျောင်းသား သီးသန့်စာအသစ်`,
+              body: `${rn.studentName}: ${rn.subject} — "${rn.content}"`,
+              courseId: rn.courseId,
+              targetTab: 'private_notes',
+              variant: 'private_note',
+              createdAtLabel: rn.createdAt,
+            });
+          } else if (
+            loggedUserForNote.role === 'student' &&
+            rn.studentId === loggedUserForNote.id &&
+            rn.status !== 'pending' &&
+            !rn.isReadByStudent
+          ) {
+            dispatchDeviceNotification({
+              id: `pnote-reply-${rn.id}-${rn.repliedAtMs || rn.status}`,
+              title: `💬 [${rn.courseCode}] ဆရာမှ သီးသန့်စာ ပြန်ဖြေလိုက်ပါပြီ`,
+              body: `${rn.repliedByName || 'Instructor'}: "${rn.replyContent || rn.subject}"`,
+              courseId: rn.courseId,
+              targetTab: 'private_notes',
+              variant: 'private_note',
+              createdAtLabel: rn.repliedAt || rn.createdAt,
+            });
+          }
+        }
         return;
       }
       const existingReplied = existing.status !== 'pending' && Boolean(existing.replyContent);
@@ -5731,6 +5813,21 @@ export class ClassroomDB {
       let winner: PrivateNote;
       if (remoteReplied && !existingReplied) {
         winner = rn;
+        if (
+          loggedUserForNote &&
+          loggedUserForNote.role === 'student' &&
+          rn.studentId === loggedUserForNote.id
+        ) {
+          dispatchDeviceNotification({
+            id: `pnote-reply-${rn.id}-${rn.repliedAtMs || rn.status}`,
+            title: `💬 [${rn.courseCode}] ဆရာမှ သီးသန့်စာ ပြန်ဖြေလိုက်ပါပြီ`,
+            body: `${rn.repliedByName || 'Instructor'}: "${rn.replyContent || rn.subject}"`,
+            courseId: rn.courseId,
+            targetTab: 'private_notes',
+            variant: 'private_note',
+            createdAtLabel: rn.repliedAt || rn.createdAt,
+          });
+        }
       } else if (existingReplied && !remoteReplied) {
         winner = existing;
       } else if (remoteReplied && existingReplied) {
@@ -5937,8 +6034,30 @@ export class ClassroomDB {
         const existingIdx = localNotes.findIndex((n) => n.id === rn.id);
         if (existingIdx === -1) {
           localNotes = [rn, ...localNotes];
-          if (rn.status !== 'pending') {
+          if (
+            (loggedUser.role === 'admin' || loggedUser.role === 'co_admin') &&
+            rn.status === 'pending'
+          ) {
+            dispatchDeviceNotification({
+              id: `pnote-new-${rn.id}`,
+              title: `📩 [${rn.courseCode}] ကျောင်းသား သီးသန့်စာအသစ်`,
+              body: `${rn.studentName}: ${rn.subject} — "${rn.content}"`,
+              courseId: rn.courseId,
+              targetTab: 'private_notes',
+              variant: 'private_note',
+              createdAtLabel: rn.createdAt,
+            });
+          } else if (rn.status !== 'pending' && loggedUser.role === 'student') {
             newlyRepliedNotes.push(rn);
+            dispatchDeviceNotification({
+              id: `pnote-reply-${rn.id}-${rn.repliedAtMs || rn.status}`,
+              title: `💬 [${rn.courseCode}] ဆရာမှ သီးသန့်စာ ပြန်ဖြေလိုက်ပါပြီ`,
+              body: `${rn.repliedByName || 'Instructor'}: "${rn.replyContent || rn.subject}"`,
+              courseId: rn.courseId,
+              targetTab: 'private_notes',
+              variant: 'private_note',
+              createdAtLabel: rn.repliedAt || rn.createdAt,
+            });
           }
         } else {
           const existing = localNotes[existingIdx];
@@ -5976,6 +6095,17 @@ export class ClassroomDB {
 
           if (wasPending && mergedNote.status !== 'pending') {
             newlyRepliedNotes.push(mergedNote);
+            if (loggedUser.role === 'student' && mergedNote.studentId === loggedUser.id) {
+              dispatchDeviceNotification({
+                id: `pnote-reply-${mergedNote.id}-${mergedNote.repliedAtMs || mergedNote.status}`,
+                title: `💬 [${mergedNote.courseCode}] ဆရာမှ သီးသန့်စာ ပြန်ဖြေလိုက်ပါပြီ`,
+                body: `${mergedNote.repliedByName || 'Instructor'}: "${mergedNote.replyContent || mergedNote.subject}"`,
+                courseId: mergedNote.courseId,
+                targetTab: 'private_notes',
+                variant: 'private_note',
+                createdAtLabel: mergedNote.repliedAt || mergedNote.createdAt,
+              });
+            }
           }
         }
       }
@@ -9508,24 +9638,24 @@ export class ClassroomDB {
         // ignore
       }
 
-      // Trigger Browser Notification if the active user on this device is one of the notified students
-      try {
-        const loggedUser = this.getCurrentUser();
-        if (
-          loggedUser &&
-          loggedUser.role === 'student' &&
-          course.enrolledStudentIds.includes(loggedUser.id) &&
-          typeof window !== 'undefined' &&
-          'Notification' in window &&
-          Notification.permission === 'granted'
-        ) {
-          new Notification(`📢 ${course.code} — ${post.title}`, {
-            body: `${authorName} (${roleLabel}) မှ "${course.title}" အတန်းတွင် ပို့စ်အသစ် တင်ထားပါသည်။`,
-            icon: './pwa-192x192.png',
-          });
-        }
-      } catch {
-        // ignore browser notification errors
+      // Mark seen on the sender's device so it doesn't double-ring, and trigger if student
+      const loggedUser = this.getCurrentUser();
+      if (loggedUser && loggedUser.role !== 'student') {
+        markDeviceNotifIdsSeen([broadcastNotif.id]);
+      } else if (
+        loggedUser &&
+        loggedUser.role === 'student' &&
+        course.enrolledStudentIds.includes(loggedUser.id)
+      ) {
+        dispatchDeviceNotification({
+          id: broadcastNotif.id,
+          title: broadcastNotif.title,
+          body: broadcastNotif.message,
+          courseId: course.id,
+          targetTab: 'stream',
+          variant: 'post',
+          createdAtLabel: timeLabel,
+        });
       }
     }
 

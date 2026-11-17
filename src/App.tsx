@@ -20,6 +20,11 @@ import { OfficialWebsiteModal, OFFICIAL_ACADEMY_WEBSITE_URL } from './components
 import { DictionaryModal } from './components/DictionaryModal';
 import { SelectionDictionaryTrigger } from './components/SelectionDictionaryTrigger';
 import {
+  dispatchDeviceNotification,
+  DeviceAlertPayload,
+  requestDeviceNotificationPermission,
+} from './utils/deviceNotifications';
+import {
   BookOpen,
   Plus,
   ShieldCheck,
@@ -42,6 +47,7 @@ import {
   Globe,
   ExternalLink,
   BookA,
+  X,
 } from 'lucide-react';
 
 export default function App() {
@@ -87,6 +93,8 @@ export default function App() {
   const [showReorderPanel, setShowReorderPanel] = useState(false);
   const [draggedCourseId, setDraggedCourseId] = useState<string | null>(null);
   const [appBannerError, setAppBannerError] = useState<string | null>(null);
+  const [livePushBanner, setLivePushBanner] = useState<DeviceAlertPayload | null>(null);
+  const livePushTimerRef = useRef<number | null>(null);
   const [selectedCourseInitialTab, setSelectedCourseInitialTab] = useState<
     'stream' | 'attendance' | 'private_notes' | 'people'
   >('stream');
@@ -363,17 +371,104 @@ export default function App() {
     const handleStorageChange = () => {
       refreshData();
     };
+    const handleRemoteAttendanceOpen = (e: Event) => {
+      refreshData();
+      const detail = (e as CustomEvent)?.detail;
+      const loggedUser = ClassroomDB.getCurrentUser();
+      if (!loggedUser || !detail?.courseId) return;
+      const verify = ClassroomDB.getCourseById(detail.courseId, loggedUser);
+      if (!verify.course) return;
+      dispatchDeviceNotification({
+        id: `att_open_${detail.courseId}_${detail.date || Date.now()}`,
+        title: `🟢 Attendance ဖွင့်လှစ်လိုက်ပါပြီ — ${verify.course.title}`,
+        body: `${verify.course.title} အတန်းအတွက် ယနေ့ Attendance လက်ခံနေပါပြီ။ ယခုပင် Check-in ဝင်ရောက်နိုင်ပါသည်။`,
+        courseId: verify.course.id,
+        targetTab: 'attendance',
+        variant: 'attendance_open',
+      });
+    };
+    const handleRemoteAttendanceClose = (e: Event) => {
+      refreshData();
+      const detail = (e as CustomEvent)?.detail;
+      const loggedUser = ClassroomDB.getCurrentUser();
+      if (!loggedUser || !detail?.courseId) return;
+      const verify = ClassroomDB.getCourseById(detail.courseId, loggedUser);
+      if (!verify.course) return;
+      dispatchDeviceNotification({
+        id: `att_close_${detail.courseId}_${detail.date || Date.now()}`,
+        title: `🔴 Attendance ပိတ်သိမ်းလိုက်ပါပြီ — ${verify.course.title}`,
+        body: `${verify.course.title} အတန်း၏ ယနေ့ Attendance စာရင်းသွင်းမှုကို ပိတ်သိမ်းလိုက်ပါပြီ။`,
+        courseId: verify.course.id,
+        targetTab: 'attendance',
+        variant: 'attendance_close',
+      });
+    };
+    const handleLiveDeviceAlert = (e: Event) => {
+      const payload = (e as CustomEvent<DeviceAlertPayload>)?.detail;
+      if (!payload) return;
+      setLivePushBanner(payload);
+      if (livePushTimerRef.current) {
+        window.clearTimeout(livePushTimerRef.current);
+      }
+      livePushTimerRef.current = window.setTimeout(() => {
+        setLivePushBanner(null);
+      }, 6500);
+    };
+    const navigateToNotifTarget = (courseId?: string, targetTab?: string) => {
+      if (!courseId) return;
+      const loggedUser = ClassroomDB.getCurrentUser();
+      if (!loggedUser) return;
+      const check = ClassroomDB.getCourseById(courseId, loggedUser);
+      if (!check.course) return;
+      const validTab =
+        targetTab === 'attendance' || targetTab === 'private_notes' || targetTab === 'people'
+          ? targetTab
+          : 'stream';
+      setSelectedCourseInitialTab(validTab);
+      setSelectedCourse(check.course);
+      setPosts(ClassroomDB.getPostsForCourse(check.course.id, loggedUser));
+      setAssignments(ClassroomDB.getAssignments(check.course.id));
+      setQuizzes(ClassroomDB.getQuizzes(check.course.id));
+      setProgress(ClassroomDB.getStudentProgress(loggedUser.id, check.course.id));
+      setLivePushBanner(null);
+    };
+    const handleNotifNavigateEvent = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      navigateToNotifTarget(detail?.courseId, detail?.targetTab);
+    };
+    const handleServiceWorkerMessage = (event: MessageEvent) => {
+      if (event.data && event.data.type === 'NOTIFICATION_CLICKED') {
+        navigateToNotifTarget(event.data.courseId, event.data.targetTab);
+      }
+    };
+
     window.addEventListener('storage', handleStorageChange);
     window.addEventListener('attendance-realtime-updated', handleStorageChange);
-    window.addEventListener('attendance-opened-remotely', handleStorageChange);
-    window.addEventListener('attendance-closed-remotely', handleStorageChange);
+    window.addEventListener('attendance-opened-remotely', handleRemoteAttendanceOpen);
+    window.addEventListener('attendance-closed-remotely', handleRemoteAttendanceClose);
+    window.addEventListener('classroom-live-device-alert', handleLiveDeviceAlert);
+    window.addEventListener('classroom-notification-navigate', handleNotifNavigateEvent);
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage);
+    }
 
+    let hasRequestedNotifPermission = false;
     let lastUserInteractionAt = Date.now();
     let lastWakeUpPullAt = Date.now();
     const markUserActive = () => {
       const now = Date.now();
       const wasIdle = now - lastUserInteractionAt > 180_000;
       lastUserInteractionAt = now;
+      if (
+        !hasRequestedNotifPermission &&
+        typeof window !== 'undefined' &&
+        'Notification' in window &&
+        Notification.permission === 'default' &&
+        ClassroomDB.getCurrentUser()
+      ) {
+        hasRequestedNotifPermission = true;
+        requestDeviceNotificationPermission().catch(() => {});
+      }
       SupabaseService.resumeRealtimeConnection();
       if (
         wasIdle &&
@@ -517,8 +612,13 @@ export default function App() {
       unsubscribeRealtime();
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('attendance-realtime-updated', handleStorageChange);
-      window.removeEventListener('attendance-opened-remotely', handleStorageChange);
-      window.removeEventListener('attendance-closed-remotely', handleStorageChange);
+      window.removeEventListener('attendance-opened-remotely', handleRemoteAttendanceOpen);
+      window.removeEventListener('attendance-closed-remotely', handleRemoteAttendanceClose);
+      window.removeEventListener('classroom-live-device-alert', handleLiveDeviceAlert);
+      window.removeEventListener('classroom-notification-navigate', handleNotifNavigateEvent);
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', handleServiceWorkerMessage);
+      }
       window.removeEventListener('pointerdown', markUserActive);
       window.removeEventListener('keydown', markUserActive);
       window.removeEventListener('touchstart', markUserActive);
@@ -1352,6 +1452,67 @@ export default function App() {
           isOpen={showWebsiteModal}
           onClose={() => setShowWebsiteModal(false)}
         />
+
+        {/* Cross-Device Live Push Notification Banner (Phone, Tablet & Computer Browser) */}
+        {livePushBanner && (
+          <div className="fixed top-3 right-3 left-3 sm:left-auto sm:w-96 z-[80] animate-in fade-in slide-in-from-top-3 duration-200">
+            <div className="rounded-2xl bg-slate-900/95 dark:bg-slate-900/98 text-white border border-indigo-500/40 shadow-2xl p-3.5 backdrop-blur-md flex items-start gap-3">
+              <div
+                className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${
+                  livePushBanner.variant === 'attendance_open'
+                    ? 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300'
+                    : livePushBanner.variant === 'attendance_close'
+                    ? 'bg-rose-500/20 border-rose-400/40 text-rose-300'
+                    : 'bg-indigo-500/20 border-indigo-400/40 text-indigo-300'
+                }`}
+              >
+                <Bell className="w-5 h-5" />
+              </div>
+              <div
+                onClick={() => {
+                  if (livePushBanner.courseId) {
+                    window.dispatchEvent(
+                      new CustomEvent('classroom-notification-navigate', {
+                        detail: {
+                          courseId: livePushBanner.courseId,
+                          targetTab: livePushBanner.targetTab || 'stream',
+                        },
+                      })
+                    );
+                  } else {
+                    setLivePushBanner(null);
+                  }
+                }}
+                className="flex-1 min-w-0 cursor-pointer"
+              >
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <span className="px-1.5 py-0.5 rounded bg-indigo-500/30 text-indigo-200 font-mono text-[9px] font-bold uppercase tracking-wider">
+                    Classroom Alert
+                  </span>
+                </div>
+                <p className="text-xs font-extrabold text-white leading-snug line-clamp-1">
+                  {livePushBanner.title}
+                </p>
+                <p className="text-[11px] text-slate-300 leading-relaxed line-clamp-2 mt-0.5">
+                  {livePushBanner.body}
+                </p>
+                {livePushBanner.courseId && (
+                  <span className="inline-flex items-center gap-1 mt-1.5 text-[10px] font-bold text-amber-300 hover:underline">
+                    နှိပ်၍ တိုက်ရိုက်ကြည့်ရန် →
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setLivePushBanner(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer shrink-0"
+                aria-label="Close Notification Banner"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Persistent Premium Circular Floating Dictionary Button (Bottom-Right across Dashboard & All Classrooms) */}
         <div className="fixed bottom-5 right-4 sm:bottom-7 sm:right-7 z-40 group">

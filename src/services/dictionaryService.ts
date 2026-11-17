@@ -63,6 +63,16 @@ function buildMasterStaticList(): DictionaryEntry[] {
 
 export const MASTER_STATIC_DICTIONARY: DictionaryEntry[] = buildMasterStaticList();
 
+// O(1) instant lookup map by lowercase English headword
+const STATIC_HEADWORD_MAP = new Map<string, DictionaryEntry>();
+for (const entry of MASTER_STATIC_DICTIONARY) {
+  STATIC_HEADWORD_MAP.set(entry.en.trim().toLowerCase(), entry);
+}
+
+export function getInstantStaticEntry(word: string): DictionaryEntry | undefined {
+  return STATIC_HEADWORD_MAP.get(word.trim().toLowerCase());
+}
+
 export function containsMyanmarScript(text: string): boolean {
   return /[\u1000-\u109F\uAA60-\uAA7F]/.test(text);
 }
@@ -389,522 +399,632 @@ export function searchLocalDictionary(
 
 // Memory + LocalStorage cache for full Oxford dictionary lookups
 const oxfordMemoryCache = new Map<string, OxfordDictionaryData>();
+const inflightLookups = new Map<
+  string,
+  Promise<{ oxfordData: OxfordDictionaryData; summaryEntry: DictionaryEntry } | null>
+>();
 
-function loadOxfordStoredCache(): Record<string, OxfordDictionaryData> {
+let storedCacheLoaded = false;
+function ensureOxfordCacheLoaded(): void {
+  if (storedCacheLoaded) return;
+  storedCacheLoaded = true;
   try {
     const raw = localStorage.getItem(OXFORD_CACHE_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
-function saveOxfordStoredCache(key: string, data: OxfordDictionaryData): void {
-  oxfordMemoryCache.set(key, data);
-  try {
-    const current = loadOxfordStoredCache();
-    current[key] = data;
-    const keys = Object.keys(current);
-    if (keys.length > 120) {
-      delete current[keys[0]];
+    if (raw) {
+      const parsed = JSON.parse(raw) as Record<string, OxfordDictionaryData>;
+      for (const [k, v] of Object.entries(parsed)) {
+        if (k && v) {
+          oxfordMemoryCache.set(k, v);
+        }
+      }
     }
-    localStorage.setItem(OXFORD_CACHE_STORAGE_KEY, JSON.stringify(current));
   } catch {
     // ignore
   }
 }
 
+function saveOxfordStoredCache(key: string, data: OxfordDictionaryData): void {
+  ensureOxfordCacheLoaded();
+  oxfordMemoryCache.set(key, data);
+  const headKey = data.headword.trim().toLowerCase();
+  if (headKey) {
+    oxfordMemoryCache.set(headKey, data);
+  }
+  try {
+    const obj: Record<string, OxfordDictionaryData> = {};
+    const entries = Array.from(oxfordMemoryCache.entries()).slice(-150);
+    for (const [k, v] of entries) {
+      obj[k] = v;
+    }
+    localStorage.setItem(OXFORD_CACHE_STORAGE_KEY, JSON.stringify(obj));
+  } catch {
+    // ignore
+  }
+}
+
+function buildSummaryFromOxfordData(
+  cacheKey: string,
+  cached: OxfordDictionaryData,
+  existingStatic?: DictionaryEntry
+): DictionaryEntry {
+  if (existingStatic) return existingStatic;
+  return {
+    id: `oxford-${cacheKey.replace(/[^a-z0-9\u1000-\u109F]/gi, '-')}`,
+    en: cached.headword,
+    phonetic: cached.phoneticBrE,
+    pos: mapPosInfo(cached.primaryPos.split(',')[0] || 'noun').abbrev,
+    mm: cached.primaryMyanmarMeaning,
+    enDef: cached.englishOverviewDef,
+    exampleEn:
+      cached.meaningGroups[0]?.senses[0]?.exampleEn ||
+      `Example usage of "${cached.headword}".`,
+    exampleMm:
+      cached.meaningGroups[0]?.senses[0]?.exampleMm ||
+      cached.primaryMyanmarMeaning,
+    synonyms: cached.allSynonyms,
+    antonyms: cached.allAntonyms,
+    category: 'general',
+  };
+}
+
+async function fetchJsonWithTimeout(url: string, timeoutMs = 2800): Promise<unknown | null> {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = setTimeout(() => {
+    controller?.abort();
+  }, timeoutMs);
+  try {
+    const res = await fetch(url, controller ? { signal: controller.signal } : undefined);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+interface DictApiRawEntry {
+  word?: string;
+  phonetic?: string;
+  phonetics?: Array<{ text?: string; audio?: string }>;
+  meanings?: Array<{
+    partOfSpeech?: string;
+    definitions?: Array<{
+      definition?: string;
+      example?: string;
+      synonyms?: string[];
+      antonyms?: string[];
+    }>;
+    synonyms?: string[];
+    antonyms?: string[];
+  }>;
+}
+
 /**
- * Fetch fast live autocomplete word suggestions for ANY English prefix (using Datamuse free API)
+ * Fast parallel fetch of English dictionary senses from dictionaryapi.dev
  */
+async function fetchEnglishDictApiFast(rawEnglishWord: string): Promise<DictApiRawEntry | null> {
+  const candidates = getEnglishCandidateStems(rawEnglishWord).filter(
+    (w) => Boolean(w) && !containsMyanmarScript(w)
+  );
+  if (candidates.length === 0) return null;
+
+  // Query top 2 candidates in parallel (e.g. inflected word + base lemma) so we never wait sequentially!
+  const primaryCandidates = candidates.slice(0, 2);
+  const results = await Promise.all(
+    primaryCandidates.map((cand) =>
+      fetchJsonWithTimeout(
+        `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(cand)}`,
+        2600
+      )
+    )
+  );
+
+  for (const dictJson of results) {
+    if (Array.isArray(dictJson) && dictJson.length > 0) {
+      const first = dictJson[0] as DictApiRawEntry;
+      const mergedMeanings = dictJson.flatMap((item: { meanings?: unknown[] }) =>
+        Array.isArray(item?.meanings) ? item.meanings : []
+      ) as DictApiRawEntry['meanings'];
+      return {
+        ...first,
+        meanings: mergedMeanings,
+      };
+    }
+  }
+  return null;
+}
+
+function parseGtxResponse(gtxData: unknown): {
+  primaryTranslation: string;
+  posMap: Map<string, { terms: string[]; reverseTerms: string[] }>;
+} {
+  let primaryTranslation = '';
+  const posMap = new Map<string, { terms: string[]; reverseTerms: string[] }>();
+
+  if (!Array.isArray(gtxData)) {
+    return { primaryTranslation, posMap };
+  }
+
+  if (Array.isArray(gtxData[0])) {
+    primaryTranslation = gtxData[0]
+      .map((seg: unknown) => (Array.isArray(seg) ? seg[0] : ''))
+      .join('')
+      .trim();
+  }
+
+  if (Array.isArray(gtxData[1])) {
+    for (const group of gtxData[1]) {
+      if (Array.isArray(group)) {
+        const posInfo = mapPosInfo(typeof group[0] === 'string' ? group[0] : 'noun');
+        const terms = Array.isArray(group[1])
+          ? group[1].filter((t: unknown) => typeof t === 'string').slice(0, 8)
+          : [];
+        const reverseTerms: string[] = [];
+        if (Array.isArray(group[2])) {
+          for (const detail of group[2].slice(0, 5)) {
+            if (Array.isArray(detail) && Array.isArray(detail[1])) {
+              for (const rev of detail[1].slice(0, 4)) {
+                if (typeof rev === 'string' && !reverseTerms.includes(rev)) {
+                  reverseTerms.push(rev);
+                }
+              }
+            }
+          }
+        }
+        if (terms.length > 0) {
+          posMap.set(posInfo.full, { terms, reverseTerms });
+        }
+      }
+    }
+  }
+
+  return { primaryTranslation, posMap };
+}
+
+/**
+ * Fetch fast live autocomplete word suggestions for ANY English prefix
+ */
+const suggestionCache = new Map<string, string[]>();
 export async function fetchWordSuggestions(prefix: string): Promise<string[]> {
   const q = prefix.trim().toLowerCase();
   if (!q || q.length < 2 || containsMyanmarScript(q)) return [];
+  if (suggestionCache.has(q)) {
+    return suggestionCache.get(q)!;
+  }
   try {
-    const res = await fetch(
-      `https://api.datamuse.com/sug?s=${encodeURIComponent(q)}&max=8`
+    const data = await fetchJsonWithTimeout(
+      `https://api.datamuse.com/sug?s=${encodeURIComponent(q)}&max=8`,
+      1500
     );
-    if (!res.ok) return [];
-    const data = await res.json();
     if (!Array.isArray(data)) return [];
-    return data
+    const list = data
       .map((item: { word?: string }) => (typeof item?.word === 'string' ? item.word : ''))
       .filter(Boolean);
+    suggestionCache.set(q, list);
+    return list;
   } catch {
     return [];
   }
 }
 
 /**
- * Full Oxford-Style Deep Lookup for ANY English or Myanmar word/phrase!
- * Combines:
- * 1. Curated Static Entry (if matched)
- * 2. Google GTX Bilingual Dictionary (`dt=t&dt=bd&dt=md&dt=ex&dt=ss&dt=at`)
- * 3. Free English Dictionary API (`api.dictionaryapi.dev`) for multi-POS, numbered senses, BrE/NAmE IPA phonetics, and native audio MP3s!
+ * Ultra-Fast Parallel Oxford-Style Lookup for ANY English or Myanmar word/phrase!
+ * - Zero Supabase usage (0% database, 0% egress)
+ * - Runs Google GTX Bilingual API & Free Dictionary API simultaneously in parallel
+ * - Emits `onFastPreview` in ~80ms as soon as GTX responds so the UI updates immediately
  */
 export async function fetchOxfordDictionaryEntry(
-  rawQuery: string
+  rawQuery: string,
+  onFastPreview?: (preview: {
+    oxfordData: OxfordDictionaryData;
+    summaryEntry: DictionaryEntry;
+  }) => void
 ): Promise<{ oxfordData: OxfordDictionaryData; summaryEntry: DictionaryEntry } | null> {
   const query = rawQuery.trim();
   if (!query) return null;
 
+  ensureOxfordCacheLoaded();
   const cacheKey = query.toLowerCase();
-  const existingStatic = MASTER_STATIC_DICTIONARY.find(
-    (item) => item.en.toLowerCase() === cacheKey
-  );
+  const existingStatic = STATIC_HEADWORD_MAP.get(cacheKey);
 
+  // Instant memory/localStorage hit (0ms)
   if (oxfordMemoryCache.has(cacheKey)) {
     const cached = oxfordMemoryCache.get(cacheKey)!;
     return {
       oxfordData: cached,
-      summaryEntry: existingStatic || {
-        id: `oxford-${cacheKey.replace(/[^a-z0-9\u1000-\u109F]/gi, '-')}`,
-        en: cached.headword,
-        phonetic: cached.phoneticBrE,
-        pos: mapPosInfo(cached.primaryPos.split(',')[0] || 'noun').abbrev,
-        mm: cached.primaryMyanmarMeaning,
-        enDef: cached.englishOverviewDef,
-        exampleEn:
-          cached.meaningGroups[0]?.senses[0]?.exampleEn ||
-          `Example usage of "${cached.headword}".`,
-        exampleMm:
-          cached.meaningGroups[0]?.senses[0]?.exampleMm ||
-          cached.primaryMyanmarMeaning,
-        synonyms: cached.allSynonyms,
-        antonyms: cached.allAntonyms,
-        category: 'general',
-      },
+      summaryEntry: buildSummaryFromOxfordData(cacheKey, cached, existingStatic),
     };
   }
 
-  const stored = loadOxfordStoredCache();
-  if (stored[cacheKey]) {
-    const cached = stored[cacheKey];
-    oxfordMemoryCache.set(cacheKey, cached);
-    return {
-      oxfordData: cached,
-      summaryEntry: existingStatic || {
-        id: `oxford-${cacheKey.replace(/[^a-z0-9\u1000-\u109F]/gi, '-')}`,
-        en: cached.headword,
-        phonetic: cached.phoneticBrE,
-        pos: mapPosInfo(cached.primaryPos.split(',')[0] || 'noun').abbrev,
-        mm: cached.primaryMyanmarMeaning,
-        enDef: cached.englishOverviewDef,
-        exampleEn:
-          cached.meaningGroups[0]?.senses[0]?.exampleEn ||
-          `Example usage of "${cached.headword}".`,
-        exampleMm:
-          cached.meaningGroups[0]?.senses[0]?.exampleMm ||
-          cached.primaryMyanmarMeaning,
-        synonyms: cached.allSynonyms,
-        antonyms: cached.allAntonyms,
-        category: 'general',
-      },
-    };
+  // Deduplicate concurrent identical requests
+  if (inflightLookups.has(cacheKey)) {
+    return inflightLookups.get(cacheKey)!;
   }
 
-  const isMmQuery = containsMyanmarScript(query);
-  const sourceLang = isMmQuery ? 'my' : 'en';
-  const targetLang = isMmQuery ? 'en' : 'my';
+  const lookupPromise = (async () => {
+    const isMmQuery = containsMyanmarScript(query);
+    const sourceLang = isMmQuery ? 'my' : 'en';
+    const targetLang = isMmQuery ? 'en' : 'my';
 
-  try {
-    // Step 1: Query Google GTX Bilingual Dictionary (`dt=t&dt=bd&dt=md&dt=ex&dt=ss&dt=at`)
-    const gtxUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sourceLang}&tl=${targetLang}&dt=t&dt=bd&dt=md&dt=ex&dt=ss&dt=at&q=${encodeURIComponent(
-      query
-    )}`;
+    try {
+      const gtxUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sourceLang}&tl=${targetLang}&dt=t&dt=bd&dt=md&dt=ex&dt=ss&dt=at&q=${encodeURIComponent(
+        query
+      )}`;
 
-    const gtxRes = await fetch(gtxUrl);
-    let primaryTranslation = '';
-    const gtxPosMap = new Map<
-      string,
-      { terms: string[]; reverseTerms: string[] }
-    >();
+      let gtxPrimaryTranslation = '';
+      let gtxPosMap = new Map<string, { terms: string[]; reverseTerms: string[] }>();
+      let dictApiEntry: DictApiRawEntry | null = null;
 
-    if (gtxRes.ok) {
-      const gtxData = await gtxRes.json();
+      if (!isMmQuery) {
+        // PARALLEL EXECUTION for English queries:
+        // Fire Google GTX (~80ms) AND Free Dictionary API (~220ms) at the exact same time!
+        const gtxTask = fetchJsonWithTimeout(gtxUrl, 2500).then((gtxJson) => {
+          const parsed = parseGtxResponse(gtxJson);
+          gtxPrimaryTranslation = parsed.primaryTranslation;
+          gtxPosMap = parsed.posMap;
 
-      if (Array.isArray(gtxData?.[0])) {
-        primaryTranslation = gtxData[0]
-          .map((seg: unknown) => (Array.isArray(seg) ? seg[0] : ''))
-          .join('')
-          .trim();
-      }
-
-      if (Array.isArray(gtxData?.[1])) {
-        for (const group of gtxData[1]) {
-          if (Array.isArray(group)) {
-            const posInfo = mapPosInfo(typeof group[0] === 'string' ? group[0] : 'noun');
-            const terms = Array.isArray(group[1])
-              ? group[1].filter((t: unknown) => typeof t === 'string').slice(0, 8)
-              : [];
-            const reverseTerms: string[] = [];
-            if (Array.isArray(group[2])) {
-              for (const detail of group[2].slice(0, 5)) {
-                if (Array.isArray(detail) && Array.isArray(detail[1])) {
-                  for (const rev of detail[1].slice(0, 4)) {
-                    if (typeof rev === 'string' && !reverseTerms.includes(rev)) {
-                      reverseTerms.push(rev);
-                    }
-                  }
-                }
+          // Progressive Fast Preview (~80ms): immediately give the user the Myanmar meaning while audio/senses finish
+          if (onFastPreview && (parsed.primaryTranslation || parsed.posMap.size > 0)) {
+            const fastTerms: string[] = [];
+            if (parsed.primaryTranslation) fastTerms.push(parsed.primaryTranslation);
+            for (const g of parsed.posMap.values()) {
+              for (const t of g.terms.slice(0, 4)) {
+                if (!fastTerms.includes(t)) fastTerms.push(t);
               }
             }
-            if (terms.length > 0) {
-              gtxPosMap.set(posInfo.full, { terms, reverseTerms });
+            const fastMm = existingStatic?.mm || fastTerms.slice(0, 5).join('၊ ') || query;
+            const previewGroups: OxfordMeaningGroup[] = [];
+            for (const [posKey, grp] of parsed.posMap.entries()) {
+              const pInfo = mapPosInfo(posKey);
+              previewGroups.push({
+                partOfSpeech: pInfo.full,
+                posAbbrev: pInfo.abbrev,
+                posMm: pInfo.mm,
+                mmTerms: grp.terms,
+                senses: [
+                  {
+                    senseNumber: 1,
+                    definitionEn:
+                      existingStatic?.enDef ||
+                      (grp.reverseTerms.length > 0
+                        ? `Meanings: ${grp.reverseTerms.join(', ')}.`
+                        : `Myanmar meaning: ${grp.terms.join('၊ ')}`),
+                    definitionMm: grp.terms.join('၊ '),
+                    exampleEn: existingStatic?.exampleEn,
+                    exampleMm: existingStatic?.exampleMm,
+                  },
+                ],
+                synonyms: grp.reverseTerms.slice(0, 6),
+                antonyms: [],
+              });
             }
+            if (previewGroups.length === 0) {
+              const pInfo = mapPosInfo(existingStatic?.pos || 'noun');
+              previewGroups.push({
+                partOfSpeech: pInfo.full,
+                posAbbrev: pInfo.abbrev,
+                posMm: pInfo.mm,
+                mmTerms: [fastMm],
+                senses: [
+                  {
+                    senseNumber: 1,
+                    definitionEn: existingStatic?.enDef || `Meaning of "${query}": ${fastMm}`,
+                    definitionMm: fastMm,
+                  },
+                ],
+                synonyms: existingStatic?.synonyms || [],
+                antonyms: existingStatic?.antonyms || [],
+              });
+            }
+            const fastOxford: OxfordDictionaryData = {
+              headword: existingStatic?.en || query,
+              searchedQuery: query,
+              isMyanmarSearch: false,
+              phoneticBrE: existingStatic?.phonetic || `/${query.toLowerCase()}/`,
+              phoneticNAmE: existingStatic?.phonetic || `/${query.toLowerCase()}/`,
+              primaryPos: previewGroups.map((g) => g.partOfSpeech).join(', '),
+              cefrLevel: estimateCefrLevel(query, existingStatic?.category),
+              primaryMyanmarMeaning: fastMm,
+              englishOverviewDef:
+                existingStatic?.enDef || previewGroups[0].senses[0].definitionEn,
+              meaningGroups: previewGroups,
+              allSynonyms: existingStatic?.synonyms || previewGroups[0]?.synonyms || [],
+              allAntonyms: existingStatic?.antonyms || [],
+            };
+            onFastPreview({
+              oxfordData: fastOxford,
+              summaryEntry: buildSummaryFromOxfordData(cacheKey, fastOxford, existingStatic),
+            });
           }
+        });
+
+        const dictTask = fetchEnglishDictApiFast(query).then((res) => {
+          dictApiEntry = res;
+        });
+
+        await Promise.all([gtxTask, dictTask]);
+      } else {
+        // Myanmar query: Step 1 resolves Myanmar -> English headword, then parallelizes English -> Myanmar POS & English Dict API!
+        const gtxJson = await fetchJsonWithTimeout(gtxUrl, 2500);
+        const parsed = parseGtxResponse(gtxJson);
+        gtxPrimaryTranslation = parsed.primaryTranslation;
+        gtxPosMap = parsed.posMap;
+      }
+
+      // Determine the canonical English headword
+      let enHeadword = isMmQuery ? gtxPrimaryTranslation : query;
+      if (isMmQuery && gtxPosMap.size > 0) {
+        const firstGroup = Array.from(gtxPosMap.values())[0];
+        if (firstGroup.terms[0]) {
+          enHeadword = firstGroup.terms[0];
         }
       }
-    }
-
-    // Determine the canonical English headword and primary Myanmar meaning
-    let enHeadword = isMmQuery ? primaryTranslation : query;
-    if (isMmQuery && gtxPosMap.size > 0) {
-      const firstGroup = Array.from(gtxPosMap.values())[0];
-      if (firstGroup.terms[0]) {
-        enHeadword = firstGroup.terms[0];
+      if (!enHeadword) {
+        enHeadword = query;
       }
-    }
-    if (!enHeadword) {
-      enHeadword = query;
-    }
 
-    // Check if the resolved English headword matches one of our curated static entries
-    const matchedCurated =
-      existingStatic ||
-      MASTER_STATIC_DICTIONARY.find(
-        (item) => item.en.toLowerCase() === enHeadword.trim().toLowerCase()
-      );
+      const matchedCurated =
+        existingStatic || STATIC_HEADWORD_MAP.get(enHeadword.trim().toLowerCase());
 
-    // If it was a Myanmar query, also fetch English -> Myanmar GTX for the resolved English headword so we get full Myanmar POS breakdowns!
-    if (isMmQuery && enHeadword && !containsMyanmarScript(enHeadword)) {
-      try {
+      // For Myanmar queries, fetch reverse POS breakdown & English Dictionary API in PARALLEL!
+      if (isMmQuery && enHeadword && !containsMyanmarScript(enHeadword)) {
         const revUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=my&dt=t&dt=bd&q=${encodeURIComponent(
           enHeadword
         )}`;
-        const revRes = await fetch(revUrl);
-        if (revRes.ok) {
-          const revData = await revRes.json();
-          if (Array.isArray(revData?.[1])) {
-            gtxPosMap.clear();
-            for (const group of revData[1]) {
-              if (Array.isArray(group)) {
-                const posInfo = mapPosInfo(typeof group[0] === 'string' ? group[0] : 'noun');
-                const terms = Array.isArray(group[1])
-                  ? group[1].filter((t: unknown) => typeof t === 'string').slice(0, 8)
-                  : [];
-                const reverseTerms: string[] = [];
-                if (Array.isArray(group[2])) {
-                  for (const detail of group[2].slice(0, 5)) {
-                    if (Array.isArray(detail) && Array.isArray(detail[1])) {
-                      for (const rev of detail[1].slice(0, 4)) {
-                        if (typeof rev === 'string' && !reverseTerms.includes(rev)) {
-                          reverseTerms.push(rev);
-                        }
-                      }
-                    }
-                  }
-                }
-                if (terms.length > 0) {
-                  gtxPosMap.set(posInfo.full, { terms, reverseTerms });
-                }
+        const [revJson, dictRes] = await Promise.all([
+          fetchJsonWithTimeout(revUrl, 2400),
+          fetchEnglishDictApiFast(enHeadword),
+        ]);
+        dictApiEntry = dictRes;
+        const revParsed = parseGtxResponse(revJson);
+        if (revParsed.posMap.size > 0) {
+          gtxPosMap = revParsed.posMap;
+        }
+      }
+
+      // Build primary Myanmar meaning string
+      let primaryMyanmarMeaning = matchedCurated?.mm || '';
+      if (!primaryMyanmarMeaning) {
+        const allMmTerms: string[] = [];
+        if (isMmQuery) {
+          allMmTerms.push(query);
+        } else if (gtxPrimaryTranslation) {
+          allMmTerms.push(gtxPrimaryTranslation);
+        }
+        for (const g of gtxPosMap.values()) {
+          for (const t of g.terms.slice(0, 4)) {
+            if (!allMmTerms.includes(t)) {
+              allMmTerms.push(t);
+            }
+          }
+        }
+        primaryMyanmarMeaning =
+          allMmTerms.slice(0, 6).join('၊ ') || gtxPrimaryTranslation || query;
+      } else if (isMmQuery && !primaryMyanmarMeaning.includes(query)) {
+        primaryMyanmarMeaning = `${query}၊ ${primaryMyanmarMeaning}`;
+      }
+
+      // Build Oxford Meaning Groups & Phonetics
+      let phoneticBrE = matchedCurated?.phonetic || '';
+      let phoneticNAmE = matchedCurated?.phonetic || '';
+      let audioBrE: string | undefined;
+      let audioNAmE: string | undefined;
+
+      const meaningGroups: OxfordMeaningGroup[] = [];
+      const allSynonymsSet = new Set<string>(matchedCurated?.synonyms || []);
+      const allAntonymsSet = new Set<string>(matchedCurated?.antonyms || []);
+
+      if (dictApiEntry) {
+        const defaultIpa =
+          dictApiEntry.phonetic ||
+          dictApiEntry.phonetics?.find((p) => Boolean(p?.text))?.text ||
+          phoneticBrE ||
+          `/${enHeadword.toLowerCase()}/`;
+
+        phoneticBrE = defaultIpa;
+        phoneticNAmE = defaultIpa;
+
+        if (Array.isArray(dictApiEntry.phonetics)) {
+          for (const p of dictApiEntry.phonetics) {
+            const audioUrl = p?.audio || '';
+            if (audioUrl) {
+              if (audioUrl.includes('-uk') || audioUrl.includes('_gb')) {
+                audioBrE = audioUrl;
+                if (p.text) phoneticBrE = p.text;
+              } else if (audioUrl.includes('-us') || audioUrl.includes('_us')) {
+                audioNAmE = audioUrl;
+                if (p.text) phoneticNAmE = p.text;
+              } else if (!audioBrE) {
+                audioBrE = audioUrl;
               }
             }
           }
         }
-      } catch {
-        // ignore
-      }
-    }
 
-    // Build primary Myanmar meaning string
-    let primaryMyanmarMeaning = matchedCurated?.mm || '';
-    if (!primaryMyanmarMeaning) {
-      const allMmTerms: string[] = [];
-      if (isMmQuery) {
-        allMmTerms.push(query);
-      } else if (primaryTranslation) {
-        allMmTerms.push(primaryTranslation);
-      }
-      for (const g of gtxPosMap.values()) {
-        for (const t of g.terms.slice(0, 4)) {
-          if (!allMmTerms.includes(t)) {
-            allMmTerms.push(t);
+        const groupedByPos = new Map<
+          string,
+          {
+            posInfo: { full: string; abbrev: string; mm: string };
+            senses: OxfordSense[];
+            synonyms: Set<string>;
+            antonyms: Set<string>;
           }
-        }
-      }
-      primaryMyanmarMeaning = allMmTerms.slice(0, 6).join('၊ ') || primaryTranslation || query;
-    } else if (isMmQuery && !primaryMyanmarMeaning.includes(query)) {
-      primaryMyanmarMeaning = `${query}၊ ${primaryMyanmarMeaning}`;
-    }
+        >();
 
-    // Step 2: Query Free English Dictionary API (`api.dictionaryapi.dev`) for full Oxford-style senses, phonetics & audio
-    let phoneticBrE = matchedCurated?.phonetic || '';
-    let phoneticNAmE = matchedCurated?.phonetic || '';
-    let audioBrE: string | undefined;
-    let audioNAmE: string | undefined;
-
-    const meaningGroups: OxfordMeaningGroup[] = [];
-    const allSynonymsSet = new Set<string>(matchedCurated?.synonyms || []);
-    const allAntonymsSet = new Set<string>(matchedCurated?.antonyms || []);
-
-    const candidateLookupWords = getEnglishCandidateStems(enHeadword.trim());
-    let dictApiEntry: {
-      word?: string;
-      phonetic?: string;
-      phonetics?: Array<{ text?: string; audio?: string }>;
-      meanings?: Array<{
-        partOfSpeech?: string;
-        definitions?: Array<{
-          definition?: string;
-          example?: string;
-          synonyms?: string[];
-          antonyms?: string[];
-        }>;
-        synonyms?: string[];
-        antonyms?: string[];
-      }>;
-    } | null = null;
-
-    for (const candidate of candidateLookupWords) {
-      if (!candidate || containsMyanmarScript(candidate)) continue;
-      try {
-        const dictRes = await fetch(
-          `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(candidate)}`
-        );
-        if (dictRes.ok) {
-          const dictJson = await dictRes.json();
-          if (Array.isArray(dictJson) && dictJson.length > 0) {
-            // Merge meanings across all homograph entries returned by dictionaryapi.dev
-            const first = dictJson[0];
-            const mergedMeanings = dictJson.flatMap(
-              (item: { meanings?: unknown[] }) =>
-                Array.isArray(item?.meanings) ? item.meanings : []
-            );
-            dictApiEntry = {
-              ...first,
-              meanings: mergedMeanings,
-            };
-            break;
+        for (const m of dictApiEntry.meanings || []) {
+          const posInfo = mapPosInfo(m.partOfSpeech || 'noun');
+          if (!groupedByPos.has(posInfo.full)) {
+            groupedByPos.set(posInfo.full, {
+              posInfo,
+              senses: [],
+              synonyms: new Set<string>(),
+              antonyms: new Set<string>(),
+            });
           }
-        }
-      } catch {
-        // continue
-      }
-    }
+          const bucket = groupedByPos.get(posInfo.full)!;
 
-    if (dictApiEntry) {
-      const defaultIpa =
-        dictApiEntry.phonetic ||
-        dictApiEntry.phonetics?.find((p) => Boolean(p?.text))?.text ||
-        phoneticBrE ||
-        `/${enHeadword.toLowerCase()}/`;
+          for (const s of m.synonyms || []) {
+            if (typeof s === 'string') {
+              bucket.synonyms.add(s);
+              if (allSynonymsSet.size < 12) allSynonymsSet.add(s);
+            }
+          }
+          for (const a of m.antonyms || []) {
+            if (typeof a === 'string') {
+              bucket.antonyms.add(a);
+              if (allAntonymsSet.size < 10) allAntonymsSet.add(a);
+            }
+          }
 
-      phoneticBrE = defaultIpa;
-      phoneticNAmE = defaultIpa;
-
-      if (Array.isArray(dictApiEntry.phonetics)) {
-        for (const p of dictApiEntry.phonetics) {
-          const audioUrl = p?.audio || '';
-          if (audioUrl) {
-            if (audioUrl.includes('-uk') || audioUrl.includes('_gb')) {
-              audioBrE = audioUrl;
-              if (p.text) phoneticBrE = p.text;
-            } else if (audioUrl.includes('-us') || audioUrl.includes('_us')) {
-              audioNAmE = audioUrl;
-              if (p.text) phoneticNAmE = p.text;
-            } else if (!audioBrE) {
-              audioBrE = audioUrl;
+          for (const d of (m.definitions || []).slice(0, 4)) {
+            if (d?.definition && bucket.senses.length < 5) {
+              bucket.senses.push({
+                senseNumber: bucket.senses.length + 1,
+                definitionEn: d.definition,
+                exampleEn: d.example,
+                synonyms: (d.synonyms || []).slice(0, 4),
+                antonyms: (d.antonyms || []).slice(0, 4),
+              });
             }
           }
         }
-      }
 
-      // Group meanings by Part of Speech
-      const groupedByPos = new Map<
-        string,
-        {
-          posInfo: { full: string; abbrev: string; mm: string };
-          senses: OxfordSense[];
-          synonyms: Set<string>;
-          antonyms: Set<string>;
-        }
-      >();
+        for (const [posKey, bucket] of groupedByPos.entries()) {
+          const gtxGroup = gtxPosMap.get(posKey);
+          const mmTerms = gtxGroup?.terms || [];
+          for (const rev of gtxGroup?.reverseTerms || []) {
+            if (
+              rev.toLowerCase() !== enHeadword.toLowerCase() &&
+              allSynonymsSet.size < 12
+            ) {
+              allSynonymsSet.add(rev);
+            }
+          }
 
-      for (const m of dictApiEntry.meanings || []) {
-        const posInfo = mapPosInfo(m.partOfSpeech || 'noun');
-        if (!groupedByPos.has(posInfo.full)) {
-          groupedByPos.set(posInfo.full, {
-            posInfo,
-            senses: [],
-            synonyms: new Set<string>(),
-            antonyms: new Set<string>(),
+          if (bucket.senses.length > 0 && matchedCurated) {
+            if (!bucket.senses[0].exampleEn) {
+              bucket.senses[0].exampleEn = matchedCurated.exampleEn;
+              bucket.senses[0].exampleMm = matchedCurated.exampleMm;
+            }
+            bucket.senses[0].definitionMm = matchedCurated.mmDetail || matchedCurated.mm;
+          } else if (bucket.senses.length > 0 && mmTerms.length > 0) {
+            bucket.senses[0].definitionMm = mmTerms.slice(0, 4).join('၊ ');
+          }
+
+          meaningGroups.push({
+            partOfSpeech: bucket.posInfo.full,
+            posAbbrev: bucket.posInfo.abbrev,
+            posMm: bucket.posInfo.mm,
+            mmTerms,
+            senses: bucket.senses,
+            synonyms: Array.from(bucket.synonyms).slice(0, 8),
+            antonyms: Array.from(bucket.antonyms).slice(0, 6),
           });
         }
-        const bucket = groupedByPos.get(posInfo.full)!;
+      }
 
-        for (const s of m.synonyms || []) {
-          if (typeof s === 'string') {
-            bucket.synonyms.add(s);
-            if (allSynonymsSet.size < 12) allSynonymsSet.add(s);
-          }
-        }
-        for (const a of m.antonyms || []) {
-          if (typeof a === 'string') {
-            bucket.antonyms.add(a);
-            if (allAntonymsSet.size < 10) allAntonymsSet.add(a);
-          }
-        }
-
-        for (const d of (m.definitions || []).slice(0, 4)) {
-          if (d?.definition && bucket.senses.length < 5) {
-            bucket.senses.push({
-              senseNumber: bucket.senses.length + 1,
-              definitionEn: d.definition,
-              exampleEn: d.example,
-              synonyms: (d.synonyms || []).slice(0, 4),
-              antonyms: (d.antonyms || []).slice(0, 4),
+      if (meaningGroups.length === 0) {
+        if (gtxPosMap.size > 0) {
+          for (const [posKey, gtxGroup] of gtxPosMap.entries()) {
+            const posInfo = mapPosInfo(posKey);
+            meaningGroups.push({
+              partOfSpeech: posInfo.full,
+              posAbbrev: posInfo.abbrev,
+              posMm: posInfo.mm,
+              mmTerms: gtxGroup.terms,
+              senses: [
+                {
+                  senseNumber: 1,
+                  definitionEn:
+                    matchedCurated?.enDef ||
+                    (gtxGroup.reverseTerms.length > 0
+                      ? `Related English meanings: ${gtxGroup.reverseTerms.join(', ')}.`
+                      : `Meaning of "${enHeadword}": ${gtxGroup.terms.join(', ')}.`),
+                  definitionMm: gtxGroup.terms.join('၊ '),
+                  exampleEn: matchedCurated?.exampleEn,
+                  exampleMm: matchedCurated?.exampleMm,
+                },
+              ],
+              synonyms: gtxGroup.reverseTerms.slice(0, 6),
+              antonyms: [],
             });
           }
-        }
-      }
-
-      for (const [posKey, bucket] of groupedByPos.entries()) {
-        const gtxGroup = gtxPosMap.get(posKey);
-        const mmTerms = gtxGroup?.terms || [];
-        for (const rev of gtxGroup?.reverseTerms || []) {
-          if (rev.toLowerCase() !== enHeadword.toLowerCase() && allSynonymsSet.size < 12) {
-            allSynonymsSet.add(rev);
-          }
-        }
-
-        // If the first sense matches our curated entry, attach curated Myanmar example
-        if (bucket.senses.length > 0 && matchedCurated) {
-          if (!bucket.senses[0].exampleEn) {
-            bucket.senses[0].exampleEn = matchedCurated.exampleEn;
-            bucket.senses[0].exampleMm = matchedCurated.exampleMm;
-          }
-          bucket.senses[0].definitionMm = matchedCurated.mmDetail || matchedCurated.mm;
-        } else if (bucket.senses.length > 0 && mmTerms.length > 0) {
-          bucket.senses[0].definitionMm = mmTerms.slice(0, 4).join('၊ ');
-        }
-
-        meaningGroups.push({
-          partOfSpeech: bucket.posInfo.full,
-          posAbbrev: bucket.posInfo.abbrev,
-          posMm: bucket.posInfo.mm,
-          mmTerms,
-          senses: bucket.senses,
-          synonyms: Array.from(bucket.synonyms).slice(0, 8),
-          antonyms: Array.from(bucket.antonyms).slice(0, 6),
-        });
-      }
-    }
-
-    // If dictionaryapi.dev didn't have entries (e.g., multi-word idiom/phrase), build from GTX + Curated
-    if (meaningGroups.length === 0) {
-      if (gtxPosMap.size > 0) {
-        for (const [posKey, gtxGroup] of gtxPosMap.entries()) {
-          const posInfo = mapPosInfo(posKey);
+        } else if (matchedCurated) {
+          return {
+            oxfordData: convertStaticToOxfordData(matchedCurated),
+            summaryEntry: matchedCurated,
+          };
+        } else if (gtxPrimaryTranslation) {
+          const posInfo = mapPosInfo('noun');
           meaningGroups.push({
             partOfSpeech: posInfo.full,
             posAbbrev: posInfo.abbrev,
             posMm: posInfo.mm,
-            mmTerms: gtxGroup.terms,
+            mmTerms: [primaryMyanmarMeaning],
             senses: [
               {
                 senseNumber: 1,
-                definitionEn:
-                  matchedCurated?.enDef ||
-                  (gtxGroup.reverseTerms.length > 0
-                    ? `Related English meanings: ${gtxGroup.reverseTerms.join(', ')}.`
-                    : `Meaning of "${enHeadword}": ${gtxGroup.terms.join(', ')}.`),
-                definitionMm: gtxGroup.terms.join('၊ '),
-                exampleEn: matchedCurated?.exampleEn,
-                exampleMm: matchedCurated?.exampleMm,
+                definitionEn: isMmQuery
+                  ? `English translation for "${query}": ${enHeadword}`
+                  : `Myanmar translation for "${enHeadword}": ${primaryMyanmarMeaning}`,
+                definitionMm: primaryMyanmarMeaning,
               },
             ],
-            synonyms: gtxGroup.reverseTerms.slice(0, 6),
+            synonyms: [],
             antonyms: [],
           });
+        } else {
+          return null;
         }
-      } else if (matchedCurated) {
-        return {
-          oxfordData: convertStaticToOxfordData(matchedCurated),
-          summaryEntry: matchedCurated,
-        };
-      } else if (primaryTranslation) {
-        const posInfo = mapPosInfo('noun');
-        meaningGroups.push({
-          partOfSpeech: posInfo.full,
-          posAbbrev: posInfo.abbrev,
-          posMm: posInfo.mm,
-          mmTerms: [primaryMyanmarMeaning],
-          senses: [
-            {
-              senseNumber: 1,
-              definitionEn: isMmQuery
-                ? `English translation for "${query}": ${enHeadword}`
-                : `Myanmar translation for "${enHeadword}": ${primaryMyanmarMeaning}`,
-              definitionMm: primaryMyanmarMeaning,
-            },
-          ],
-          synonyms: [],
-          antonyms: [],
-        });
-      } else {
-        return null;
       }
-    }
 
-    const firstSense = meaningGroups[0]?.senses[0];
-    const englishOverviewDef =
-      matchedCurated?.enDef ||
-      firstSense?.definitionEn ||
-      `Definition of ${enHeadword}`;
+      const firstSense = meaningGroups[0]?.senses[0];
+      const englishOverviewDef =
+        matchedCurated?.enDef ||
+        firstSense?.definitionEn ||
+        `Definition of ${enHeadword}`;
 
-    const oxfordData: OxfordDictionaryData = {
-      headword: matchedCurated?.en || enHeadword,
-      searchedQuery: query,
-      isMyanmarSearch: isMmQuery,
-      phoneticBrE: phoneticBrE || `/${enHeadword.toLowerCase()}/`,
-      phoneticNAmE: phoneticNAmE || phoneticBrE || `/${enHeadword.toLowerCase()}/`,
-      audioBrE,
-      audioNAmE,
-      primaryPos: meaningGroups.map((g) => g.partOfSpeech).join(', '),
-      cefrLevel: estimateCefrLevel(enHeadword, matchedCurated?.category),
-      primaryMyanmarMeaning,
-      englishOverviewDef,
-      meaningGroups,
-      allSynonyms: Array.from(allSynonymsSet).slice(0, 10),
-      allAntonyms: Array.from(allAntonymsSet).slice(0, 8),
-    };
-
-    saveOxfordStoredCache(cacheKey, oxfordData);
-
-    const summaryEntry: DictionaryEntry = matchedCurated || {
-      id: `oxford-${cacheKey.replace(/[^a-z0-9\u1000-\u109F]/gi, '-')}`,
-      en: oxfordData.headword,
-      phonetic: oxfordData.phoneticBrE,
-      pos: meaningGroups[0]?.posAbbrev || 'n.',
-      mm: oxfordData.primaryMyanmarMeaning,
-      enDef: oxfordData.englishOverviewDef,
-      exampleEn:
-        firstSense?.exampleEn || `Example usage of "${oxfordData.headword}".`,
-      exampleMm: firstSense?.exampleMm || oxfordData.primaryMyanmarMeaning,
-      synonyms: oxfordData.allSynonyms,
-      antonyms: oxfordData.allAntonyms,
-      category: 'general',
-    };
-
-    return { oxfordData, summaryEntry };
-  } catch {
-    if (existingStatic) {
-      return {
-        oxfordData: convertStaticToOxfordData(existingStatic),
-        summaryEntry: existingStatic,
+      const oxfordData: OxfordDictionaryData = {
+        headword: matchedCurated?.en || enHeadword,
+        searchedQuery: query,
+        isMyanmarSearch: isMmQuery,
+        phoneticBrE: phoneticBrE || `/${enHeadword.toLowerCase()}/`,
+        phoneticNAmE:
+          phoneticNAmE || phoneticBrE || `/${enHeadword.toLowerCase()}/`,
+        audioBrE,
+        audioNAmE,
+        primaryPos: meaningGroups.map((g) => g.partOfSpeech).join(', '),
+        cefrLevel: estimateCefrLevel(enHeadword, matchedCurated?.category),
+        primaryMyanmarMeaning,
+        englishOverviewDef,
+        meaningGroups,
+        allSynonyms: Array.from(allSynonymsSet).slice(0, 10),
+        allAntonyms: Array.from(allAntonymsSet).slice(0, 8),
       };
+
+      saveOxfordStoredCache(cacheKey, oxfordData);
+
+      const summaryEntry = buildSummaryFromOxfordData(
+        cacheKey,
+        oxfordData,
+        matchedCurated
+      );
+
+      return { oxfordData, summaryEntry };
+    } catch {
+      if (existingStatic) {
+        return {
+          oxfordData: convertStaticToOxfordData(existingStatic),
+          summaryEntry: existingStatic,
+        };
+      }
+      return null;
+    } finally {
+      inflightLookups.delete(cacheKey);
     }
-    return null;
-  }
+  })();
+
+  inflightLookups.set(cacheKey, lookupPromise);
+  return lookupPromise;
 }
