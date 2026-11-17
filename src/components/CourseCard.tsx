@@ -6,8 +6,6 @@ import {
   ArrowRight,
   Trash2,
   AlertTriangle,
-  ArrowUp,
-  ArrowDown,
   Lock,
   CalendarCheck,
   CheckCircle2,
@@ -31,8 +29,8 @@ export const CourseCard: React.FC<CourseCardProps> = ({
   course,
   currentUser,
   progress: _progress,
-  courseIndex = 0,
-  totalCourses = 1,
+  courseIndex: _courseIndex = 0,
+  totalCourses: _totalCourses = 1,
   onSelectCourse,
   onRefresh,
 }) => {
@@ -73,18 +71,6 @@ export const CourseCard: React.FC<CourseCardProps> = ({
     }
   };
 
-  const handleMoveOrder = (
-    e: React.MouseEvent,
-    direction: 'up' | 'down' | 'top' | 'bottom' | number
-  ) => {
-    e.stopPropagation();
-    ClassroomDB.moveCourseOrder(course.id, direction);
-    if (onRefresh) {
-      onRefresh();
-    }
-  };
-
-  const currentPosition = courseIndex + 1;
   const resolvedBanner = resolveCourseBannerUrl(course.bannerImage);
   const isOfficialBanner = isSwanArhOfficialBanner(resolvedBanner);
 
@@ -112,74 +98,6 @@ export const CourseCard: React.FC<CourseCardProps> = ({
                   isOfficialBanner ? 'object-contain' : 'object-cover group-hover:scale-103'
                 }`}
               />
-              {/* Order Badge & Reorder Controls Overlay for Admin / Co-Admin */}
-              {isInstructor && (
-                <div
-                  onClick={(e) => e.stopPropagation()}
-                  className="absolute top-2 left-2 flex items-center gap-1 bg-slate-900/80 backdrop-blur-xs text-white px-2 py-1 rounded-lg shadow-sm border border-white/15"
-                  title="Classroom Display Order (အတန်း အစီအစဉ် ပြောင်းရန်)"
-                >
-                  <span className="text-[10px] font-mono font-extrabold text-indigo-300 pr-0.5">
-                    #{currentPosition}
-                  </span>
-                  {totalCourses > 1 && (
-                    <>
-                      <button
-                        type="button"
-                        disabled={courseIndex === 0}
-                        onClick={(e) => handleMoveOrder(e, 'up')}
-                        className="p-0.5 rounded hover:bg-white/20 disabled:opacity-30 transition-colors cursor-pointer disabled:cursor-not-allowed"
-                        title="Move Up / Earlier (ရှေ့သို့ရွှေ့မည်)"
-                        aria-label="Move Classroom Earlier"
-                      >
-                        <ArrowUp className="w-3 h-3" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={courseIndex >= totalCourses - 1}
-                        onClick={(e) => handleMoveOrder(e, 'down')}
-                        className="p-0.5 rounded hover:bg-white/20 disabled:opacity-30 transition-colors cursor-pointer disabled:cursor-not-allowed"
-                        title="Move Down / Later (နောက်သို့ရွှေ့မည်)"
-                        aria-label="Move Classroom Later"
-                      >
-                        <ArrowDown className="w-3 h-3" />
-                      </button>
-                      <select
-                        value={currentPosition}
-                        onChange={(e) => {
-                          e.stopPropagation();
-                          ClassroomDB.moveCourseOrder(course.id, Number(e.target.value));
-                          if (onRefresh) onRefresh();
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                        className="bg-slate-800/90 text-white text-[10px] font-mono font-bold rounded px-1 py-0.5 border border-white/20 focus:outline-none cursor-pointer"
-                        title="Select exact position (အစီအစဉ် နံပါတ်ရွေးရန်)"
-                      >
-                        {Array.from({ length: totalCourses }, (_, idx) => idx + 1).map((pos) => (
-                          <option key={pos} value={pos}>
-                            အမှတ်စဉ် {pos}
-                          </option>
-                        ))}
-                      </select>
-                    </>
-                  )}
-                </div>
-              )}
-
-              {isInstructor && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowDeleteConfirm(true);
-                  }}
-                  className="absolute top-2 right-2 p-1.5 rounded-lg bg-slate-900/75 hover:bg-rose-600 text-white backdrop-blur-xs transition-colors cursor-pointer shadow-sm"
-                  title="Delete Classroom (အတန်းဖျက်မည်)"
-                  aria-label="Delete Classroom"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              )}
             </div>
           </div>
 
