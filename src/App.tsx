@@ -17,6 +17,8 @@ import { SupabaseModal } from './components/SupabaseModal';
 import { AcademyRulesModal } from './components/AcademyRulesModal';
 import { AdminAuditLogModal } from './components/AdminAuditLogModal';
 import { OfficialWebsiteModal, OFFICIAL_ACADEMY_WEBSITE_URL } from './components/OfficialWebsiteModal';
+import { DictionaryModal } from './components/DictionaryModal';
+import { SelectionDictionaryTrigger } from './components/SelectionDictionaryTrigger';
 import {
   BookOpen,
   Plus,
@@ -39,6 +41,7 @@ import {
   History,
   Globe,
   ExternalLink,
+  BookA,
 } from 'lucide-react';
 
 export default function App() {
@@ -79,6 +82,8 @@ export default function App() {
   const [showRulesModal, setShowRulesModal] = useState(false);
   const [showAuditLogModal, setShowAuditLogModal] = useState(false);
   const [showWebsiteModal, setShowWebsiteModal] = useState(false);
+  const [showDictionaryModal, setShowDictionaryModal] = useState(false);
+  const [dictionaryInitialQuery, setDictionaryInitialQuery] = useState('');
   const [showReorderPanel, setShowReorderPanel] = useState(false);
   const [draggedCourseId, setDraggedCourseId] = useState<string | null>(null);
   const [appBannerError, setAppBannerError] = useState<string | null>(null);
@@ -97,6 +102,12 @@ export default function App() {
   useBackHandler(showRulesModal, () => setShowRulesModal(false));
   useBackHandler(showAuditLogModal, () => setShowAuditLogModal(false));
   useBackHandler(showWebsiteModal, () => setShowWebsiteModal(false));
+  useBackHandler(showDictionaryModal, () => setShowDictionaryModal(false));
+
+  const handleOpenDictionary = (initialWord?: string) => {
+    setDictionaryInitialQuery(initialWord ? initialWord.trim() : '');
+    setShowDictionaryModal(true);
+  };
 
   // Performance & Theme Settings
   const [isLowBandwidth, setIsLowBandwidth] = useState(false);
@@ -1340,6 +1351,54 @@ export default function App() {
         <OfficialWebsiteModal
           isOpen={showWebsiteModal}
           onClose={() => setShowWebsiteModal(false)}
+        />
+
+        {/* Persistent Premium Circular Floating Dictionary Button (Bottom-Right across Dashboard & All Classrooms) */}
+        <div className="fixed bottom-5 right-4 sm:bottom-7 sm:right-7 z-40 group">
+          {/* Hover Tooltip Label on Desktop */}
+          <div className="pointer-events-none absolute right-full mr-3 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 translate-x-2 group-hover:translate-x-0 transition-all duration-200 hidden sm:flex items-center">
+            <div className="neu-raised px-3.5 py-2 rounded-2xl border border-indigo-500/25 shadow-xl whitespace-nowrap flex items-center gap-2">
+              <span className="text-xs font-extrabold text-slate-900 dark:text-white">
+                အင်္ဂလိပ် ⇄ မြန်မာ အဘိဓာန်
+              </span>
+              <span className="px-1.5 py-0.5 rounded-md bg-indigo-600 text-white font-mono text-[10px] font-bold">
+                Dictionary
+              </span>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => handleOpenDictionary()}
+            aria-label="Open English to Myanmar Dictionary"
+            title="English ⇄ Myanmar Dictionary (အင်္ဂလိပ် ⇄ မြန်မာ အဘိဓာန်)"
+            className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-gradient-to-br from-indigo-600 via-indigo-700 to-slate-900 dark:from-indigo-500 dark:via-indigo-700 dark:to-slate-900 text-white shadow-[0_10px_28px_-4px_rgba(79,70,229,0.65)] hover:shadow-[0_14px_34px_-2px_rgba(79,70,229,0.85)] ring-4 ring-white/85 dark:ring-slate-800/90 hover:scale-105 active:scale-95 transition-all duration-200 flex flex-col items-center justify-center cursor-pointer"
+          >
+            {/* Subtle Inner Gloss Ring */}
+            <span
+              className="pointer-events-none absolute inset-1 rounded-full border border-white/25"
+              aria-hidden="true"
+            />
+            <BookA className="w-6 h-6 sm:w-6.5 sm:h-6.5 text-white drop-shadow-xs" />
+            <span className="mt-0.5 text-[8px] sm:text-[9px] font-mono font-extrabold tracking-tight text-amber-300 leading-none">
+              EN⇄MM
+            </span>
+          </button>
+        </div>
+
+        {/* English ⇄ Myanmar Dictionary Modal (0 MB Supabase Usage) */}
+        {showDictionaryModal && (
+          <DictionaryModal
+            isOpen={showDictionaryModal}
+            onClose={() => setShowDictionaryModal(false)}
+            initialQuery={dictionaryInitialQuery}
+          />
+        )}
+
+        {/* Quick Text-Selection Lookup Trigger inside Classroom */}
+        <SelectionDictionaryTrigger
+          disabled={showDictionaryModal}
+          onLookupWord={(word) => handleOpenDictionary(word)}
         />
 
         {/* Primary Admin Local Cache Reset Confirmation Modal */}
