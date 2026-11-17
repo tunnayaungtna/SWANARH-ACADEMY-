@@ -16,7 +16,6 @@ import {
   Star,
   X,
   Plus,
-  Sparkles,
   Copy,
   Check,
   Trash2,
@@ -119,21 +118,24 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
     return Array.from(map.values());
   }, [customEntries, liveLookupEntry]);
 
-  const wordOfTheDay = useMemo(() => {
-    const dayIndex =
-      Math.floor(Date.now() / 86_400_000) % MASTER_STATIC_DICTIONARY.length;
-    return MASTER_STATIC_DICTIONARY[dayIndex] || MASTER_STATIC_DICTIONARY[0];
-  }, []);
-
-  // Strict local search (zero false positives)
+  // Only return local entries when the user is actively searching OR viewing their Saved words
   const { localResults, hasExactLocalMatch } = useMemo(() => {
-    let baseList = [...customEntries, ...MASTER_STATIC_DICTIONARY];
-
+    const q = searchQuery.trim();
     if (showSavedOnly) {
-      baseList = combinedEntries.filter((item) => savedIds.includes(item.id));
+      const savedList = combinedEntries.filter((item) => savedIds.includes(item.id));
+      if (!q) {
+        return { localResults: savedList, hasExactLocalMatch: savedList.length > 0 };
+      }
+      const { results, hasExactMatch } = searchLocalDictionary(q, savedList);
+      return { localResults: results, hasExactLocalMatch: hasExactMatch };
     }
 
-    const { results, hasExactMatch } = searchLocalDictionary(searchQuery, baseList);
+    if (!q) {
+      return { localResults: [], hasExactLocalMatch: false };
+    }
+
+    const baseList = [...customEntries, ...MASTER_STATIC_DICTIONARY];
+    const { results, hasExactMatch } = searchLocalDictionary(q, baseList);
     return { localResults: results, hasExactLocalMatch: hasExactMatch };
   }, [customEntries, combinedEntries, showSavedOnly, searchQuery, savedIds]);
 
@@ -231,9 +233,12 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
     };
   }, [searchQuery]);
 
-  // Final displayed list combining live exact result + strict local matches
+  // Final displayed list combining live exact result + strict local matches (ONLY when searching or viewing Saved)
   const displayedEntries = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
+    if (!q && !showSavedOnly) {
+      return [];
+    }
     if (!liveLookupEntry || !q) {
       return localResults;
     }
@@ -248,17 +253,21 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
       (r) => r.en.trim().toLowerCase() !== liveEnLower && r.id !== liveLookupEntry.id
     );
     return [liveLookupEntry, ...filteredLocal];
-  }, [localResults, liveLookupEntry, searchQuery, hasExactLocalMatch]);
+  }, [localResults, liveLookupEntry, searchQuery, showSavedOnly, hasExactLocalMatch]);
 
+  // Only select an entry when the user has searched something OR is viewing Saved words
   const selectedEntry = useMemo(() => {
+    if (!searchQuery.trim() && !showSavedOnly) {
+      return null;
+    }
     if (selectedEntryId) {
       const found =
         displayedEntries.find((e) => e.id === selectedEntryId) ||
         combinedEntries.find((e) => e.id === selectedEntryId);
       if (found) return found;
     }
-    return displayedEntries[0] || (!searchQuery.trim() ? wordOfTheDay : null);
-  }, [selectedEntryId, displayedEntries, combinedEntries, wordOfTheDay, searchQuery]);
+    return displayedEntries[0] || null;
+  }, [selectedEntryId, displayedEntries, combinedEntries, searchQuery, showSavedOnly]);
 
   // Automatically enrich whichever entry is currently selected with full Oxford multi-POS senses & native audio
   useEffect(() => {
@@ -287,7 +296,7 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
     };
   }, [selectedEntry, oxfordMap]);
 
-  // Resolved OxfordDictionaryData for the right-hand panel (instant fallback + enriched multi-POS data)
+  // Resolved OxfordDictionaryData for the active entry
   const activeOxfordData: OxfordDictionaryData | null = useMemo(() => {
     if (!selectedEntry) return null;
     const headwordKey = selectedEntry.en.trim().toLowerCase();
@@ -461,13 +470,15 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
 
   if (!isOpen) return null;
 
+  const isSearching = Boolean(searchQuery.trim());
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/75 backdrop-blur-sm animate-in fade-in duration-150"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-5xl max-h-[90dvh] rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-[0_28px_70px_-15px_rgba(0,33,71,0.55)] flex flex-col overflow-hidden"
+        className="w-full max-w-4xl max-h-[90dvh] rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-[0_28px_70px_-15px_rgba(0,33,71,0.55)] flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Authentic Oxford Navy Header Bar */}
@@ -566,7 +577,7 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
                     setShowSavedOnly(false);
                   }
                 }}
-                placeholder="အင်္ဂလိပ် သို့မဟုတ် မြန်မာစာလုံး မည်သည့်စာလုံးမဆို ရိုက်ထည့်ရှာဖွေပါ... (ဥပမာ - run, set, serendipity, ပန်းသီး, ပညာရေး)"
+                placeholder="အင်္ဂလိပ် သို့မဟုတ် မြန်မာစာလုံး မည်သည့်စာလုံးမဆို ရိုက်ထည့်ရှာဖွေပါ..."
                 className="w-full pl-11 pr-20 py-2.5 sm:py-3 rounded-2xl bg-white dark:bg-slate-900 text-slate-900 dark:text-white placeholder-slate-400 text-xs sm:text-sm font-semibold shadow-inner focus:outline-none focus:ring-2 focus:ring-amber-400"
               />
               {searchQuery && (
@@ -593,8 +604,8 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
             </button>
           </form>
 
-          {/* Instant Live Autocomplete Suggestions or Recent Searches */}
-          {suggestions.length > 0 && searchQuery.trim().length >= 2 ? (
+          {/* Instant Live Autocomplete Suggestions (ONLY while typing a search) */}
+          {suggestions.length > 0 && searchQuery.trim().length >= 2 && (
             <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
               <span className="text-[10px] font-bold text-amber-200/90 uppercase tracking-wider">
                 ဆက်စပ်စာလုံးများ:
@@ -610,25 +621,6 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
                 </button>
               ))}
             </div>
-          ) : (
-            recentSearches.length > 0 &&
-            !searchQuery && (
-              <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-                <span className="text-[10px] font-bold text-slate-300">
-                  ပြန်ကြည့်ရန်:
-                </span>
-                {recentSearches.map((term) => (
-                  <button
-                    key={term}
-                    type="button"
-                    onClick={() => handleSelectWordJump(term)}
-                    className="px-2.5 py-0.5 rounded-lg bg-white/10 hover:bg-amber-400 hover:text-[#002147] text-[11px] font-medium text-slate-200 cursor-pointer transition-colors"
-                  >
-                    {term}
-                  </button>
-                ))}
-              </div>
-            )
           )}
         </div>
 
@@ -705,120 +697,112 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
           </form>
         )}
 
-        {/* Main Split Body: Left Index List + Right Oxford Entry View */}
-        <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-12 overflow-hidden">
-          {/* Left Panel: Headword Index */}
-          <div className="md:col-span-4 border-b md:border-b-0 md:border-r border-slate-200/80 dark:border-slate-800 overflow-y-auto max-h-44 md:max-h-full p-2.5 space-y-1 bg-slate-50/40 dark:bg-slate-900/30">
-            <div className="flex items-center justify-between px-2.5 py-1 text-[11px] font-bold text-slate-400">
-              <span>
-                {showSavedOnly
-                  ? `မှတ်သားထားသော စာလုံးများ (${displayedEntries.length})`
-                  : `ဝေါဟာရစာရင်း (${displayedEntries.length})`}
-              </span>
-              {isLookingUpLive && (
-                <span className="text-[#002147] dark:text-sky-400 text-[10px] font-bold flex items-center gap-1">
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  ရှာဖွေနေသည်...
-                </span>
-              )}
+        {/* Main Body: Only shows results when searching or viewing Saved Words */}
+        {!isSearching && !showSavedOnly ? (
+          <div className="p-8 sm:p-12 text-center space-y-4 bg-white dark:bg-slate-900">
+            <div className="w-14 h-14 rounded-2xl bg-[#002147]/10 dark:bg-slate-800 text-[#002147] dark:text-amber-300 flex items-center justify-center mx-auto">
+              <Search className="w-6 h-6" />
+            </div>
+            <div className="space-y-1 max-w-md mx-auto">
+              <h3 className="text-sm sm:text-base font-extrabold text-slate-800 dark:text-slate-100">
+                ရှာဖွေလိုသော စာလုံးကို ရိုက်ထည့်ပါ
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                အပေါ်ရှိ ရှာဖွေရေးအကွက်တွင် အင်္ဂလိပ်စာလုံး သို့မဟုတ် မြန်မာစာလုံး ရိုက်ထည့်လိုက်သည်နှင့် Oxford အဘိဓာန်ပုံစံ အသံထွက်၊ အဓိပ္ပာယ်နှင့် ဥပမာဝါကျများကို ချက်ချင်း ဖော်ပြပေးပါမည်။
+              </p>
             </div>
 
-            {displayedEntries.length === 0 ? (
-              <div className="p-6 text-center space-y-2">
-                {isLookingUpLive ? (
-                  <div className="flex flex-col items-center gap-2 py-4">
-                    <Loader2 className="w-5 h-5 text-[#002147] dark:text-sky-400 animate-spin" />
-                    <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                      “{searchQuery}” ကို Oxford အဘိဓာန်တွင် ရှာဖွေနေပါသည်...
-                    </p>
-                  </div>
+            {recentSearches.length > 0 && (
+              <div className="pt-2 flex items-center justify-center gap-1.5 flex-wrap max-w-lg mx-auto">
+                <span className="text-[11px] font-bold text-slate-400">
+                  နောက်ဆုံးရှာခဲ့သော စာလုံးများ:
+                </span>
+                {recentSearches.map((term) => (
+                  <button
+                    key={term}
+                    type="button"
+                    onClick={() => handleSelectWordJump(term)}
+                    className="px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-[#002147] hover:text-white dark:hover:bg-amber-400 dark:hover:text-[#002147] text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer transition-colors"
+                  >
+                    {term}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 space-y-5 bg-white dark:bg-slate-900">
+            {/* Saved Words Selector Bar (Only when viewing Saved Words) */}
+            {showSavedOnly && (
+              <div className="space-y-2 pb-3 border-b border-slate-200 dark:border-slate-800">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-[#002147] dark:text-amber-300 flex items-center gap-1.5">
+                    <Star className="w-3.5 h-3.5 fill-current" />
+                    မှတ်သားထားသော စာလုံးများ ({displayedEntries.length})
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowSavedOnly(false)}
+                    className="text-xs font-bold text-slate-500 hover:text-rose-600 cursor-pointer"
+                  >
+                    ရှာဖွေမှုသို့ ပြန်သွားမည်
+                  </button>
+                </div>
+                {displayedEntries.length === 0 ? (
+                  <p className="text-xs text-slate-500 dark:text-slate-400 py-4 text-center">
+                    မှတ်သားထားသော ဝေါဟာရ မရှိသေးပါ။ စာလုံးရှာဖွေပြီး “မှတ်မည်” ခလုတ်ကို နှိပ်၍ သိမ်းဆည်းနိုင်ပါသည်။
+                  </p>
                 ) : (
-                  <div className="space-y-2 py-3">
-                    <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                      {showSavedOnly
-                        ? 'မှတ်သားထားသော ဝေါဟာရ မရှိသေးပါ။'
-                        : `“${searchQuery}” အတွက် စာလုံးပေါင်း ပြန်လည်စစ်ဆေးပါ။`}
-                    </p>
-                    {searchQuery.trim() && (
-                      <button
-                        type="button"
-                        onClick={() => triggerUniversalLookup(searchQuery)}
-                        className="px-3 py-1.5 rounded-xl bg-[#002147] text-white text-xs font-bold cursor-pointer"
-                      >
-                        “{searchQuery}” ကို အသေးစိတ် ပြန်ရှာမည်
-                      </button>
-                    )}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {displayedEntries.map((entry) => {
+                      const isSelected = selectedEntry?.id === entry.id;
+                      return (
+                        <button
+                          key={entry.id}
+                          type="button"
+                          onClick={() => setSelectedEntryId(entry.id)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-[#002147] text-white shadow-xs'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200/70'
+                          }`}
+                        >
+                          {entry.en} ({entry.mm})
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
-            ) : (
-              displayedEntries.map((entry) => {
-                const isSelected = selectedEntry?.id === entry.id;
-                const isSaved = savedIds.includes(entry.id);
-                return (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedEntryId(entry.id);
-                      if (searchQuery.trim()) {
-                        recordRecentSearch(searchQuery.trim());
-                      }
-                    }}
-                    className={`w-full text-left px-3 py-2.5 rounded-xl transition-all flex items-center justify-between gap-2 cursor-pointer ${
-                      isSelected
-                        ? 'bg-[#002147] text-white shadow-xs'
-                        : 'hover:bg-slate-200/60 dark:hover:bg-slate-800/70 text-slate-800 dark:text-slate-100'
-                    }`}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs sm:text-sm font-extrabold truncate">
-                          {entry.en}
-                        </span>
-                        <span
-                          className={`text-[10px] italic font-serif px-1.5 py-0.2 rounded shrink-0 ${
-                            isSelected
-                              ? 'bg-white/15 text-amber-200'
-                              : 'bg-slate-200/80 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
-                          }`}
-                        >
-                          {entry.pos}
-                        </span>
-                      </div>
-                      <p
-                        className={`text-xs mt-0.5 truncate ${
-                          isSelected
-                            ? 'text-slate-200 font-medium'
-                            : 'text-slate-500 dark:text-slate-400'
-                        }`}
-                      >
-                        {entry.mm}
-                      </p>
-                    </div>
-
-                    {isSaved && (
-                      <Star
-                        className={`w-3.5 h-3.5 shrink-0 fill-current ${
-                          isSelected ? 'text-amber-300' : 'text-amber-400'
-                        }`}
-                      />
-                    )}
-                  </button>
-                );
-              })
             )}
-          </div>
 
-          {/* Right Panel: Authentic Oxford Learner's Dictionary Entry View */}
-          <div className="md:col-span-8 overflow-y-auto p-4 sm:p-6 space-y-5 bg-white dark:bg-slate-900">
-            {!searchQuery.trim() && selectedEntry?.id === wordOfTheDay.id && (
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-50 dark:bg-amber-950/50 border border-amber-200/80 dark:border-amber-800/50 text-[11px] font-bold text-amber-800 dark:text-amber-300">
-                <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                <span>Word of the Day • ယနေ့အတွက် မှတ်သားဖွယ် ဝေါဟာရ</span>
+            {/* Loading state when looking up a brand new word */}
+            {isSearching && !selectedEntry && isLookingUpLive && (
+              <div className="py-12 text-center space-y-3">
+                <Loader2 className="w-6 h-6 text-[#002147] dark:text-sky-400 animate-spin mx-auto" />
+                <p className="text-xs sm:text-sm font-semibold text-slate-500 dark:text-slate-400">
+                  “{searchQuery}” ကို ရှာဖွေနေပါသည်...
+                </p>
               </div>
             )}
 
+            {/* Not found state */}
+            {isSearching && !selectedEntry && !isLookingUpLive && (
+              <div className="py-10 text-center space-y-3">
+                <p className="text-xs sm:text-sm font-semibold text-slate-500 dark:text-slate-400">
+                  “{searchQuery}” အတွက် စာလုံးပေါင်း ပြန်လည်စစ်ဆေးပါ။
+                </p>
+                <button
+                  type="button"
+                  onClick={() => triggerUniversalLookup(searchQuery)}
+                  className="px-4 py-2 rounded-xl bg-[#002147] text-white text-xs font-bold cursor-pointer"
+                >
+                  “{searchQuery}” ကို ပြန်ရှာမည်
+                </button>
+              </div>
+            )}
+
+            {/* Authentic Oxford Learner's Dictionary Entry View */}
             {selectedEntry && activeOxfordData && (
               <div className="space-y-5">
                 {/* OXFORD HEADWORD BLOCK */}
@@ -1160,7 +1144,7 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
               </div>
             )}
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

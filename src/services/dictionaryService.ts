@@ -329,7 +329,7 @@ export function searchLocalDictionary(
 ): { results: DictionaryEntry[]; hasExactMatch: boolean } {
   const q = query.trim().toLowerCase();
   if (!q) {
-    return { results: entries, hasExactMatch: true };
+    return { results: [], hasExactMatch: false };
   }
 
   const isMm = containsMyanmarScript(q);
