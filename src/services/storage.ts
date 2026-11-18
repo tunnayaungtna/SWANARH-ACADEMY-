@@ -7167,9 +7167,147 @@ export class ClassroomDB {
   static getQuizzes(courseId: string): Quiz[] {
     const deletedSet = new Set(this.getDeletedIds());
     const quizzes = this.getItem<Quiz[]>(STORAGE_KEYS.QUIZZES, INITIAL_QUIZZES);
-    return quizzes.filter(
-      (q) => q.courseId === courseId && !deletedSet.has(q.id) && !deletedSet.has(q.courseId)
-    );
+    return quizzes
+      .filter(
+        (q) => q.courseId === courseId && !deletedSet.has(q.id) && !deletedSet.has(q.courseId)
+      )
+      .sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
+  }
+
+  static saveQuiz(
+    quizInput: {
+      id?: string;
+      courseId: string;
+      title: string;
+      description: string;
+      durationMinutes: number;
+      passingScore: number;
+      mode?: 'exam' | 'practice';
+      enableFlashcards?: boolean;
+      showAnswersImmediately?: boolean;
+      dueNotice?: string;
+      questions: Quiz['questions'];
+    },
+    currentUser: User
+  ): Quiz | null {
+    if (currentUser.role !== 'admin' && currentUser.role !== 'co_admin') return null;
+    const quizzes = this.getItem<Quiz[]>(STORAGE_KEYS.QUIZZES, INITIAL_QUIZZES);
+    const isEditing = Boolean(quizInput.id && quizzes.some((q) => q.id === quizInput.id));
+    const existing = isEditing ? quizzes.find((q) => q.id === quizInput.id) : undefined;
+    const nowMs = Date.now();
+    const quizId = existing?.id || `quiz-${nowMs}-${Math.random().toString(36).slice(2, 6)}`;
+
+    const savedQuiz: Quiz = {
+      id: quizId,
+      courseId: quizInput.courseId,
+      title: quizInput.title.trim(),
+      description: quizInput.description.trim() || 'Auto-Graded Assessment & Flashcards',
+      durationMinutes: Math.max(1, Number(quizInput.durationMinutes) || 20),
+      passingScore: Math.min(100, Math.max(1, Number(quizInput.passingScore) || 60)),
+      mode: quizInput.mode === 'practice' ? 'practice' : 'exam',
+      enableFlashcards: quizInput.enableFlashcards !== false,
+      showAnswersImmediately: quizInput.showAnswersImmediately !== false,
+      dueNotice: quizInput.dueNotice?.trim() || undefined,
+      createdBy: existing?.createdBy || currentUser.name,
+      createdAt:
+        existing?.createdAt ||
+        new Date(nowMs).toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+        }),
+      createdAtMs: existing?.createdAtMs || nowMs,
+      questions: (quizInput.questions || []).map((q, idx) => ({
+        id: q.id && q.id !== '__quiz_meta__' ? q.id : `q-${nowMs}-${idx + 1}`,
+        question: q.question.trim(),
+        options: q.options.map((opt) => opt.trim()),
+        correctIndex: Math.max(0, Math.min(q.options.length - 1, Number(q.correctIndex) || 0)),
+        explanation: (q.explanation || '').trim(),
+      })),
+    };
+
+    const nextQuizzes = isEditing
+      ? quizzes.map((q) => (q.id === quizId ? savedQuiz : q))
+      : [savedQuiz, ...quizzes];
+    this.setItem(STORAGE_KEYS.QUIZZES, nextQuizzes);
+    this.markLocalWrite(quizId);
+
+    // Update course totalQuizzes count
+    const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const courseQuizzesCount = nextQuizzes.filter((q) => q.courseId === savedQuiz.courseId).length;
+    const targetCourse = courses.find((c) => c.id === savedQuiz.courseId);
+    if (targetCourse) {
+      const updatedCourse: Course = { ...targetCourse, totalQuizzes: courseQuizzesCount };
+      this.setItem(
+        STORAGE_KEYS.COURSES,
+        courses.map((c) => (c.id === updatedCourse.id ? updatedCourse : c))
+      );
+      try {
+        SupabaseService.upsertCourse(updatedCourse).catch(() => {});
+      } catch {
+        // ignore
+      }
+    }
+
+    try {
+      SupabaseService.upsertQuiz(savedQuiz).catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    // Broadcast notification when creating a new quiz
+    if (!isEditing && targetCourse) {
+      const modeLabel =
+        savedQuiz.mode === 'practice'
+          ? 'လေ့ကျင့်ခန်း Quiz & ကတ်ပြား'
+          : 'စာမေးပွဲ (Auto-Graded Exam)';
+      const newNotif: NotificationItem = {
+        id: `notif-quiz-${nowMs}`,
+        userId: 'COURSE_BROADCAST',
+        courseId: targetCourse.id,
+        courseCode: targetCourse.code,
+        courseTitle: targetCourse.title,
+        authorName: currentUser.name,
+        authorRole: currentUser.role,
+        title: `📝 ${targetCourse.code}: ${modeLabel} အသစ် — "${savedQuiz.title}"`,
+        message: `မေးခွန်း (${savedQuiz.questions.length}) ပုဒ် · ဖြေဆိုချိန် ${savedQuiz.durationMinutes} မိနစ် · အောင်မှတ် ${savedQuiz.passingScore}% (ဆရာ ${currentUser.name})`,
+        type: 'quiz',
+        targetTab: 'quizzes',
+        isRead: false,
+        createdAt: 'Just now',
+        createdAtMs: nowMs,
+        expiresAtMs: nowMs + 30 * 60 * 1000,
+      };
+      const existingNotifs = this.getItem<NotificationItem[]>(
+        STORAGE_KEYS.NOTIFICATIONS,
+        INITIAL_NOTIFICATIONS
+      );
+      this.setItem(STORAGE_KEYS.NOTIFICATIONS, [newNotif, ...existingNotifs]);
+      try {
+        SupabaseService.upsertNotifications([newNotif]).catch(() => {});
+      } catch {
+        // ignore
+      }
+    }
+
+    this.recordAuditLog({
+      actor: currentUser,
+      category: 'academic',
+      actionCode: isEditing ? 'QUIZ_UPDATED' : 'QUIZ_CREATED',
+      actionLabel: isEditing
+        ? 'Quiz ပြင်ဆင်ခြင်း (Quiz Updated)'
+        : 'Quiz / စာမေးပွဲအသစ် ဖန်တီးခြင်း (Quiz Created)',
+      severity: 'info',
+      targetType: 'quiz',
+      targetId: savedQuiz.id,
+      targetName: savedQuiz.title,
+      courseId: savedQuiz.courseId,
+      summary: `"${savedQuiz.title}" (${savedQuiz.questions.length} ပုဒ်) ကို ${
+        isEditing ? 'ပြင်ဆင်' : 'ဖန်တီး'
+      }ခဲ့ပါသည်။`,
+    });
+
+    return savedQuiz;
   }
 
   static deleteQuiz(quizId: string, currentUser: User): boolean {
@@ -7178,16 +7316,36 @@ export class ClassroomDB {
     const targetQuiz = quizzes.find((q) => q.id === quizId);
     if (!targetQuiz) return false;
 
-    this.setItem(
-      STORAGE_KEYS.QUIZZES,
-      quizzes.filter((q) => q.id !== quizId)
+    const remainingQuizzes = quizzes.filter((q) => q.id !== quizId);
+    this.setItem(STORAGE_KEYS.QUIZZES, remainingQuizzes);
+    const quizSubs = this.getItem<QuizSubmission[]>(
+      STORAGE_KEYS.QUIZ_SUBMISSIONS,
+      INITIAL_QUIZ_SUBMISSIONS
     );
-    const quizSubs = this.getItem<QuizSubmission[]>(STORAGE_KEYS.QUIZ_SUBMISSIONS, INITIAL_QUIZ_SUBMISSIONS);
     this.setItem(
       STORAGE_KEYS.QUIZ_SUBMISSIONS,
       quizSubs.filter((qs) => qs.quizId !== quizId)
     );
     this.recordDeletedIds([quizId]);
+
+    // Update course totalQuizzes count
+    const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const targetCourse = courses.find((c) => c.id === targetQuiz.courseId);
+    if (targetCourse) {
+      const courseQuizzesCount = remainingQuizzes.filter(
+        (q) => q.courseId === targetQuiz.courseId
+      ).length;
+      const updatedCourse: Course = { ...targetCourse, totalQuizzes: courseQuizzesCount };
+      this.setItem(
+        STORAGE_KEYS.COURSES,
+        courses.map((c) => (c.id === updatedCourse.id ? updatedCourse : c))
+      );
+      try {
+        SupabaseService.upsertCourse(updatedCourse).catch(() => {});
+      } catch {
+        // ignore
+      }
+    }
 
     try {
       SupabaseService.deleteQuiz(quizId).catch(() => {});
@@ -7211,23 +7369,86 @@ export class ClassroomDB {
   }
 
   static getQuizSubmissions(quizId: string, studentId: string): QuizSubmission[] {
-    const submissions = this.getItem<QuizSubmission[]>(STORAGE_KEYS.QUIZ_SUBMISSIONS, INITIAL_QUIZ_SUBMISSIONS);
-    return submissions.filter((qs) => qs.quizId === quizId && qs.studentId === studentId);
+    const deletedSet = new Set(this.getDeletedIds());
+    const submissions = this.getItem<QuizSubmission[]>(
+      STORAGE_KEYS.QUIZ_SUBMISSIONS,
+      INITIAL_QUIZ_SUBMISSIONS
+    );
+    return submissions
+      .filter((qs) => qs.quizId === quizId && qs.studentId === studentId && !deletedSet.has(qs.id))
+      .sort((a, b) => (b.submittedAtMs || 0) - (a.submittedAtMs || 0));
+  }
+
+  static getAllQuizSubmissionsForQuiz(quizId: string): QuizSubmission[] {
+    const deletedSet = new Set(this.getDeletedIds());
+    const submissions = this.getItem<QuizSubmission[]>(
+      STORAGE_KEYS.QUIZ_SUBMISSIONS,
+      INITIAL_QUIZ_SUBMISSIONS
+    );
+    // Deduplicate by studentId (keeping latest submission per student)
+    const byStudent = new Map<string, QuizSubmission>();
+    submissions.forEach((qs) => {
+      if (qs.quizId !== quizId || deletedSet.has(qs.id)) return;
+      const prev = byStudent.get(qs.studentId);
+      if (!prev || (qs.submittedAtMs || 0) >= (prev.submittedAtMs || 0)) {
+        byStudent.set(qs.studentId, qs);
+      }
+    });
+    return Array.from(byStudent.values()).sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return (a.submittedAtMs || 0) - (b.submittedAtMs || 0);
+    });
+  }
+
+  static resetStudentQuizSubmission(quizId: string, studentId: string, currentUser: User): boolean {
+    if (currentUser.role !== 'admin' && currentUser.role !== 'co_admin') return false;
+    const submissions = this.getItem<QuizSubmission[]>(
+      STORAGE_KEYS.QUIZ_SUBMISSIONS,
+      INITIAL_QUIZ_SUBMISSIONS
+    );
+    const matchingIds = submissions
+      .filter((qs) => qs.quizId === quizId && qs.studentId === studentId)
+      .map((qs) => qs.id);
+    const deterministicId = `qsub_${quizId}_${studentId}`;
+    const allIdsToRemove = Array.from(new Set([...matchingIds, deterministicId]));
+
+    this.setItem(
+      STORAGE_KEYS.QUIZ_SUBMISSIONS,
+      submissions.filter((qs) => !(qs.quizId === quizId && qs.studentId === studentId))
+    );
+    this.recordDeletedIds(allIdsToRemove);
+
+    allIdsToRemove.forEach((id) => {
+      try {
+        SupabaseService.deleteQuizSubmission(id).catch(() => {});
+      } catch {
+        // ignore
+      }
+    });
+    return true;
   }
 
   static submitQuiz(
     quiz: Quiz,
     answers: Record<string, number>,
-    currentUser: User
-  ): { submission: QuizSubmission; passed: boolean; score: number } {
+    currentUser: User,
+    timeSpentSeconds?: number
+  ): {
+    submission: QuizSubmission;
+    passed: boolean;
+    score: number;
+    correctCount: number;
+    totalQuestions: number;
+  } {
     const access = this.getCourseById(quiz.courseId, currentUser);
     if (!access.course) {
       throw new Error(access.error || 'Access denied.');
     }
     let correctCount = 0;
-    const totalQuestions = quiz.questions?.length || 0;
+    const cleanQuestions = (quiz.questions || []).filter((q) => q && q.id !== '__quiz_meta__');
+    const totalQuestions = cleanQuestions.length;
     if (totalQuestions > 0) {
-      quiz.questions.forEach((q) => {
+      cleanQuestions.forEach((q) => {
         if (answers[q.id] === q.correctIndex) {
           correctCount++;
         }
@@ -7236,44 +7457,157 @@ export class ClassroomDB {
 
     const score = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 100;
     const passed = score >= quiz.passingScore;
+    const nowMs = Date.now();
+    const deterministicId = `qsub_${quiz.id}_${currentUser.id}`;
 
-    const submissions = this.getItem<QuizSubmission[]>(STORAGE_KEYS.QUIZ_SUBMISSIONS, INITIAL_QUIZ_SUBMISSIONS);
+    // Un-mark deterministicId from deletedIds in case teacher previously reset this student's attempt
+    const deletedIds = this.getDeletedIds();
+    if (deletedIds.includes(deterministicId)) {
+      this.setItem(
+        STORAGE_KEYS.DELETED_IDS,
+        deletedIds.filter((id) => id !== deterministicId)
+      );
+    }
+
+    const submissions = this.getItem<QuizSubmission[]>(
+      STORAGE_KEYS.QUIZ_SUBMISSIONS,
+      INITIAL_QUIZ_SUBMISSIONS
+    );
+    const prevSub = submissions.find(
+      (qs) => qs.id === deterministicId || (qs.quizId === quiz.id && qs.studentId === currentUser.id)
+    );
+    const attemptCount = (prevSub?.attemptCount || 0) + 1;
+
     const newSub: QuizSubmission = {
-      id: `qsub-${Date.now()}`,
+      id: deterministicId,
       quizId: quiz.id,
       courseId: quiz.courseId,
       studentId: currentUser.id,
       studentName: currentUser.name,
+      studentUsername: currentUser.username,
       score,
+      correctCount,
+      totalQuestions,
       passed,
       answers,
-      submittedAt: new Date().toLocaleDateString('en-US', {
+      timeSpentSeconds,
+      attemptCount,
+      submittedAt: new Date(nowMs).toLocaleString('en-US', {
         month: 'short',
         day: 'numeric',
         year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
       }),
+      submittedAtMs: nowMs,
     };
 
-    this.setItem(STORAGE_KEYS.QUIZ_SUBMISSIONS, [newSub, ...submissions]);
-    try {
-      SupabaseService.upsertQuizSubmission({
-        id: newSub.id,
-        quizId: newSub.quizId,
-        studentId: newSub.studentId,
-        studentName: newSub.studentName,
-        score: newSub.score,
-        passed: newSub.passed,
-        answers: newSub.answers,
-      }).catch(() => {});
-    } catch {
-      // ignore
-    }
+    const filteredSubs = submissions.filter(
+      (qs) => !(qs.quizId === quiz.id && qs.studentId === currentUser.id) && qs.id !== deterministicId
+    );
+    this.setItem(STORAGE_KEYS.QUIZ_SUBMISSIONS, [newSub, ...filteredSubs]);
+    this.markLocalWrite(deterministicId);
+
+    // Staggered cloud sync (80ms - 950ms random jitter) so 200 students submitting simultaneously
+    // never spike Supabase connections while local grading remains 0ms instant!
+    const jitterMs =
+      currentUser.role === 'student' ? 80 + Math.floor(Math.random() * 870) : 20;
+    setTimeout(() => {
+      try {
+        SupabaseService.upsertQuizSubmission(newSub).catch(() => {});
+      } catch {
+        // ignore
+      }
+    }, jitterMs);
 
     if (passed) {
       this.recordPassedQuiz(currentUser.id, quiz.courseId, quiz.id);
     }
 
-    return { submission: newSub, passed, score };
+    return { submission: newSub, passed, score, correctCount, totalQuestions };
+  }
+
+  static async syncQuizzesFromCloud(
+    forceRefresh: boolean = false,
+    quizId?: string
+  ): Promise<boolean> {
+    try {
+      const loggedUser = this.getCurrentUser();
+      const studentFilterId =
+        loggedUser && loggedUser.role === 'student' ? loggedUser.id : undefined;
+
+      const [remoteQuizzes, remoteSubs] = await Promise.all([
+        SupabaseService.getRemoteQuizzes(forceRefresh),
+        SupabaseService.getRemoteQuizSubmissions({
+          quizId,
+          studentId: studentFilterId,
+          forceRefresh,
+        }),
+      ]);
+
+      let changed = false;
+      const deletedSet = new Set(this.getDeletedIds());
+
+      if (remoteQuizzes !== null) {
+        const localQuizzes = this.getItem<Quiz[]>(STORAGE_KEYS.QUIZZES, INITIAL_QUIZZES).filter(
+          (q) => !deletedSet.has(q.id) && !deletedSet.has(q.courseId)
+        );
+        const prevJson = JSON.stringify(localQuizzes);
+        const remoteIds = new Set(remoteQuizzes.map((rq) => rq.id));
+        const quizMap = new Map<string, Quiz>();
+
+        localQuizzes.forEach((q) => {
+          if (remoteIds.has(q.id) || this.isRecentLocalWrite(q.id)) {
+            quizMap.set(q.id, q);
+          }
+        });
+        remoteQuizzes.forEach((rq) => {
+          if (deletedSet.has(rq.id) || deletedSet.has(rq.courseId)) return;
+          const existing = quizMap.get(rq.id);
+          if (existing && this.isRecentLocalWrite(rq.id)) return;
+          quizMap.set(rq.id, { ...existing, ...rq });
+        });
+
+        const merged = Array.from(quizMap.values());
+        if (JSON.stringify(merged) !== prevJson) {
+          this.setItem(STORAGE_KEYS.QUIZZES, merged);
+          changed = true;
+        }
+      }
+
+      if (remoteSubs !== null) {
+        const localSubs = this.getItem<QuizSubmission[]>(
+          STORAGE_KEYS.QUIZ_SUBMISSIONS,
+          INITIAL_QUIZ_SUBMISSIONS
+        ).filter((s) => !deletedSet.has(s.id) && !deletedSet.has(s.quizId));
+        const prevSubsJson = JSON.stringify(localSubs);
+        const subMap = new Map<string, QuizSubmission>();
+
+        localSubs.forEach((s) => {
+          subMap.set(s.id, s);
+        });
+        remoteSubs.forEach((rs) => {
+          if (deletedSet.has(rs.id) || deletedSet.has(rs.quizId)) return;
+          const existing = subMap.get(rs.id);
+          if (existing && this.isRecentLocalWrite(rs.id)) return;
+          subMap.set(rs.id, {
+            ...existing,
+            ...rs,
+            courseId: rs.courseId || existing?.courseId || '',
+          });
+        });
+
+        const mergedSubs = Array.from(subMap.values());
+        if (JSON.stringify(mergedSubs) !== prevSubsJson) {
+          this.setItem(STORAGE_KEYS.QUIZ_SUBMISSIONS, mergedSubs);
+          changed = true;
+        }
+      }
+
+      return changed;
+    } catch {
+      return false;
+    }
   }
 
   // Progress Tracking & Completion

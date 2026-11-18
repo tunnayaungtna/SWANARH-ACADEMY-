@@ -104,6 +104,12 @@ export interface Quiz {
   passingScore: number; // percentage, e.g. 70
   questions: QuizQuestion[];
   dueNotice?: string;
+  mode?: 'exam' | 'practice';
+  enableFlashcards?: boolean;
+  showAnswersImmediately?: boolean;
+  createdBy?: string;
+  createdAt?: string;
+  createdAtMs?: number;
 }
 
 export interface QuizSubmission {
@@ -112,10 +118,16 @@ export interface QuizSubmission {
   courseId: string;
   studentId: string;
   studentName: string;
-  score: number; // percentage
+  studentUsername?: string;
+  score: number; // percentage (0-100)
+  correctCount?: number;
+  totalQuestions?: number;
   passed: boolean;
   answers: Record<string, number>;
+  timeSpentSeconds?: number;
+  attemptCount?: number;
   submittedAt: string;
+  submittedAtMs?: number;
 }
 
 export interface Assignment {
@@ -280,7 +292,7 @@ export interface NotificationItem {
   title: string;
   message: string;
   type: 'post' | 'grade' | 'quiz' | 'certificate' | 'private_note';
-  targetTab?: 'stream' | 'attendance' | 'people' | 'private_notes';
+  targetTab?: 'stream' | 'attendance' | 'quizzes' | 'people' | 'private_notes';
   privateNoteId?: string;
   isRead: boolean;
   createdAt: string;

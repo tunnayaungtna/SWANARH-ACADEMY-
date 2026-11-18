@@ -7,6 +7,8 @@ import {
   Assignment,
   AssignmentSubmission,
   Quiz,
+  QuizQuestion,
+  QuizSubmission,
   AttendanceSession,
   AttendanceRecord,
   RealtimeAttendancePatch,
@@ -1275,8 +1277,14 @@ export class SupabaseService {
       if (incomingKind === 'submission' || incomingKind === 'delete' || incomingKind === 'all') {
         this.invalidateClientCache('submissions');
       }
-      if (incomingKind === 'quiz' || incomingKind === 'delete' || incomingKind === 'all') {
+      if (
+        incomingKind === 'quiz' ||
+        incomingKind === 'quiz_submission' ||
+        incomingKind === 'delete' ||
+        incomingKind === 'all'
+      ) {
         this.invalidateClientCache('quizzes');
+        this.invalidateClientCache('quiz_submissions');
       }
     }
 
@@ -2911,6 +2919,35 @@ export class SupabaseService {
   }
 
   /**
+   * Encode quiz metadata into the JSONB questions array so no SQL schema migration is required
+   */
+  static encodeQuizQuestionsWithMeta(quiz: Quiz): QuizQuestion[] {
+    const cleanQuestions = (quiz.questions || []).filter(
+      (q) => q && q.id !== '__quiz_meta__'
+    );
+    const metaPayload = {
+      description: quiz.description || '',
+      mode: quiz.mode || 'exam',
+      enableFlashcards: quiz.enableFlashcards !== false,
+      showAnswersImmediately: quiz.showAnswersImmediately !== false,
+      dueNotice: quiz.dueNotice || '',
+      createdBy: quiz.createdBy || '',
+      createdAt: quiz.createdAt || '',
+      createdAtMs: quiz.createdAtMs || Date.now(),
+    };
+    return [
+      {
+        id: '__quiz_meta__',
+        question: JSON.stringify(metaPayload),
+        options: [],
+        correctIndex: 0,
+        explanation: '',
+      },
+      ...cleanQuestions,
+    ];
+  }
+
+  /**
    * Fetch all quizzes from Supabase (with 3-minute Client-Side Cache TTL)
    */
   static async getRemoteQuizzes(forceRefresh: boolean = false): Promise<Quiz[] | null> {
@@ -2922,21 +2959,172 @@ export class SupabaseService {
       try {
         const { data, error } = await supabase
           .from('quizzes')
-          .select('id,course_id,title,time_limit_minutes,passing_score,questions')
-          .limit(150);
+          .select('id,course_id,title,time_limit_minutes,passing_score,questions,created_at')
+          .order('created_at', { ascending: false })
+          .limit(200);
         if (error || !data) return null;
 
-        const mapped = data.map((row) => ({
-          id: row.id,
-          courseId: row.course_id,
-          title: row.title || '',
-          description: 'Timed Assessment',
-          timeLimitMinutes: row.time_limit_minutes ?? 30,
-          durationMinutes: row.time_limit_minutes ?? 30,
-          passingScore: row.passing_score ?? 70,
-          questions: Array.isArray(row.questions) ? row.questions : [],
-        }));
+        const mapped: Quiz[] = data.map((row) => {
+          const rawQuestions: QuizQuestion[] = Array.isArray(row.questions) ? row.questions : [];
+          let meta: {
+            description?: string;
+            mode?: 'exam' | 'practice';
+            enableFlashcards?: boolean;
+            showAnswersImmediately?: boolean;
+            dueNotice?: string;
+            createdBy?: string;
+            createdAt?: string;
+            createdAtMs?: number;
+          } = {};
+
+          const cleanQuestions = rawQuestions.filter((q) => {
+            if (q && q.id === '__quiz_meta__' && typeof q.question === 'string') {
+              try {
+                meta = JSON.parse(q.question);
+              } catch {
+                // ignore malformed meta
+              }
+              return false;
+            }
+            return Boolean(q && q.id);
+          });
+
+          const rowCreatedMs = row.created_at ? new Date(String(row.created_at)).getTime() : undefined;
+          const createdAtMs =
+            typeof meta.createdAtMs === 'number' && Number.isFinite(meta.createdAtMs)
+              ? meta.createdAtMs
+              : rowCreatedMs && !isNaN(rowCreatedMs)
+              ? rowCreatedMs
+              : undefined;
+
+          return {
+            id: String(row.id),
+            courseId: String(row.course_id),
+            title: String(row.title || ''),
+            description: meta.description || 'Auto-Graded Assessment & Flashcards',
+            durationMinutes: row.time_limit_minutes ?? 20,
+            passingScore: row.passing_score ?? 60,
+            mode: meta.mode === 'practice' ? 'practice' : 'exam',
+            enableFlashcards: meta.enableFlashcards !== false,
+            showAnswersImmediately: meta.showAnswersImmediately !== false,
+            dueNotice: meta.dueNotice || undefined,
+            createdBy: meta.createdBy || undefined,
+            createdAt:
+              meta.createdAt ||
+              (createdAtMs
+                ? new Date(createdAtMs).toLocaleDateString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                  })
+                : undefined),
+            createdAtMs,
+            questions: cleanQuestions,
+          };
+        });
         this.setCachedQuery('quizzes:all', mapped, 180_000);
+        return mapped;
+      } catch {
+        return null;
+      }
+    });
+  }
+
+  /**
+   * Fetch quiz submissions from Supabase (optionally scoped by quizId or studentId)
+   */
+  static async getRemoteQuizSubmissions(
+    options?: { quizId?: string; studentId?: string; forceRefresh?: boolean }
+  ): Promise<QuizSubmission[] | null> {
+    const cacheKey = `quiz_submissions:${options?.quizId || 'all'}:${options?.studentId || 'all'}`;
+    if (!options?.forceRefresh) {
+      const cached = this.getCachedQuery<QuizSubmission[]>(cacheKey);
+      if (cached) return cached;
+    }
+    return this.dedupeGet(cacheKey, async () => {
+      try {
+        let query = supabase
+          .from('quiz_submissions')
+          .select('id,quiz_id,student_id,score,passed,answers,submitted_at')
+          .order('submitted_at', { ascending: false })
+          .limit(1000);
+
+        if (options?.quizId) {
+          query = query.eq('quiz_id', options.quizId);
+        }
+        if (options?.studentId) {
+          query = query.eq('student_id', options.studentId);
+        }
+
+        const { data, error } = await query;
+        if (error || !data) return null;
+
+        const mapped: QuizSubmission[] = data.map((row) => {
+          const rawAnswers =
+            row.answers && typeof row.answers === 'object'
+              ? (row.answers as Record<string, unknown>)
+              : {};
+          const cleanAnswers: Record<string, number> = {};
+          let meta: {
+            courseId?: string;
+            studentName?: string;
+            studentUsername?: string;
+            correctCount?: number;
+            totalQuestions?: number;
+            timeSpentSeconds?: number;
+            attemptCount?: number;
+            submittedAt?: string;
+            submittedAtMs?: number;
+          } = {};
+
+          for (const [k, v] of Object.entries(rawAnswers)) {
+            if (k === '__sub_meta__' && v && typeof v === 'object') {
+              meta = v as typeof meta;
+            } else if (typeof v === 'number') {
+              cleanAnswers[k] = v;
+            }
+          }
+
+          const rowSubmittedMs = row.submitted_at
+            ? new Date(String(row.submitted_at)).getTime()
+            : Date.now();
+          const submittedAtMs =
+            typeof meta.submittedAtMs === 'number' && Number.isFinite(meta.submittedAtMs)
+              ? meta.submittedAtMs
+              : !isNaN(rowSubmittedMs)
+              ? rowSubmittedMs
+              : Date.now();
+
+          return {
+            id: String(row.id),
+            quizId: String(row.quiz_id),
+            courseId: String(meta.courseId || ''),
+            studentId: String(row.student_id),
+            studentName: String(meta.studentName || 'Student'),
+            studentUsername: meta.studentUsername ? String(meta.studentUsername) : undefined,
+            score: typeof row.score === 'number' ? row.score : 0,
+            correctCount: typeof meta.correctCount === 'number' ? meta.correctCount : undefined,
+            totalQuestions:
+              typeof meta.totalQuestions === 'number' ? meta.totalQuestions : undefined,
+            passed: Boolean(row.passed),
+            answers: cleanAnswers,
+            timeSpentSeconds:
+              typeof meta.timeSpentSeconds === 'number' ? meta.timeSpentSeconds : undefined,
+            attemptCount: typeof meta.attemptCount === 'number' ? meta.attemptCount : 1,
+            submittedAt:
+              meta.submittedAt ||
+              new Date(submittedAtMs).toLocaleString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+              }),
+            submittedAtMs,
+          };
+        });
+
+        this.setCachedQuery(cacheKey, mapped, 25_000);
         return mapped;
       } catch {
         return null;
@@ -4429,9 +4617,9 @@ export class SupabaseService {
           id: quiz.id,
           course_id: quiz.courseId,
           title: quiz.title,
-          time_limit_minutes: quiz.durationMinutes || 30,
-          passing_score: quiz.passingScore || 70,
-          questions: quiz.questions || [],
+          time_limit_minutes: quiz.durationMinutes || 20,
+          passing_score: quiz.passingScore ?? 60,
+          questions: this.encodeQuizQuestionsWithMeta(quiz),
         },
         { onConflict: 'id' }
       );
@@ -4450,6 +4638,7 @@ export class SupabaseService {
   static async deleteQuiz(quizId: string): Promise<boolean> {
     try {
       this.invalidateClientCache('quizzes');
+      this.invalidateClientCache('quiz_submissions');
       await supabase.from('quiz_submissions').delete().eq('quiz_id', quizId);
       const { error } = await supabase.from('quizzes').delete().eq('id', quizId);
       if (!error) {
@@ -4463,17 +4652,26 @@ export class SupabaseService {
 
   /**
    * Upsert a student quiz submission to Supabase SQL database
+   * Uses a single deterministic ID per student per quiz (`qsub_${quizId}_${studentId}`)
+   * so retakes overwrite the existing row and never bloat Supabase database storage.
    */
-  static async upsertQuizSubmission(sub: {
-    id: string;
-    quizId: string;
-    studentId: string;
-    studentName: string;
-    score: number;
-    passed: boolean;
-    answers: Record<string, number>;
-  }): Promise<boolean> {
+  static async upsertQuizSubmission(sub: QuizSubmission): Promise<boolean> {
     try {
+      this.invalidateClientCache('quiz_submissions');
+      const answersPayload: Record<string, unknown> = {
+        ...(sub.answers || {}),
+        __sub_meta__: {
+          courseId: sub.courseId,
+          studentName: sub.studentName,
+          studentUsername: sub.studentUsername,
+          correctCount: sub.correctCount,
+          totalQuestions: sub.totalQuestions,
+          timeSpentSeconds: sub.timeSpentSeconds,
+          attemptCount: sub.attemptCount || 1,
+          submittedAt: sub.submittedAt,
+          submittedAtMs: sub.submittedAtMs || Date.now(),
+        },
+      };
       const { error } = await supabase.from('quiz_submissions').upsert(
         {
           id: sub.id,
@@ -4481,12 +4679,32 @@ export class SupabaseService {
           student_id: sub.studentId,
           score: sub.score,
           passed: sub.passed,
-          answers: sub.answers || {},
+          answers: answersPayload,
+          submitted_at: new Date(sub.submittedAtMs || Date.now()).toISOString(),
         },
         { onConflict: 'id' }
       );
       if (!error) {
         this.notifyRealtimePeers('quiz_submission');
+      }
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Delete a specific student's quiz submission (e.g. when Teacher grants a retake)
+   */
+  static async deleteQuizSubmission(submissionId: string): Promise<boolean> {
+    try {
+      this.invalidateClientCache('quiz_submissions');
+      const { error } = await supabase
+        .from('quiz_submissions')
+        .delete()
+        .eq('id', submissionId);
+      if (!error) {
+        this.notifyRealtimePeers('delete', { deletedIds: [submissionId] });
       }
       return !error;
     } catch {
@@ -5587,9 +5805,9 @@ export class SupabaseService {
         id: q.id,
         course_id: q.courseId,
         title: q.title,
-        time_limit_minutes: q.durationMinutes || 30,
-        passing_score: q.passingScore || 70,
-        questions: q.questions || [],
+        time_limit_minutes: q.durationMinutes || 20,
+        passing_score: q.passingScore ?? 60,
+        questions: this.encodeQuizQuestionsWithMeta(q),
       }));
       for (const batch of this.chunkArray(formattedQuizzes, 150)) {
         batchTasks.push(supabase.from('quizzes').upsert(batch, { onConflict: 'id' }));

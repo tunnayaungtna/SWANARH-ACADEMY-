@@ -20,7 +20,7 @@ interface CourseCardProps {
   totalCourses?: number;
   onSelectCourse: (
     course: Course,
-    initialTab?: 'stream' | 'attendance' | 'private_notes' | 'people'
+    initialTab?: 'stream' | 'attendance' | 'quizzes' | 'private_notes' | 'people'
   ) => void;
   onRefresh?: () => void;
 }
@@ -195,6 +195,21 @@ export const CourseCard: React.FC<CourseCardProps> = ({
                 <span className="truncate">{course.instructorName}</span>
                 <span aria-hidden="true" className="shrink-0">·</span>
                 <span className="shrink-0">{course.totalLessons} Lessons</span>
+                {course.totalQuizzes > 0 && (
+                  <>
+                    <span aria-hidden="true" className="shrink-0">·</span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSelectCourse(course, 'quizzes');
+                      }}
+                      className="text-indigo-600 dark:text-indigo-400 font-bold hover:underline cursor-pointer shrink-0"
+                    >
+                      {course.totalQuizzes} Quiz
+                    </button>
+                  </>
+                )}
               </div>
 
               {unreadPrivateNotesCount > 0 && (
