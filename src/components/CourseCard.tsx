@@ -206,7 +206,7 @@ export const CourseCard: React.FC<CourseCardProps> = ({
                       }}
                       className="text-indigo-600 dark:text-indigo-400 font-bold hover:underline cursor-pointer shrink-0"
                     >
-                      {course.totalQuizzes} Quiz
+                      {course.totalQuizzes} Exam
                     </button>
                   </>
                 )}

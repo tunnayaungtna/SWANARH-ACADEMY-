@@ -234,7 +234,7 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
           </div>
         </div>
 
-        {/* Recessed Neumorphic 5-Tab Switcher (Stream · Attendance · Quiz & စာမေးပွဲ · Private Notes · People) */}
+        {/* Recessed Neumorphic 5-Tab Switcher (Stream · Attendance · Exam Room · Private Notes · People) */}
         <div className="neu-inset p-1.5 rounded-2xl grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1 sm:gap-1.5 text-xs font-bold self-stretch lg:self-auto">
           <button
             onClick={() => handleSwitchTab('stream')}
@@ -277,10 +277,10 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
                 ? 'neu-raised-sm text-indigo-700 dark:text-indigo-300'
                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
-            title="Auto-Graded Mini Quiz, စာမေးပွဲ နှင့် Flashcards"
+            title="Exam Room (စာမေးပွဲခန်း နှင့် လေ့ကျင့်ခန်း)"
           >
             <FileQuestion className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
-            <span>Quiz & စာမေးပွဲ</span>
+            <span>Exam Room</span>
             {courseQuizzesCount > 0 && (
               <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-indigo-600 text-white text-[10px] font-extrabold flex items-center justify-center shrink-0">
                 {courseQuizzesCount}

@@ -37,7 +37,104 @@ interface QuizzesViewProps {
   onRefresh: () => void;
 }
 
-const OPTION_LABELS = ['A', 'B', 'C', 'D', 'E', 'F'];
+const OPTION_LABELS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+
+const MYANMAR_CHOICE_MAP: Record<string, number> = {
+  'က': 0,
+  'ခ': 1,
+  'ဂ': 2,
+  'ဃ': 3,
+  'င': 4,
+  'စ': 5,
+  'ဆ': 6,
+  'ဇ': 7,
+  '၁': 0,
+  '၂': 1,
+  '၃': 2,
+  '၄': 3,
+  '၅': 4,
+  '၆': 5,
+  '၇': 6,
+  '၈': 7,
+};
+
+function resolveChoiceTokenIndex(rawToken: string): number {
+  const token = rawToken.trim().toUpperCase();
+  if (token in MYANMAR_CHOICE_MAP) return MYANMAR_CHOICE_MAP[token];
+  const letterIdx = OPTION_LABELS.indexOf(token);
+  if (letterIdx >= 0) return letterIdx;
+  const num = parseInt(token, 10);
+  if (!Number.isNaN(num) && num >= 1 && num <= 8) return num - 1;
+  return -1;
+}
+
+export interface ExamAvailabilityInfo {
+  isAvailable: boolean;
+  state: 'open' | 'closed_manual' | 'scheduled_future' | 'closed_expired';
+  badgeLabel: string;
+  detailText?: string;
+}
+
+function formatScheduleDateTime(iso?: string): string {
+  if (!iso) return '';
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return iso;
+  return dt.toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
+function getExamAvailability(quiz: Quiz, nowMs: number = Date.now()): ExamAvailabilityInfo {
+  if (quiz.isOpen === false) {
+    return {
+      isAvailable: false,
+      state: 'closed_manual',
+      badgeLabel: '🔒 Exam ပိတ်ထားသည် (Closed)',
+      detailText: 'ဆရာမှ စာမေးပွဲကို ယာယီပိတ်ထားပါသည်',
+    };
+  }
+
+  const openMs = quiz.scheduledOpenAt ? new Date(quiz.scheduledOpenAt).getTime() : NaN;
+  const closeMs = quiz.scheduledCloseAt ? new Date(quiz.scheduledCloseAt).getTime() : NaN;
+
+  if (!Number.isNaN(openMs) && nowMs < openMs) {
+    return {
+      isAvailable: false,
+      state: 'scheduled_future',
+      badgeLabel: '🕒 အချိန်ဇယားဖြင့် ဖွင့်မည် (Scheduled)',
+      detailText: `စတင်ဖြေဆိုနိုင်မည့်အချိန်: ${formatScheduleDateTime(quiz.scheduledOpenAt)}`,
+    };
+  }
+
+  if (!Number.isNaN(closeMs) && nowMs > closeMs) {
+    return {
+      isAvailable: false,
+      state: 'closed_expired',
+      badgeLabel: '⏹️ ဖြေဆိုချိန် ကုန်ဆုံးပြီ (Ended)',
+      detailText: `ပိတ်သိမ်းချိန်: ${formatScheduleDateTime(quiz.scheduledCloseAt)}`,
+    };
+  }
+
+  if (!Number.isNaN(closeMs)) {
+    return {
+      isAvailable: true,
+      state: 'open',
+      badgeLabel: '🟢 Exam ဖွင့်ထားသည် (Open)',
+      detailText: `ပိတ်မည့်အချိန်: ${formatScheduleDateTime(quiz.scheduledCloseAt)}`,
+    };
+  }
+
+  return {
+    isAvailable: true,
+    state: 'open',
+    badgeLabel: '🟢 Exam ဖွင့်ထားသည် (Open)',
+  };
+}
 
 function formatDurationSeconds(sec?: number): string {
   if (!sec || sec <= 0) return '—';
@@ -49,11 +146,23 @@ function formatDurationSeconds(sec?: number): string {
 
 function parseSmartBulkQuestions(rawText: string): QuizQuestion[] {
   if (!rawText || !rawText.trim()) return [];
-  const blocks = rawText
-    .replace(/\r\n/g, '\n')
+  const normalized = rawText.replace(/\r\n/g, '\n').trim();
+
+  // Split by blank lines first; if user pasted without blank lines, split before numbered question headers
+  let blocks = normalized
     .split(/\n\s*\n+/)
     .map((b) => b.trim())
     .filter(Boolean);
+
+  if (blocks.length === 1) {
+    const splitByQHeader = normalized
+      .split(/\n(?=(?:Q\d+|မေးခွန်း\s*[၀-၉\d]+|\(?\d+[.)။]|\(?[၀-၉]+[.)။])\s+)/i)
+      .map((b) => b.trim())
+      .filter(Boolean);
+    if (splitByQHeader.length > 1) {
+      blocks = splitByQHeader;
+    }
+  }
 
   const parsed: QuizQuestion[] = [];
   const now = Date.now();
@@ -71,54 +180,83 @@ function parseSmartBulkQuestions(rawText: string): QuizQuestion[] {
     let explanation = '';
 
     lines.forEach((line) => {
+      // 1. Check explicit Answer line (supports English A-H, 1-8 and Myanmar က-ဇ, ၁-၈)
       const ansMatch = line.match(
-        /^(?:အဖြေမှန်|အဖြေ|answer|ans|correct)\s*[:：=\-]\s*([A-Da-d၁-၄1-4])/i
+        /^(?:အဖြေမှန်|အဖြေ|answer|ans|correct)\s*[:：=\-။]\s*\(?([A-Ha-hက-ဇ၁-၈1-8])\)?/i
       );
       if (ansMatch) {
-        const token = ansMatch[1].toUpperCase();
-        if (token === 'A' || token === '1' || token === '၁') correctIndex = 0;
-        else if (token === 'B' || token === '2' || token === '၂') correctIndex = 1;
-        else if (token === 'C' || token === '3' || token === '၃') correctIndex = 2;
-        else if (token === 'D' || token === '4' || token === '၄') correctIndex = 3;
+        const resolved = resolveChoiceTokenIndex(ansMatch[1]);
+        if (resolved >= 0) {
+          correctIndex = resolved;
+        }
         return;
       }
 
+      // 2. Check Explanation / Note line (Myanmar or English)
       const expMatch = line.match(
-        /^(?:ရှင်းလင်းချက်|မှတ်ချက်|explanation|note|reason)\s*[:：=\-]\s*(.+)$/i
+        /^(?:ရှင်းလင်းချက်|မှတ်ချက်|အကြောင်းပြချက်|explanation|note|reason)\s*[:：=\-။]\s*(.+)$/i
       );
       if (expMatch) {
         explanation = expMatch[1].trim();
         return;
       }
 
-      const optMatch = line.match(/^(?:(\*)?\s*\(?([A-Da-d])\)[.)\s:\-]+|(\*)?\s*([A-Da-d])[.)\s:\-]+)(.+)$/);
-      if (optMatch) {
-        const starred = Boolean(optMatch[1] || optMatch[3]) || line.endsWith('*') || line.includes('(အဖြေမှန်)');
-        let optText = optMatch[5].trim();
-        if (optText.endsWith('*')) {
-          optText = optText.slice(0, -1).trim();
-        }
-        optText = optText.replace(/\(အဖြေမှန်\)|\[အဖြေမှန်\]|\(correct\)/gi, '').trim();
+      // 3. Check Option line: supports *A), (A), A., က), (က), က။, က-, ၁), etc.
+      const optMatch = line.match(
+        /^([*✓✔])?\s*(?:\(([A-Ha-hက-ဇ၁-၈1-8])\)|([A-Ha-hက-ဇ])(?=[.)။:\-\s])|([1-8၁-၈])(?=[.)။:\-]))[.)။:\-\s]*(.+)$/
+      );
+      if (optMatch && (questionText.length > 0 || options.length > 0)) {
+        let optText = (optMatch[5] || '').trim();
+        const starred =
+          Boolean(optMatch[1]) ||
+          optText.startsWith('*') ||
+          optText.endsWith('*') ||
+          optText.endsWith('✓') ||
+          optText.endsWith('✔') ||
+          /\((?:အဖြေမှန်|အဖြေ|correct|ans|✓|✔)\)|\[(?:အဖြေမှန်|အဖြေ|correct|ans|✓|✔)\]/i.test(
+            optText
+          );
+
+        optText = optText
+          .replace(/^[*✓✔]+\s*/, '')
+          .replace(/\s*[*✓✔]+$/, '')
+          .replace(
+            /\((?:အဖြေမှန်|အဖြေ|correct|ans|✓|✔)\)|\[(?:အဖြေမှန်|အဖြေ|correct|ans|✓|✔)\]/gi,
+            ''
+          )
+          .trim();
+
         if (starred) {
           correctIndex = options.length;
         }
-        options.push(optText);
+        if (optText) {
+          options.push(optText);
+        }
         return;
       }
 
+      // 4. Otherwise treat as Question text (supports multi-line Myanmar & English questions)
       if (!questionText) {
-        questionText = line.replace(/^(?:Q\d+|\d+|[၀-၉]+)[.)။:\-\s]+/i, '').trim();
+        questionText = line
+          .replace(
+            /^(?:Question\s*\d+|Q\d+|မေးခွန်း\s*\(?[၀-၉\d]+\)?|\(\d+\)|\([၀-၉]+\)|\d+|[၀-၉]+)[.)။:\-\s]+/i,
+            ''
+          )
+          .trim();
+        if (!questionText) questionText = line.trim();
       } else if (options.length === 0) {
         questionText += ` ${line}`;
       }
     });
 
+    // Preserve exact number of choices provided (2 choices stays 2 choices, up to 8 choices max)
     if (questionText && options.length >= 2) {
+      const keptOptions = options.slice(0, 8);
       parsed.push({
         id: `q-${now}-${idx + 1}`,
         question: questionText,
-        options: options.slice(0, 4),
-        correctIndex: Math.min(correctIndex, Math.min(options.length, 4) - 1),
+        options: keptOptions,
+        correctIndex: Math.min(Math.max(0, correctIndex), keptOptions.length - 1),
         explanation,
       });
     }
@@ -134,23 +272,21 @@ C) Tiny
 D) Weak
 ရှင်းလင်းချက်: Abundant သည် ပေါများကြွယ်ဝသော (Plentiful) ဟု အဓိပ္ပာယ်ရပါသည်။
 
-2. Neither the teacher nor the students ___ present at the meeting yesterday.
-A) is
-B) was
-*C) were
-D) has been
-ရှင်းလင်းချက်: Neither...nor တွင် နောက်ဆုံး Subject (students - အများကိန်း) အလိုက် were ကို သုံးရပါသည်။
+၂။ "The Earth revolves around the Sun." သည် မှန်ကန်ပါသလား။ (Choose 2 ခုတည်းပါသော နမူနာ)
+*က) မှန်ပါသည် (True)
+ခ) မှားပါသည် (False)
+ရှင်းလင်းချက်: ကမ္ဘာသည် နေကို လှည့်ပတ်နေသောကြောင့် True (မှန်ပါသည်) ဖြစ်ပါသည်။
 
-3. မြန်မာစာရေးထုံးအရ အမှန်ဆုံး စာလုံးပေါင်းကို ရွေးချယ်ပါ။
-*A) ပရိသတ်
-B) ပရိတ်သတ်
-C) ပရိသာတ်
-D) ပရိတ်သာတ်
+၃။ မြန်မာစာရေးထုံးအရ အမှန်ဆုံး စာလုံးပေါင်းကို ရွေးချယ်ပါ။
+*က) ပရိသတ်
+ခ) ပရိတ်သတ်
+ဂ) ပရိသာတ်
 ရှင်းလင်းချက်: "ပရိသတ်" (သတ်ပုံ - သ တစ်လုံးတည်း) သာ အမှန်ဖြစ်ပါသည်။`;
 
 export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, onRefresh }) => {
   const isInstructor = currentUser.role === 'admin' || currentUser.role === 'co_admin';
   const [refreshTick, setRefreshTick] = useState(0);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
 
   // Active modals / views
@@ -164,6 +300,14 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
   const [scoreboardQuiz, setScoreboardQuiz] = useState<Quiz | null>(null);
   const [editorQuiz, setEditorQuiz] = useState<Quiz | 'new' | null>(null);
   const [deleteConfirmQuiz, setDeleteConfirmQuiz] = useState<Quiz | null>(null);
+
+  // Live clock tick every 10s so scheduled Exam Open/Close times update automatically
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNowMs(Date.now());
+    }, 10_000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Sync quizzes and submissions from cloud when opening tab
   useEffect(() => {
@@ -195,6 +339,13 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
     () => ClassroomDB.getQuizzes(course.id),
     [course.id, refreshTick]
   );
+
+  const handleToggleExamOpen = (quiz: Quiz) => {
+    const nextIsOpen = quiz.isOpen === false ? true : false;
+    ClassroomDB.toggleQuizOpenStatus(quiz.id, nextIsOpen, currentUser);
+    setRefreshTick((t) => t + 1);
+    onRefresh();
+  };
 
   const enrolledStudents = useMemo(() => {
     const allUsers = ClassroomDB.getAllUsers();
@@ -275,10 +426,10 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
               </div>
               <div>
                 <h3 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white">
-                  Auto-Graded Mini Quiz, စာမေးပွဲ & Flashcards
+                  Exam Room (စာမေးပွဲခန်း နှင့် လေ့ကျင့်ခန်း)
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  ဖြေဆိုပြီးသည်နှင့် အမှတ်နှင့် အဖြေမှန်များကို ဆရာရော ကျောင်းသားပါ ချက်ချင်း ကြည့်ရှုနိုင်ပါသည်
+                  Schedule အချိန်ဇယား သို့မဟုတ် On/Off ခလုတ်ဖြင့် စာမေးပွဲအဖွင့်အပိတ် ထိန်းချုပ်နိုင်ပြီး ဖြေဆိုပြီးသည်နှင့် အမှတ်နှင့် အဖြေမှန်များကို ချက်ချင်း ကြည့်ရှုနိုင်ပါသည်
                 </p>
               </div>
             </div>
@@ -293,7 +444,7 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
               title="Cloud မှ အမှတ်စာရင်းနှင့် မေးခွန်းသစ်များ ရယူရန်"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloud ? 'animate-spin text-indigo-600' : ''}`} />
-              <span>Sync Scores</span>
+              <span>Sync Exam Room</span>
             </button>
 
             {isInstructor && (
@@ -303,7 +454,7 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
                 className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold shadow-sm flex items-center gap-1.5 cursor-pointer transition-colors"
               >
                 <Plus className="w-4 h-4" />
-                <span>စာမေးပွဲ / Quiz အသစ်ဖန်တီးမည်</span>
+                <span>Exam အသစ်ဖန်တီးမည်</span>
               </button>
             )}
           </div>
@@ -314,7 +465,7 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
             <div className="neu-inset-sm p-3 rounded-2xl">
               <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                စာမေးပွဲ / Quiz စုစုပေါင်း
+                Exam စုစုပေါင်း
               </div>
               <div className="text-lg font-extrabold text-indigo-600 dark:text-indigo-400 font-mono mt-0.5">
                 {instructorStats.totalQuizzes} ခု
@@ -350,7 +501,7 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
               <div className="neu-inset-sm p-3 rounded-2xl">
                 <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                  စာမေးပွဲ / Quiz စုစုပေါင်း
+                  Exam စုစုပေါင်း
                 </div>
                 <div className="text-lg font-extrabold text-indigo-600 dark:text-indigo-400 font-mono mt-0.5">
                   {studentStats.total} ခု
@@ -385,19 +536,19 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
         )}
       </div>
 
-      {/* Quiz List */}
+      {/* Exam List */}
       {quizzes.length === 0 ? (
         <div className="neu-card rounded-3xl p-8 sm:p-12 text-center space-y-3">
           <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mx-auto">
             <FileQuestion className="w-6 h-6" />
           </div>
           <h4 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white">
-            ယခုအတန်းတွင် စာမေးပွဲ / Mini Quiz မရှိသေးပါ
+            Exam Room တွင် စာမေးပွဲ မရှိသေးပါ
           </h4>
           <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto leading-relaxed">
             {isInstructor
-              ? 'ကျောင်းသားများ တစ်ပြိုင်တည်း ဖြေဆိုပြီး အမှတ်နှင့် အဖြေမှန်များကို ချက်ချင်း ကြည့်ရှုနိုင်မည့် Auto-Graded စာမေးပွဲ သို့မဟုတ် Flashcard မေးခွန်းတိုများကို စတင်ဖန်တီးနိုင်ပါသည်။'
-              : 'ဆရာမှ စာမေးပွဲ သို့မဟုတ် လေ့ကျင့်ခန်း Quiz အသစ်တင်ပေးသည့်အခါ ဤနေရာတွင် ချက်ချင်း ပေါ်လာပါမည်။'}
+              ? 'ကျောင်းသားများ တစ်ပြိုင်တည်း ဖြေဆိုပြီး အမှတ်နှင့် အဖြေမှန်များကို ချက်ချင်း ကြည့်ရှုနိုင်မည့် Auto-Graded Exam သို့မဟုတ် Flashcard လေ့ကျင့်ခန်းများကို စတင်ဖန်တီးနိုင်ပါသည်။'
+              : 'ဆရာမှ စာမေးပွဲ သို့မဟုတ် လေ့ကျင့်ခန်း Exam အသစ်တင်ပေးသည့်အခါ ဤနေရာတွင် ချက်ချင်း ပေါ်လာပါမည်။'}
           </p>
           {isInstructor && (
             <div className="pt-2">
@@ -407,7 +558,7 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
                 className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
               >
                 <Plus className="w-4 h-4" />
-                <span>ပထမဆုံး စာမေးပွဲ / Quiz စတင်ဖန်တီးမည်</span>
+                <span>ပထမဆုံး Exam စတင်ဖန်တီးမည်</span>
               </button>
             </div>
           )}
@@ -424,7 +575,9 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
               ? ClassroomDB.getAllQuizSubmissionsForQuiz(quiz.id)
               : [];
             const isPracticeMode = quiz.mode === 'practice';
-            const canStudentTakeQuiz = !myLatestSub || isPracticeMode;
+            const availability = getExamAvailability(quiz, nowMs);
+            const canStudentTakeQuiz =
+              isInstructor || (availability.isAvailable && (!myLatestSub || isPracticeMode));
 
             const correctCount = myLatestSub
               ? typeof myLatestSub.correctCount === 'number'
@@ -442,16 +595,29 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
                   <div className="space-y-2 min-w-0 flex-1">
                     {/* Badges Row */}
                     <div className="flex flex-wrap items-center gap-2">
+                      {/* Live Availability Status Badge */}
+                      <span
+                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-extrabold ${
+                          availability.state === 'open'
+                            ? 'bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700'
+                            : availability.state === 'scheduled_future'
+                              ? 'bg-amber-100 dark:bg-amber-950/90 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700'
+                              : 'bg-rose-100 dark:bg-rose-950/90 text-rose-800 dark:text-rose-300 border border-rose-300 dark:border-rose-700'
+                        }`}
+                      >
+                        <span>{availability.badgeLabel}</span>
+                      </span>
+
                       <span
                         className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-extrabold ${
                           isPracticeMode
-                            ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700'
+                            ? 'bg-teal-100 dark:bg-teal-950/80 text-teal-800 dark:text-teal-300 border border-teal-300 dark:border-teal-700'
                             : 'bg-indigo-100 dark:bg-indigo-950/80 text-indigo-800 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-700'
                         }`}
                       >
                         {isPracticeMode
-                          ? '🔄 လေ့ကျင့်ခန်း (Practice Mode — အကြိမ်ကြိမ်ဖြေနိုင်သည်)'
-                          : '📝 စာမေးပွဲ (Exam Mode — အမှတ်စာရင်းသွင်းသည်)'}
+                          ? '🔄 လေ့ကျင့်ခန်း (Practice Mode)'
+                          : '📝 စာမေးပွဲ (Exam Mode)'}
                       </span>
 
                       <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono">
@@ -485,6 +651,27 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
                       <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed whitespace-pre-line">
                         {quiz.description}
                       </p>
+                    )}
+
+                    {/* Schedule Info Banner (if scheduledOpenAt / scheduledCloseAt or manual closed) */}
+                    {(quiz.scheduledOpenAt || quiz.scheduledCloseAt || quiz.isOpen === false) && (
+                      <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                        {quiz.scheduledOpenAt && (
+                          <span className="px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 font-mono">
+                            🟢 စတင်ချိန်: {formatScheduleDateTime(quiz.scheduledOpenAt)}
+                          </span>
+                        )}
+                        {quiz.scheduledCloseAt && (
+                          <span className="px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 font-mono">
+                            🛑 ပိတ်သိမ်းချိန်: {formatScheduleDateTime(quiz.scheduledCloseAt)}
+                          </span>
+                        )}
+                        {availability.detailText && !quiz.scheduledOpenAt && !quiz.scheduledCloseAt && (
+                          <span className="text-rose-600 dark:text-rose-400">
+                            {availability.detailText}
+                          </span>
+                        )}
+                      </div>
                     )}
                   </div>
 
@@ -549,7 +736,7 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
                 <div className="pt-3 border-t border-slate-200/60 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2.5">
                   <div className="flex flex-wrap items-center gap-2">
                     {/* Student or Teacher Take / Retake Exam Button */}
-                    {canStudentTakeQuiz && (
+                    {canStudentTakeQuiz ? (
                       <button
                         type="button"
                         onClick={() => setActiveTakeQuiz(quiz)}
@@ -558,7 +745,7 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
                         {myLatestSub ? (
                           <>
                             <RotateCcw className="w-3.5 h-3.5" />
-                            <span>ပြန်လည်လေ့ကျင့်ဖြေဆိုမည် (Retake Quiz)</span>
+                            <span>ပြန်လည်လေ့ကျင့်ဖြေဆိုမည် (Retake Exam)</span>
                           </>
                         ) : (
                           <>
@@ -571,6 +758,15 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
                           </>
                         )}
                       </button>
+                    ) : (
+                      !myLatestSub && (
+                        <div className="px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 text-xs font-bold flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5 text-rose-500" />
+                          <span>
+                            {availability.detailText || 'စာမေးပွဲ ဖြေဆိုရန် ပိတ်ထားပါသည်'}
+                          </span>
+                        </div>
+                      )
                     )}
 
                     {/* View Score & Correct Answers Button (Shown immediately after student submits!) */}
@@ -593,21 +789,41 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
                     )}
 
                     {/* Flashcard Mode Button */}
-                    {quiz.enableFlashcards !== false && cleanQuestions.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => setActiveFlashcardQuiz(quiz)}
-                        className="px-3.5 py-2 rounded-xl bg-purple-50 dark:bg-purple-950/70 hover:bg-purple-100 dark:hover:bg-purple-900/70 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
-                      >
-                        <Layers className="w-3.5 h-3.5" />
-                        <span>🃏 ကတ်ပြားဖြင့် လေ့ကျင့်မည် (Flashcards)</span>
-                      </button>
-                    )}
+                    {quiz.enableFlashcards !== false &&
+                      cleanQuestions.length > 0 &&
+                      (isInstructor || availability.isAvailable) && (
+                        <button
+                          type="button"
+                          onClick={() => setActiveFlashcardQuiz(quiz)}
+                          className="px-3.5 py-2 rounded-xl bg-purple-50 dark:bg-purple-950/70 hover:bg-purple-100 dark:hover:bg-purple-900/70 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+                        >
+                          <Layers className="w-3.5 h-3.5" />
+                          <span>🃏 ကတ်ပြားဖြင့် လေ့ကျင့်မည် (Flashcards)</span>
+                        </button>
+                      )}
                   </div>
 
                   {/* Teacher Management Controls */}
                   {isInstructor && (
                     <div className="flex flex-wrap items-center gap-2">
+                      {/* 1-Click Exam On/Off Switch */}
+                      <button
+                        type="button"
+                        onClick={() => handleToggleExamOpen(quiz)}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-extrabold flex items-center gap-1.5 cursor-pointer transition-colors border ${
+                          quiz.isOpen === false
+                            ? 'bg-rose-50 dark:bg-rose-950/70 hover:bg-rose-100 text-rose-700 dark:text-rose-300 border-rose-300 dark:border-rose-700'
+                            : 'bg-emerald-50 dark:bg-emerald-950/70 hover:bg-emerald-100 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700'
+                        }`}
+                        title="စာမေးပွဲကို ချက်ချင်း အဖွင့် / အပိတ် (On/Off) ပြုလုပ်ရန်"
+                      >
+                        <span>
+                          {quiz.isOpen === false
+                            ? '🔒 Exam ပိတ်ထားသည် (နှိပ်၍ ဖွင့်မည်)'
+                            : '🟢 Exam ဖွင့်ထားသည် (နှိပ်၍ ပိတ်မည်)'}
+                        </span>
+                      </button>
+
                       <button
                         type="button"
                         onClick={() => setScoreboardQuiz(quiz)}
@@ -639,7 +855,7 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
                         type="button"
                         onClick={() => setEditorQuiz(quiz)}
                         className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-slate-600 dark:text-slate-300 hover:text-indigo-600 text-xs font-bold cursor-pointer transition-colors"
-                        title="မေးခွန်းများ ပြင်ဆင်ရန် (Edit Quiz)"
+                        title="မေးခွန်းနှင့် Schedule ပြင်ဆင်ရန် (Edit Exam)"
                       >
                         <Edit3 className="w-4 h-4" />
                       </button>
@@ -648,7 +864,7 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
                         type="button"
                         onClick={() => setDeleteConfirmQuiz(quiz)}
                         className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/60 text-slate-600 dark:text-slate-300 hover:text-rose-600 text-xs font-bold cursor-pointer transition-colors"
-                        title="စာမေးပွဲ ဖျက်သိမ်းရန် (Delete Quiz)"
+                        title="စာမေးပွဲ ဖျက်သိမ်းရန် (Delete Exam)"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -1951,6 +2167,14 @@ const QuizEditorModal: React.FC<{
   const [enableFlashcards, setEnableFlashcards] = useState(
     initialQuiz?.enableFlashcards !== false
   );
+  const [isOpen, setIsOpen] = useState<boolean>(initialQuiz?.isOpen !== false);
+  const [scheduledOpenAt, setScheduledOpenAt] = useState<string>(
+    initialQuiz?.scheduledOpenAt || ''
+  );
+  const [scheduledCloseAt, setScheduledCloseAt] = useState<string>(
+    initialQuiz?.scheduledCloseAt || ''
+  );
+
   const [inputTab, setInputTab] = useState<'builder' | 'bulk'>('builder');
   const [bulkText, setBulkText] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -2006,11 +2230,57 @@ const QuizEditorModal: React.FC<{
     );
   };
 
+  const handleAddOptionToQuestion = (qIdx: number) => {
+    setQuestions((prev) =>
+      prev.map((q, i) => {
+        if (i !== qIdx || q.options.length >= 8) return q;
+        return { ...q, options: [...q.options, ''] };
+      })
+    );
+  };
+
+  const handleRemoveOptionFromQuestion = (qIdx: number, optIdx: number) => {
+    setQuestions((prev) =>
+      prev.map((q, i) => {
+        if (i !== qIdx || q.options.length <= 2) return q;
+        const nextOpts = q.options.filter((_, idx) => idx !== optIdx);
+        let nextCorrect = q.correctIndex;
+        if (nextCorrect === optIdx) {
+          nextCorrect = 0;
+        } else if (nextCorrect > optIdx) {
+          nextCorrect = nextCorrect - 1;
+        }
+        return {
+          ...q,
+          options: nextOpts,
+          correctIndex: Math.min(nextCorrect, nextOpts.length - 1),
+        };
+      })
+    );
+  };
+
+  const handleSetOptionCountForQuestion = (qIdx: number, targetCount: number) => {
+    const clamped = Math.max(2, Math.min(8, targetCount));
+    setQuestions((prev) =>
+      prev.map((q, i) => {
+        if (i !== qIdx) return q;
+        const nextOpts = [...q.options];
+        while (nextOpts.length < clamped) nextOpts.push('');
+        const sliced = nextOpts.slice(0, clamped);
+        return {
+          ...q,
+          options: sliced,
+          correctIndex: Math.min(q.correctIndex, sliced.length - 1),
+        };
+      })
+    );
+  };
+
   const handleApplyBulkPaste = () => {
     const parsed = parseSmartBulkQuestions(bulkText);
     if (parsed.length === 0) {
       setErrorMsg(
-        'မေးခွန်းပုံစံ ရှာမတွေ့ပါ။ နမူနာပုံစံအတိုင်း မေးခွန်းနှင့် A) B) C) D) ရွေးချယ်စရာများ (အဖြေမှန်ရှေ့တွင် * ခံ၍) ထည့်သွင်းပေးပါ။'
+        'မေးခွန်းပုံစံ ရှာမတွေ့ပါ။ နမူနာပုံစံအတိုင်း မေးခွန်းနှင့် A) B) သို့မဟုတ် က) ခ) ရွေးချယ်စရာ အနည်းဆုံး (၂) ခု (အဖြေမှန်ရှေ့တွင် * ခံ၍) ထည့်သွင်းပေးပါ။'
       );
       return;
     }
@@ -2024,16 +2294,35 @@ const QuizEditorModal: React.FC<{
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) {
-      setErrorMsg('စာမေးပွဲ / Quiz ခေါင်းစဉ် (Title) ရိုက်ထည့်ပေးပါ။');
+      setErrorMsg('Exam ခေါင်းစဉ် (Title) ရိုက်ထည့်ပေးပါ။');
       return;
     }
 
+    if (scheduledOpenAt && scheduledCloseAt) {
+      const openMs = new Date(scheduledOpenAt).getTime();
+      const closeMs = new Date(scheduledCloseAt).getTime();
+      if (!Number.isNaN(openMs) && !Number.isNaN(closeMs) && closeMs <= openMs) {
+        setErrorMsg('Exam ပိတ်သိမ်းချိန် (Close Time) သည် စတင်ဖွင့်ချိန် (Open Time) ထက် နောက်ကျရပါမည်။');
+        return;
+      }
+    }
+
     const validQuestions = questions
-      .map((q) => ({
-        ...q,
-        question: q.question.trim(),
-        options: q.options.map((o) => o.trim()).filter(Boolean),
-      }))
+      .map((q) => {
+        // Keep non-empty options and adjust correctIndex if leading empty options were trimmed
+        const pairs = q.options.map((o, idx) => ({
+          text: o.trim(),
+          wasCorrect: idx === q.correctIndex,
+        }));
+        const nonEmpty = pairs.filter((p) => p.text.length > 0);
+        const newCorrectIdx = nonEmpty.findIndex((p) => p.wasCorrect);
+        return {
+          ...q,
+          question: q.question.trim(),
+          options: nonEmpty.map((p) => p.text),
+          correctIndex: newCorrectIdx >= 0 ? newCorrectIdx : 0,
+        };
+      })
       .filter((q) => q.question.length > 0 && q.options.length >= 2);
 
     if (validQuestions.length === 0) {
@@ -2052,6 +2341,9 @@ const QuizEditorModal: React.FC<{
         mode,
         enableFlashcards,
         showAnswersImmediately: true,
+        isOpen,
+        scheduledOpenAt: scheduledOpenAt.trim() || undefined,
+        scheduledCloseAt: scheduledCloseAt.trim() || undefined,
         questions: validQuestions,
       },
       currentUser
@@ -2073,11 +2365,11 @@ const QuizEditorModal: React.FC<{
           <div>
             <h3 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white">
               {initialQuiz
-                ? '✏️ စာမေးပွဲ / Quiz ပြင်ဆင်ရန် (Edit Quiz)'
-                : '✨ Auto-Graded စာမေးပွဲ / Quiz & Flashcards အသစ်ဖန်တီးရန်'}
+                ? '✏️ Exam ပြင်ဆင်ရန် (Edit Exam & Schedule)'
+                : '✨ Exam Room — စာမေးပွဲအသစ် ဖန်တီးရန်'}
             </h3>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              {course.code} — {course.title} (ကျောင်းသား ၂၀၀+ တစ်ပြိုင်တည်း ဖြေဆိုနိုင်သော စနစ်)
+              {course.code} — {course.title} (မြန်မာစာ + English နှစ်ဘာသာလုံးနှင့် Schedule On/Off စနစ် ပါဝင်သည်)
             </p>
           </div>
           <button
@@ -2101,13 +2393,13 @@ const QuizEditorModal: React.FC<{
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
             <div className="sm:col-span-2">
               <label className="block font-extrabold text-slate-700 dark:text-slate-200 mb-1">
-                စာမေးပွဲ / Quiz ခေါင်းစဉ် (Title) *
+                Exam ခေါင်းစဉ် (Title) *
               </label>
               <input
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="ဥပမာ — Week 1: English Grammar & Vocabulary Exam"
+                placeholder="ဥပမာ — Week 1: English & မြန်မာစာ Exam"
                 className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white font-bold focus:outline-none focus:border-indigo-500"
                 required
               />
@@ -2127,7 +2419,7 @@ const QuizEditorModal: React.FC<{
 
             <div>
               <label className="block font-extrabold text-slate-700 dark:text-slate-200 mb-1">
-                ဖြေဆိုမှု ပုံစံ (Quiz Mode)
+                ဖြေဆိုမှု ပုံစံ (Exam Mode)
               </label>
               <select
                 value={mode}
@@ -2169,6 +2461,81 @@ const QuizEditorModal: React.FC<{
                   onChange={(e) => setPassingScore(Number(e.target.value) || 60)}
                   className="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white font-mono font-bold"
                 />
+              </div>
+            </div>
+
+            {/* Exam On/Off & Schedule Control Box */}
+            <div className="sm:col-span-2 p-3.5 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/70 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
+                    <Clock className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                    <span>Exam On/Off နှင့် Schedule (အချိန်ဇယားဖြင့် အလိုအလျောက် အဖွင့်/အပိတ်)</span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                    စာမေးပွဲကို ချက်ချင်း အဖွင့်/အပိတ် လုပ်နိုင်သလို စတင်ဖွင့်မည့်အချိန်နှင့် ပိတ်မည့်အချိန်ကိုပါ ကြိုတင်သတ်မှတ်ထားနိုင်ပါသည်
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsOpen((v) => !v)}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-extrabold cursor-pointer border transition-colors ${
+                    isOpen
+                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      : 'bg-rose-600 text-white border-rose-600'
+                  }`}
+                >
+                  {isOpen ? '🟢 Exam ON (ဖွင့်ထားသည်)' : '🔒 Exam OFF (ပိတ်ထားသည်)'}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="font-extrabold text-slate-700 dark:text-slate-200">
+                      🟢 စတင်ဖွင့်မည့်အချိန် (Scheduled Open)
+                    </label>
+                    {scheduledOpenAt && (
+                      <button
+                        type="button"
+                        onClick={() => setScheduledOpenAt('')}
+                        className="text-[10px] font-bold text-rose-600 hover:underline cursor-pointer"
+                      >
+                        ပြန်ဖြုတ်မည်
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="datetime-local"
+                    value={scheduledOpenAt}
+                    onChange={(e) => setScheduledOpenAt(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white font-mono text-xs"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="font-extrabold text-slate-700 dark:text-slate-200">
+                      🛑 အလိုအလျောက်ပိတ်မည့်အချိန် (Scheduled Close)
+                    </label>
+                    {scheduledCloseAt && (
+                      <button
+                        type="button"
+                        onClick={() => setScheduledCloseAt('')}
+                        className="text-[10px] font-bold text-rose-600 hover:underline cursor-pointer"
+                      >
+                        ပြန်ဖြုတ်မည်
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="datetime-local"
+                    value={scheduledCloseAt}
+                    onChange={(e) => setScheduledCloseAt(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white font-mono text-xs"
+                  />
+                </div>
               </div>
             </div>
 
@@ -2238,24 +2605,25 @@ const QuizEditorModal: React.FC<{
             {inputTab === 'bulk' ? (
               <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-xs font-bold text-slate-700 dark:text-slate-200">
-                    💡 မေးခွန်းများကို အောက်ပါအကွက်ထဲသို့ Copy/Paste ချပြီး တစ်ပြိုင်နက် သွင်းနိုင်ပါသည် (အဖြေမှန်ရှေ့တွင်{' '}
-                    <code className="px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-mono">
-                      *
-                    </code>{' '}
-                    ခံပေးပါ)
+                  <div className="text-xs font-bold text-slate-700 dark:text-slate-200 space-y-1">
+                    <div>
+                      💡 မြန်မာစာ (<code className="px-1 py-0.5 rounded bg-slate-200 dark:bg-slate-700 font-mono">က) ခ) ဂ) ဃ)</code>) သို့မဟုတ် English (<code className="px-1 py-0.5 rounded bg-slate-200 dark:bg-slate-700 font-mono">A) B) C) D)</code>) ကြိုက်နှစ်သက်ရာ ပုံစံဖြင့် Copy/Paste ချနိုင်ပါသည်။
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                      ✨ <strong>Auto Choice Count:</strong> ရွေးချယ်စရာ Choose (၂) ခုပဲ ပါလျှင် (၂) ခုတည်း အလိုအလျောက် သတ်မှတ်ပေးပြီး၊ (၃) ခု၊ (၄) ခု၊ (၅) ခု ပါလျှင်လည်း ပါသလောက် အလိုအလျောက် စီပေးပါသည် (အဖြေမှန်ရှေ့တွင် <code className="px-1 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-mono">*</code> ခံပေးပါ)။
+                    </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => setBulkText(SAMPLE_BULK_TEXT)}
-                    className="px-2.5 py-1 rounded-lg bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold text-[11px] cursor-pointer"
+                    className="px-2.5 py-1.5 rounded-lg bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold text-[11px] cursor-pointer shrink-0"
                   >
-                    နမူနာပုံစံ ထည့်ကြည့်ရန်
+                    မြန်မာ + English နမူနာပုံစံ ထည့်ကြည့်ရန်
                   </button>
                 </div>
 
                 <textarea
-                  rows={10}
+                  rows={11}
                   value={bulkText}
                   onChange={(e) => setBulkText(e.target.value)}
                   placeholder={SAMPLE_BULK_TEXT}
@@ -2279,37 +2647,75 @@ const QuizEditorModal: React.FC<{
                     key={q.id}
                     className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-3"
                   >
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="font-mono font-extrabold text-indigo-600 dark:text-indigo-400">
-                        မေးခွန်း အမှတ်စဉ် #{qIdx + 1}
+                        မေးခွန်း အမှတ်စဉ် #{qIdx + 1} ({q.options.length} Choices)
                       </span>
-                      {questions.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveQuestion(qIdx)}
-                          className="text-rose-600 hover:underline text-[11px] font-bold flex items-center gap-1 cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>ဖျက်မည်</span>
-                        </button>
-                      )}
+
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {/* Quick Choice Count Presets (2, 3, 4) + Add Choice */}
+                        <div className="flex items-center gap-1 bg-white dark:bg-slate-900 px-2 py-1 rounded-xl border border-slate-200 dark:border-slate-700">
+                          <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 mr-1">
+                            Choose:
+                          </span>
+                          {[2, 3, 4].map((cnt) => (
+                            <button
+                              key={cnt}
+                              type="button"
+                              onClick={() => handleSetOptionCountForQuestion(qIdx, cnt)}
+                              className={`px-2 py-0.5 rounded-lg text-[10px] font-extrabold cursor-pointer ${
+                                q.options.length === cnt
+                                  ? 'bg-indigo-600 text-white'
+                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+                              }`}
+                              title={`ရွေးချယ်စရာ ${cnt} ခု ထားရန်`}
+                            >
+                              {cnt} ခု
+                            </button>
+                          ))}
+                          {q.options.length < 8 && (
+                            <button
+                              type="button"
+                              onClick={() => handleAddOptionToQuestion(qIdx)}
+                              className="px-2 py-0.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-[10px] font-extrabold cursor-pointer"
+                              title="ရွေးချယ်စရာ အကွက် ၁ ခု ထပ်တိုးမည်"
+                            >
+                              + ထပ်တိုး
+                            </button>
+                          )}
+                        </div>
+
+                        {questions.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveQuestion(qIdx)}
+                            className="text-rose-600 hover:underline text-[11px] font-bold flex items-center gap-1 cursor-pointer ml-1"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>မေးခွန်းဖျက်မည်</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <input
                       type="text"
                       value={q.question}
                       onChange={(e) => handleQuestionChange(qIdx, 'question', e.target.value)}
-                      placeholder="မေးခွန်းစာသား ရိုက်ထည့်ပါ..."
+                      placeholder="မေးခွန်းစာသား ရိုက်ထည့်ပါ (မြန်မာစာ သို့မဟုတ် English)..."
                       className="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white font-bold"
                     />
 
                     <div className="space-y-1.5">
-                      <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
-                        ရွေးချယ်စရာ အဖြေများ (အဖြေမှန်ဖြစ်သော အကွက်ဘေးရှိ စက်ဝိုင်းကို နှိပ်၍ အစိမ်းရောင် အမှန်ခြစ်ပေးပါ):
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                          ရွေးချယ်စရာ အဖြေများ (အဖြေမှန်ဖြစ်သော အကွက်ဘေးရှိ A, B, C ခလုတ်ကို နှိပ်၍ အစိမ်းရောင် အမှန်ခြစ်ပေးပါ):
+                        </div>
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {q.options.map((opt, oIdx) => {
                           const isCorrect = q.correctIndex === oIdx;
+                          const label = OPTION_LABELS[oIdx] || String(oIdx + 1);
                           return (
                             <div
                               key={oIdx}
@@ -2329,19 +2735,29 @@ const QuizEditorModal: React.FC<{
                                 }`}
                                 title="ဤအဖြေကို အဖြေမှန်အဖြစ် သတ်မှတ်ရန် နှိပ်ပါ"
                               >
-                                {OPTION_LABELS[oIdx]}
+                                {label}
                               </button>
                               <input
                                 type="text"
                                 value={opt}
                                 onChange={(e) => handleOptionChange(qIdx, oIdx, e.target.value)}
-                                placeholder={`Option ${OPTION_LABELS[oIdx]}`}
-                                className="flex-1 bg-transparent text-slate-900 dark:text-white focus:outline-none text-xs"
+                                placeholder={`Option ${label}`}
+                                className="flex-1 bg-transparent text-slate-900 dark:text-white focus:outline-none text-xs min-w-0"
                               />
                               {isCorrect && (
-                                <span className="text-[10px] font-extrabold text-emerald-600 dark:text-emerald-400 shrink-0 pr-1">
+                                <span className="text-[10px] font-extrabold text-emerald-600 dark:text-emerald-400 shrink-0">
                                   ✓ အဖြေမှန်
                                 </span>
+                              )}
+                              {q.options.length > 2 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveOptionFromQuestion(qIdx, oIdx)}
+                                  className="w-5 h-5 rounded-md hover:bg-rose-100 dark:hover:bg-rose-950/60 text-slate-400 hover:text-rose-600 flex items-center justify-center shrink-0 cursor-pointer"
+                                  title="ဤရွေးချယ်စရာ အကွက်ကို လျှော့မည် (Remove Choice)"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
                               )}
                             </div>
                           );
@@ -2392,7 +2808,7 @@ const QuizEditorModal: React.FC<{
               <span>
                 {initialQuiz
                   ? 'ပြင်ဆင်ချက်များ သိမ်းဆည်းမည် (Save Changes)'
-                  : `စာမေးပွဲ / Quiz (${questions.length} ပုဒ်) လွှင့်တင်မည်`}
+                  : `Exam (${questions.length} ပုဒ်) လွှင့်တင်မည်`}
               </span>
             </button>
           </div>

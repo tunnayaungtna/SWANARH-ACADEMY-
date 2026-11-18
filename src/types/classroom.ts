@@ -107,6 +107,10 @@ export interface Quiz {
   mode?: 'exam' | 'practice';
   enableFlashcards?: boolean;
   showAnswersImmediately?: boolean;
+  isOpen?: boolean; // Manual On/Off toggle (true = open, false = closed)
+  scheduledOpenAt?: string; // ISO/datetime string for scheduled auto-open
+  scheduledCloseAt?: string; // ISO/datetime string for scheduled auto-close
+  statusUpdatedAtMs?: number;
   createdBy?: string;
   createdAt?: string;
   createdAtMs?: number;

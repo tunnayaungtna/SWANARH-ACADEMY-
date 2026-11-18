@@ -7185,6 +7185,9 @@ export class ClassroomDB {
       mode?: 'exam' | 'practice';
       enableFlashcards?: boolean;
       showAnswersImmediately?: boolean;
+      isOpen?: boolean;
+      scheduledOpenAt?: string;
+      scheduledCloseAt?: string;
       dueNotice?: string;
       questions: Quiz['questions'];
     },
@@ -7207,6 +7210,10 @@ export class ClassroomDB {
       mode: quizInput.mode === 'practice' ? 'practice' : 'exam',
       enableFlashcards: quizInput.enableFlashcards !== false,
       showAnswersImmediately: quizInput.showAnswersImmediately !== false,
+      isOpen: quizInput.isOpen !== false,
+      scheduledOpenAt: quizInput.scheduledOpenAt?.trim() || undefined,
+      scheduledCloseAt: quizInput.scheduledCloseAt?.trim() || undefined,
+      statusUpdatedAtMs: nowMs,
       dueNotice: quizInput.dueNotice?.trim() || undefined,
       createdBy: existing?.createdBy || currentUser.name,
       createdAt:
@@ -7217,13 +7224,16 @@ export class ClassroomDB {
           year: 'numeric',
         }),
       createdAtMs: existing?.createdAtMs || nowMs,
-      questions: (quizInput.questions || []).map((q, idx) => ({
-        id: q.id && q.id !== '__quiz_meta__' ? q.id : `q-${nowMs}-${idx + 1}`,
-        question: q.question.trim(),
-        options: q.options.map((opt) => opt.trim()),
-        correctIndex: Math.max(0, Math.min(q.options.length - 1, Number(q.correctIndex) || 0)),
-        explanation: (q.explanation || '').trim(),
-      })),
+      questions: (quizInput.questions || []).map((q, idx) => {
+        const trimmedOpts = q.options.map((opt) => opt.trim()).filter(Boolean);
+        return {
+          id: q.id && q.id !== '__quiz_meta__' ? q.id : `q-${nowMs}-${idx + 1}`,
+          question: q.question.trim(),
+          options: trimmedOpts,
+          correctIndex: Math.max(0, Math.min(Math.max(0, trimmedOpts.length - 1), Number(q.correctIndex) || 0)),
+          explanation: (q.explanation || '').trim(),
+        };
+      }),
     };
 
     const nextQuizzes = isEditing
@@ -7260,7 +7270,7 @@ export class ClassroomDB {
       const modeLabel =
         savedQuiz.mode === 'practice'
           ? 'လေ့ကျင့်ခန်း Quiz & ကတ်ပြား'
-          : 'စာမေးပွဲ (Auto-Graded Exam)';
+          : 'စာမေးပွဲ (Exam Room)';
       const newNotif: NotificationItem = {
         id: `notif-quiz-${nowMs}`,
         userId: 'COURSE_BROADCAST',
@@ -7295,8 +7305,8 @@ export class ClassroomDB {
       category: 'academic',
       actionCode: isEditing ? 'QUIZ_UPDATED' : 'QUIZ_CREATED',
       actionLabel: isEditing
-        ? 'Quiz ပြင်ဆင်ခြင်း (Quiz Updated)'
-        : 'Quiz / စာမေးပွဲအသစ် ဖန်တီးခြင်း (Quiz Created)',
+        ? 'Exam ပြင်ဆင်ခြင်း (Exam Updated)'
+        : 'Exam အသစ် ဖန်တီးခြင်း (Exam Created)',
       severity: 'info',
       targetType: 'quiz',
       targetId: savedQuiz.id,
@@ -7308,6 +7318,88 @@ export class ClassroomDB {
     });
 
     return savedQuiz;
+  }
+
+  static toggleQuizOpenStatus(
+    quizId: string,
+    nextIsOpen: boolean,
+    currentUser: User
+  ): Quiz | null {
+    if (currentUser.role !== 'admin' && currentUser.role !== 'co_admin') return null;
+    const quizzes = this.getItem<Quiz[]>(STORAGE_KEYS.QUIZZES, INITIAL_QUIZZES);
+    const target = quizzes.find((q) => q.id === quizId);
+    if (!target) return null;
+
+    const nowMs = Date.now();
+    let scheduledOpenAt = target.scheduledOpenAt;
+    let scheduledCloseAt = target.scheduledCloseAt;
+    if (nextIsOpen) {
+      if (scheduledOpenAt && Date.parse(scheduledOpenAt) > nowMs) {
+        scheduledOpenAt = undefined;
+      }
+      if (scheduledCloseAt && Date.parse(scheduledCloseAt) <= nowMs) {
+        scheduledCloseAt = undefined;
+      }
+    }
+
+    const updated: Quiz = {
+      ...target,
+      isOpen: nextIsOpen,
+      scheduledOpenAt,
+      scheduledCloseAt,
+      statusUpdatedAtMs: nowMs,
+    };
+
+    this.setItem(
+      STORAGE_KEYS.QUIZZES,
+      quizzes.map((q) => (q.id === quizId ? updated : q))
+    );
+    this.markLocalWrite(quizId);
+
+    try {
+      SupabaseService.upsertQuiz(updated).catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    if (nextIsOpen) {
+      const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+      const targetCourse = courses.find((c) => c.id === updated.courseId);
+      if (targetCourse) {
+        const cleanCount = (updated.questions || []).filter(
+          (q) => q && q.id !== '__quiz_meta__'
+        ).length;
+        const newNotif: NotificationItem = {
+          id: `notif-quiz-open-${nowMs}`,
+          userId: 'COURSE_BROADCAST',
+          courseId: targetCourse.id,
+          courseCode: targetCourse.code,
+          courseTitle: targetCourse.title,
+          authorName: currentUser.name,
+          authorRole: currentUser.role,
+          title: `🟢 ${targetCourse.code}: Exam Room ဖွင့်လိုက်ပါပြီ — "${updated.title}"`,
+          message: `မေးခွန်း (${cleanCount}) ပုဒ် · ဖြေဆိုချိန် ${updated.durationMinutes} မိနစ် — ယခု ဝင်ရောက်ဖြေဆိုနိုင်ပါပြီ!`,
+          type: 'quiz',
+          targetTab: 'quizzes',
+          isRead: false,
+          createdAt: 'Just now',
+          createdAtMs: nowMs,
+          expiresAtMs: nowMs + 30 * 60 * 1000,
+        };
+        const existingNotifs = this.getItem<NotificationItem[]>(
+          STORAGE_KEYS.NOTIFICATIONS,
+          INITIAL_NOTIFICATIONS
+        );
+        this.setItem(STORAGE_KEYS.NOTIFICATIONS, [newNotif, ...existingNotifs]);
+        try {
+          SupabaseService.upsertNotifications([newNotif]).catch(() => {});
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    return updated;
   }
 
   static deleteQuiz(quizId: string, currentUser: User): boolean {

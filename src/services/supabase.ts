@@ -2930,6 +2930,10 @@ export class SupabaseService {
       mode: quiz.mode || 'exam',
       enableFlashcards: quiz.enableFlashcards !== false,
       showAnswersImmediately: quiz.showAnswersImmediately !== false,
+      isOpen: quiz.isOpen !== false,
+      scheduledOpenAt: quiz.scheduledOpenAt || '',
+      scheduledCloseAt: quiz.scheduledCloseAt || '',
+      statusUpdatedAtMs: quiz.statusUpdatedAtMs || Date.now(),
       dueNotice: quiz.dueNotice || '',
       createdBy: quiz.createdBy || '',
       createdAt: quiz.createdAt || '',
@@ -2971,6 +2975,10 @@ export class SupabaseService {
             mode?: 'exam' | 'practice';
             enableFlashcards?: boolean;
             showAnswersImmediately?: boolean;
+            isOpen?: boolean;
+            scheduledOpenAt?: string;
+            scheduledCloseAt?: string;
+            statusUpdatedAtMs?: number;
             dueNotice?: string;
             createdBy?: string;
             createdAt?: string;
@@ -3007,6 +3015,10 @@ export class SupabaseService {
             mode: meta.mode === 'practice' ? 'practice' : 'exam',
             enableFlashcards: meta.enableFlashcards !== false,
             showAnswersImmediately: meta.showAnswersImmediately !== false,
+            isOpen: meta.isOpen !== false,
+            scheduledOpenAt: meta.scheduledOpenAt || undefined,
+            scheduledCloseAt: meta.scheduledCloseAt || undefined,
+            statusUpdatedAtMs: meta.statusUpdatedAtMs || createdAtMs,
             dueNotice: meta.dueNotice || undefined,
             createdBy: meta.createdBy || undefined,
             createdAt:
