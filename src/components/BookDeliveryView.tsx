@@ -403,32 +403,32 @@ function drawSwanArhDeliverySlipOnCanvas(
 
   // "To"
   ctx.fillStyle = '#0f172a';
-  ctx.font = `800 ${Math.round(17.5 * s)}px "Georgia", "Times New Roman", serif`;
-  ctx.fillText('To', toBaseX, y + 190 * sy);
+  ctx.font = `800 ${Math.round(17 * s)}px "Georgia", "Times New Roman", serif`;
+  ctx.fillText('To', toBaseX, y + 185 * sy);
 
   // "Name:"
-  const nameY = y + 216 * sy;
+  const nameY = y + 210 * sy;
   ctx.fillStyle = '#334155';
-  ctx.font = `700 ${Math.round(15 * s)}px "Plus Jakarta Sans", sans-serif`;
+  ctx.font = `700 ${Math.round(14.5 * s)}px "Plus Jakarta Sans", sans-serif`;
   ctx.fillText('Name:', labelX, nameY);
 
   if (record?.studentName) {
     ctx.fillStyle = '#0f172a';
-    ctx.font = `800 ${Math.round(14.5 * s)}px "Padauk", "Myanmar Text", "Pyidaungsu", "Plus Jakarta Sans", sans-serif`;
+    ctx.font = `800 ${Math.round(14 * s)}px "Padauk", "Myanmar Text", "Pyidaungsu", "Plus Jakarta Sans", sans-serif`;
     const nameLines = wrapCanvasText(ctx, record.studentName, maxValueWidth + 10 * sx, 1);
     ctx.fillText(nameLines[0] || '', valueX - 10 * sx, nameY);
   }
 
   // "Address:"
-  const addrLabelY = y + 243 * sy;
+  const addrLabelY = y + 234 * sy;
   ctx.fillStyle = '#334155';
-  ctx.font = `700 ${Math.round(15 * s)}px "Plus Jakarta Sans", sans-serif`;
+  ctx.font = `700 ${Math.round(14.5 * s)}px "Plus Jakarta Sans", sans-serif`;
   ctx.fillText('Address:', labelX, addrLabelY);
 
   if (record?.address) {
     ctx.fillStyle = '#0f172a';
-    ctx.font = `700 ${Math.round(13 * s)}px "Padauk", "Myanmar Text", "Pyidaungsu", "Plus Jakarta Sans", sans-serif`;
-    const fullAddr = record.note ? `${record.address} (${record.note})` : record.address;
+    ctx.font = `700 ${Math.round(12.5 * s)}px "Padauk", "Myanmar Text", "Pyidaungsu", "Plus Jakarta Sans", sans-serif`;
+    const fullAddr = record.address;
     const firstLineMaxW = x + w - (valueX + 4 * sx) - 10 * sx;
     const fullColMaxW = x + w - labelX - 12 * sx;
     const wrappedFirst = wrapCanvasText(ctx, fullAddr, firstLineMaxW, 5);
@@ -437,25 +437,45 @@ function drawSwanArhDeliverySlipOnCanvas(
       ctx.fillText(wrappedFirst[0], valueX + 4 * sx, addrLabelY);
     } else {
       const blockLines = wrapCanvasText(ctx, fullAddr, fullColMaxW, 3);
-      let curY = addrLabelY + 21 * sy;
+      let curY = addrLabelY + 19 * sy;
       blockLines.forEach((ln) => {
         ctx.fillText(ln, labelX + 4 * sx, curY);
-        curY += 19.5 * sy;
+        curY += 18 * sy;
       });
     }
   }
 
   // "Ph No."
-  const phY = y + 328 * sy;
+  const phY = y + 312 * sy;
   ctx.fillStyle = '#334155';
-  ctx.font = `700 ${Math.round(15 * s)}px "Plus Jakarta Sans", sans-serif`;
+  ctx.font = `700 ${Math.round(14.5 * s)}px "Plus Jakarta Sans", sans-serif`;
   ctx.fillText('Ph No.', labelX, phY);
 
   if (record?.phone) {
     ctx.fillStyle = '#0f172a';
-    ctx.font = `800 ${Math.round(14.5 * s)}px "Georgia", "Plus Jakarta Sans", sans-serif`;
+    ctx.font = `800 ${Math.round(14 * s)}px "Georgia", "Plus Jakarta Sans", sans-serif`;
     ctx.fillText(record.phone, valueX - 6 * sx, phY);
   }
+
+  // "ပို့ဆောင်ရေး:"
+  const deliveryY = y + 338 * sy;
+  ctx.fillStyle = '#334155';
+  ctx.font = `700 ${Math.round(13.5 * s)}px "Padauk", "Myanmar Text", "Pyidaungsu", "Plus Jakarta Sans", sans-serif`;
+  const deliveryLabel = 'ပို့ဆောင်ရေး:';
+  ctx.fillText(deliveryLabel, labelX, deliveryY);
+
+  const deliveryMethodText = (record?.note || '').trim() || 'Royal Express';
+  const labelMeasuredW = ctx.measureText(deliveryLabel).width;
+  const deliveryValX = Math.max(valueX + 8 * sx, labelX + labelMeasuredW + 8 * sx);
+  ctx.fillStyle = '#0f172a';
+  ctx.font = `800 ${Math.round(13.5 * s)}px "Padauk", "Myanmar Text", "Pyidaungsu", "Plus Jakarta Sans", sans-serif`;
+  const deliveryLines = wrapCanvasText(
+    ctx,
+    deliveryMethodText,
+    Math.max(40 * sx, x + w - deliveryValX - 8 * sx),
+    1
+  );
+  ctx.fillText(deliveryLines[0] || deliveryMethodText, deliveryValX, deliveryY);
 
   ctx.restore();
 }
@@ -612,7 +632,9 @@ export const BookDeliveryView: React.FC<BookDeliveryViewProps> = ({
   const [studentPhone, setStudentPhone] = useState(
     () => myStudentDelivery?.phone || currentUser.phone || ''
   );
-  const [studentNote, setStudentNote] = useState(() => myStudentDelivery?.note || '');
+  const [studentNote, setStudentNote] = useState(
+    () => myStudentDelivery?.note || 'Royal Express'
+  );
   const [studentSavedBanner, setStudentSavedBanner] = useState<string | null>(null);
 
   useEffect(() => {
@@ -621,7 +643,7 @@ export const BookDeliveryView: React.FC<BookDeliveryViewProps> = ({
       setStudentName(myStudentDelivery.studentName || currentUser.name || '');
       setStudentAddress(myStudentDelivery.address || '');
       setStudentPhone(myStudentDelivery.phone || currentUser.phone || '');
-      setStudentNote(myStudentDelivery.note || '');
+      setStudentNote(myStudentDelivery.note || 'Royal Express');
     }
   }, [myStudentDelivery?.id, myStudentDelivery?.updatedAtMs]);
 
@@ -786,7 +808,7 @@ export const BookDeliveryView: React.FC<BookDeliveryViewProps> = ({
         'Name',
         'Phone',
         'Address',
-        'Note',
+        'ပို့ဆောင်ရေး (Delivery Method)',
         'Status',
         'Shipped Time (MMT)',
         'Received Time (MMT)',
@@ -807,7 +829,7 @@ export const BookDeliveryView: React.FC<BookDeliveryViewProps> = ({
         r.studentName || '',
         r.phone || '',
         r.address || '',
-        r.note || '',
+        r.note || 'Royal Express',
         statusBurmese,
         r.shippedAt || '-',
         r.receivedAt || '-',
@@ -850,7 +872,7 @@ export const BookDeliveryView: React.FC<BookDeliveryViewProps> = ({
         studentName: studentName.trim(),
         address: studentAddress.trim(),
         phone: studentPhone.trim(),
-        note: studentNote.trim() || undefined,
+        note: studentNote.trim() || 'Royal Express',
       },
       currentUser
     );
@@ -919,7 +941,7 @@ export const BookDeliveryView: React.FC<BookDeliveryViewProps> = ({
       studentName: studentName.trim() || currentUser.name,
       address: studentAddress.trim() || 'လိပ်စာ ဖြည့်သွင်းရန်...',
       phone: studentPhone.trim() || currentUser.phone || '09-XXXXXXXXX',
-      note: studentNote.trim() || undefined,
+      note: studentNote.trim() || 'Royal Express',
       status: myStudentDelivery?.status || 'pending',
       updatedByRole: 'student',
       createdAt: myStudentDelivery?.createdAt || 'ယခု',
@@ -1143,15 +1165,28 @@ export const BookDeliveryView: React.FC<BookDeliveryViewProps> = ({
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  ပို့ဆောင်ရေး မှတ်ချက် (Optional)
+                  ပို့ဆောင်ရေး (Delivery Method) <span className="text-rose-500">*</span>
                 </label>
-                <input
-                  type="text"
-                  value={studentNote}
-                  onChange={(e) => setStudentNote(e.target.value)}
-                  placeholder="ဥပမာ - Royal Express / ကားဂိတ်ထုတ်"
-                  className="w-full px-3 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
+                <div className="grid grid-cols-2 gap-2">
+                  {(['Royal Express', 'ကိုယ်တိုင်လာရောက်ယူမည်'] as const).map((option) => {
+                    const isActive = (studentNote || 'Royal Express') === option;
+                    return (
+                      <button
+                        key={option}
+                        type="button"
+                        onClick={() => setStudentNote(option)}
+                        className={`px-2.5 py-2.5 rounded-xl border text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                          isActive
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                            : 'bg-slate-100 dark:bg-slate-800/90 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:border-indigo-400'
+                        }`}
+                      >
+                        <Truck className="w-3.5 h-3.5 shrink-0" />
+                        <span className="truncate">{option}</span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
@@ -1657,12 +1692,14 @@ export const BookDeliveryView: React.FC<BookDeliveryViewProps> = ({
 
                           <p className="text-xs text-slate-700 dark:text-slate-300 font-medium break-words">
                             📍 {rec.address}
-                            {rec.note ? ` (${rec.note})` : ''}
                           </p>
 
                           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400 font-mono">
                             <span className="font-bold text-slate-800 dark:text-slate-200">
                               📞 {rec.phone || '-'}
+                            </span>
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 font-sans font-extrabold text-[11px]">
+                              🚚 ပို့ဆောင်ရေး: {rec.note || 'Royal Express'}
                             </span>
                             {rec.shippedAt && (
                               <span className="text-indigo-600 dark:text-indigo-400">
@@ -1956,7 +1993,7 @@ const SingleDeliveryEditorModal: React.FC<{
   const [studentName, setStudentName] = useState(initialRecord?.studentName || '');
   const [address, setAddress] = useState(initialRecord?.address || '');
   const [phone, setPhone] = useState(initialRecord?.phone || '');
-  const [note, setNote] = useState(initialRecord?.note || '');
+  const [note, setNote] = useState(initialRecord?.note || 'Royal Express');
   const [status, setStatus] = useState<BookDeliveryStatus>(
     initialRecord?.status || 'pending'
   );
@@ -1979,7 +2016,7 @@ const SingleDeliveryEditorModal: React.FC<{
     studentName: studentName.trim(),
     address: address.trim(),
     phone: phone.trim(),
-    note: note.trim() || undefined,
+    note: note.trim() || 'Royal Express',
     status,
     updatedByRole: currentUser.role,
     createdAt: 'ယခု',
@@ -1999,7 +2036,7 @@ const SingleDeliveryEditorModal: React.FC<{
         studentName: studentName.trim(),
         address: address.trim(),
         phone: phone.trim(),
-        note: note.trim() || undefined,
+        note: note.trim() || 'Royal Express',
         status,
       },
       currentUser
@@ -2111,15 +2148,16 @@ const SingleDeliveryEditorModal: React.FC<{
 
             <div>
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                မှတ်ချက် (Optional)
+                ပို့ဆောင်ရေး (Delivery Method)
               </label>
-              <input
-                type="text"
-                value={note}
+              <select
+                value={note || 'Royal Express'}
                 onChange={(e) => setNote(e.target.value)}
-                placeholder="Royal Express / ကားဂိတ်"
-                className="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-white"
-              />
+                className="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-900 dark:text-white"
+              >
+                <option value="Royal Express">🚚 Royal Express</option>
+                <option value="ကိုယ်တိုင်လာရောက်ယူမည်">🏫 ကိုယ်တိုင်လာရောက်ယူမည်</option>
+              </select>
             </div>
 
             <div>
