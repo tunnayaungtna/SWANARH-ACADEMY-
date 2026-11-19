@@ -10277,7 +10277,7 @@ export class ClassroomDB {
       courseCode: input.course.code,
       courseTitle: input.course.title,
       studentId: targetStudentId,
-      rollNo: (input.rollNo || '').trim(),
+      rollNo: (input.rollNo || '').replace(/[^0-9]/g, ''),
       studentName: (input.studentName || '').trim(),
       address: (input.address || '').trim(),
       phone: (input.phone || '').trim(),
@@ -10335,7 +10335,8 @@ export class ClassroomDB {
       const cleanAddress = (item.address || '').trim();
       if (!cleanName && !cleanAddress) return;
 
-      const cleanRoll = (item.rollNo || '').trim() || String(existing.length + idx + 1);
+      const cleanRoll =
+        (item.rollNo || '').replace(/[^0-9]/g, '') || String(existing.length + idx + 1);
       const recordId = `bookdel-${course.id}-${nowMs}-${idx}-${Math.random().toString(36).slice(2, 6)}`;
       const record: BookDeliveryRecord = {
         id: recordId,

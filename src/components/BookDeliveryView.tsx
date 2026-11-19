@@ -158,6 +158,13 @@ function dataUrlToUint8Array(dataUrl: string): Uint8Array {
 }
 
 /**
+ * Strictly keeps only English numbers (0-9) for Roll No.
+ */
+function sanitizeEnglishRollNo(value: string): string {
+  return (value || '').replace(/[^0-9]/g, '');
+}
+
+/**
  * Word-wraps Burmese & English text across lines to fit `maxWidth` on a 2D Canvas
  * without truncating unless `truncateMaxLines` is explicitly set.
  */
@@ -547,7 +554,7 @@ function drawSwanArhDeliverySlipOnCanvas(
   const rollSlotCenterX = (openParenEndX + closeParenX) / 2;
   const rollSlotMaxW = Math.max(20 * sx, closeParenX - openParenEndX - 4 * sx);
 
-  const rollValue = (record?.rollNo || '').trim();
+  const rollValue = sanitizeEnglishRollNo(record?.rollNo || '');
   if (rollValue) {
     drawAutoFitSingleLine(ctx, rollValue, rollSlotCenterX, rollY + 1 * sy, rollSlotMaxW, {
       fontWeight: 800,
@@ -805,7 +812,9 @@ export const BookDeliveryView: React.FC<BookDeliveryViewProps> = ({
   );
 
   // Student Self-Service Form State
-  const [studentRollNo, setStudentRollNo] = useState(() => myStudentDelivery?.rollNo || '');
+  const [studentRollNo, setStudentRollNo] = useState(() =>
+    sanitizeEnglishRollNo(myStudentDelivery?.rollNo || '')
+  );
   const [studentName, setStudentName] = useState(
     () => myStudentDelivery?.studentName || currentUser.name || ''
   );
@@ -822,7 +831,7 @@ export const BookDeliveryView: React.FC<BookDeliveryViewProps> = ({
 
   useEffect(() => {
     if (myStudentDelivery) {
-      setStudentRollNo(myStudentDelivery.rollNo || '');
+      setStudentRollNo(sanitizeEnglishRollNo(myStudentDelivery.rollNo || ''));
       setStudentName(myStudentDelivery.studentName || currentUser.name || '');
       setStudentAddress(myStudentDelivery.address || '');
       setStudentPhone(myStudentDelivery.phone || currentUser.phone || '');
@@ -1008,7 +1017,7 @@ export const BookDeliveryView: React.FC<BookDeliveryViewProps> = ({
           ? 'PDF ထုတ်ပြီး (Printed)'
           : 'မပို့ရသေး (Pending)';
       rows.push([
-        r.rollNo || '',
+        sanitizeEnglishRollNo(r.rollNo || ''),
         r.studentName || '',
         r.phone || '',
         r.address || '',
@@ -1051,7 +1060,7 @@ export const BookDeliveryView: React.FC<BookDeliveryViewProps> = ({
         id: myStudentDelivery?.id,
         course,
         studentId: currentUser.id,
-        rollNo: studentRollNo.trim(),
+        rollNo: sanitizeEnglishRollNo(studentRollNo),
         studentName: studentName.trim(),
         address: studentAddress.trim(),
         phone: studentPhone.trim(),
@@ -1120,7 +1129,7 @@ export const BookDeliveryView: React.FC<BookDeliveryViewProps> = ({
       id: myStudentDelivery?.id || 'preview',
       courseId: course.id,
       studentId: currentUser.id,
-      rollNo: studentRollNo.trim(),
+      rollNo: sanitizeEnglishRollNo(studentRollNo),
       studentName: studentName.trim() || currentUser.name,
       address: studentAddress.trim() || 'လိပ်စာ ဖြည့်သွင်းရန်...',
       phone: studentPhone.trim() || currentUser.phone || '09-XXXXXXXXX',
@@ -1279,16 +1288,18 @@ export const BookDeliveryView: React.FC<BookDeliveryViewProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Roll No. (ခုံနံပါတ်)
+                  Roll No. (English ဂဏန်းသာ)
                 </label>
                 <div className="relative">
                   <Hash className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={studentRollNo}
-                    onChange={(e) => setStudentRollNo(e.target.value)}
-                    placeholder="ဥပမာ - 2"
-                    className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 text-sm font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    onChange={(e) => setStudentRollNo(sanitizeEnglishRollNo(e.target.value))}
+                    placeholder="ဥပမာ - 2 (0-9 သာ)"
+                    className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 text-sm font-bold font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
               </div>
@@ -2172,7 +2183,9 @@ const SingleDeliveryEditorModal: React.FC<{
   const [selectedStudentId, setSelectedStudentId] = useState(
     initialRecord?.studentId || ''
   );
-  const [rollNo, setRollNo] = useState(initialRecord?.rollNo || nextSuggestedRollNo);
+  const [rollNo, setRollNo] = useState(
+    sanitizeEnglishRollNo(initialRecord?.rollNo || nextSuggestedRollNo)
+  );
   const [studentName, setStudentName] = useState(initialRecord?.studentName || '');
   const [address, setAddress] = useState(initialRecord?.address || '');
   const [phone, setPhone] = useState(initialRecord?.phone || '');
@@ -2195,7 +2208,7 @@ const SingleDeliveryEditorModal: React.FC<{
     id: initialRecord?.id || 'preview',
     courseId: course.id,
     studentId: selectedStudentId || 'preview',
-    rollNo: rollNo.trim(),
+    rollNo: sanitizeEnglishRollNo(rollNo),
     studentName: studentName.trim(),
     address: address.trim(),
     phone: phone.trim(),
@@ -2215,7 +2228,7 @@ const SingleDeliveryEditorModal: React.FC<{
         id: initialRecord?.id,
         course,
         studentId: selectedStudentId || undefined,
-        rollNo: rollNo.trim(),
+        rollNo: sanitizeEnglishRollNo(rollNo),
         studentName: studentName.trim(),
         address: address.trim(),
         phone: phone.trim(),
@@ -2275,14 +2288,16 @@ const SingleDeliveryEditorModal: React.FC<{
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                Roll No.
+                Roll No. (English ဂဏန်းသာ)
               </label>
               <input
                 type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
                 value={rollNo}
-                onChange={(e) => setRollNo(e.target.value)}
-                placeholder="ဥပမာ - 2"
-                className="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm font-bold text-slate-900 dark:text-white"
+                onChange={(e) => setRollNo(sanitizeEnglishRollNo(e.target.value))}
+                placeholder="ဥပမာ - 2 (0-9 သာ)"
+                className="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm font-bold font-mono text-slate-900 dark:text-white"
               />
             </div>
 
@@ -2417,7 +2432,8 @@ function parseBulkDeliveryText(
 
     if (parts.length >= 4) {
       results.push({
-        rollNo: parts[0] || String(startingRollNumber + results.length),
+        rollNo:
+          sanitizeEnglishRollNo(parts[0]) || String(startingRollNumber + results.length),
         studentName: parts[1] || '',
         address: parts.slice(2, parts.length - 1).join('၊ '),
         phone: parts[parts.length - 1] || '',
@@ -2425,7 +2441,7 @@ function parseBulkDeliveryText(
     } else if (parts.length === 3) {
       if (/^\d{1,4}$/.test(parts[0])) {
         results.push({
-          rollNo: parts[0],
+          rollNo: sanitizeEnglishRollNo(parts[0]),
           studentName: parts[1],
           address: parts[2],
           phone: '',
