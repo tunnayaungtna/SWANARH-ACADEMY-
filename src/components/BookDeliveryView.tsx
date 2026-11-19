@@ -158,39 +158,50 @@ function dataUrlToUint8Array(dataUrl: string): Uint8Array {
 }
 
 /**
- * Word-wraps Burmese & English text across lines to fit `maxWidth` on a 2D Canvas.
+ * Word-wraps Burmese & English text across lines to fit `maxWidth` on a 2D Canvas
+ * without truncating unless `truncateMaxLines` is explicitly set.
  */
-function wrapCanvasText(
+function wrapCanvasTextLines(
   ctx: CanvasRenderingContext2D,
   text: string,
-  maxWidth: number,
-  maxLines: number = 4
+  firstLineMaxWidth: number,
+  otherLinesMaxWidth: number
 ): string[] {
-  const rawLines = (text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const rawLines = (text || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
   if (rawLines.length === 0) return [''];
 
   const wrapped: string[] = [];
+  const getLimitForCurrentLine = () =>
+    wrapped.length === 0 ? firstLineMaxWidth : otherLinesMaxWidth;
+
   for (const rawLine of rawLines) {
-    if (ctx.measureText(rawLine).width <= maxWidth) {
+    if (ctx.measureText(rawLine).width <= getLimitForCurrentLine()) {
       wrapped.push(rawLine);
       continue;
     }
-    const tokens = rawLine.split(/(\s+|၊\s*|။\s*|,\s*|\/)/).filter(Boolean);
+    const tokens = rawLine.split(/(\s+|၊\s*|။\s*|,\s*|\/|-)/).filter(Boolean);
     let currentLine = '';
 
     for (const token of tokens) {
+      const limit = getLimitForCurrentLine();
       const candidate = currentLine ? currentLine + token : token;
-      if (ctx.measureText(candidate).width <= maxWidth) {
+      if (ctx.measureText(candidate).width <= limit) {
         currentLine = candidate;
       } else {
-        if (currentLine) {
+        if (currentLine.trim()) {
           wrapped.push(currentLine.trim());
           currentLine = '';
         }
-        if (ctx.measureText(token).width > maxWidth) {
+        const nextLimit = getLimitForCurrentLine();
+        const trimmedToken = token.trimStart();
+        if (ctx.measureText(trimmedToken).width > nextLimit) {
           let charBuf = '';
-          for (const ch of Array.from(token)) {
-            if (ctx.measureText(charBuf + ch).width <= maxWidth) {
+          for (const ch of Array.from(trimmedToken)) {
+            const charLimit = getLimitForCurrentLine();
+            if (ctx.measureText(charBuf + ch).width <= charLimit) {
               charBuf += ch;
             } else {
               if (charBuf) wrapped.push(charBuf);
@@ -199,7 +210,7 @@ function wrapCanvasText(
           }
           currentLine = charBuf;
         } else {
-          currentLine = token.trimStart();
+          currentLine = trimmedToken;
         }
       }
     }
@@ -208,15 +219,128 @@ function wrapCanvasText(
     }
   }
 
-  if (wrapped.length <= maxLines) return wrapped;
-  const truncated = wrapped.slice(0, maxLines);
-  truncated[maxLines - 1] = truncated[maxLines - 1] + '…';
-  return truncated;
+  return wrapped.length > 0 ? wrapped : [''];
+}
+
+/**
+ * Draws a single line of text that automatically scales down its font size
+ * (between `maxFontPx` and `minFontPx`) and applies canvas `maxWidth` clamping
+ * so the entire text always fits `maxWidth` ကွက်တိ with zero clipping.
+ */
+function drawAutoFitSingleLine(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  options: {
+    fontWeight?: string | number;
+    fontFamily: string;
+    maxFontPx: number;
+    minFontPx: number;
+    color?: string;
+    align?: CanvasTextAlign;
+  }
+) {
+  const clean = (text || '').replace(/\s+/g, ' ').trim();
+  if (!clean || maxWidth <= 4) return;
+
+  const weight = options.fontWeight ?? 800;
+  let fontPx = options.maxFontPx;
+  const minPx = Math.max(6, options.minFontPx);
+
+  ctx.save();
+  ctx.fillStyle = options.color || '#0f172a';
+  ctx.textAlign = options.align || 'left';
+  ctx.textBaseline = 'alphabetic';
+
+  while (fontPx > minPx) {
+    ctx.font = `${weight} ${fontPx.toFixed(1)}px ${options.fontFamily}`;
+    if (ctx.measureText(clean).width <= maxWidth) {
+      break;
+    }
+    fontPx -= 0.5;
+  }
+
+  ctx.font = `${weight} ${Math.max(minPx, fontPx).toFixed(1)}px ${options.fontFamily}`;
+  ctx.fillText(clean, x, y, maxWidth);
+  ctx.restore();
+}
+
+/**
+ * Draws a multi-line Address block that starts right beside the `Address:` label on Line 1
+ * and flows across the full column width on subsequent lines, automatically scaling
+ * font size & line height so 100% of the address fits inside `[startY, maxBottomY]` ကွက်တိ.
+ */
+function drawAutoFitAddressBlock(
+  ctx: CanvasRenderingContext2D,
+  addressText: string,
+  labelX: number,
+  firstLineX: number,
+  rightLimitX: number,
+  startY: number,
+  maxBottomY: number,
+  s: number
+) {
+  const clean = (addressText || '').trim();
+  if (!clean) return;
+
+  const fontFamily =
+    '"Padauk", "Myanmar Text", "Pyidaungsu", "Plus Jakarta Sans", sans-serif';
+  const firstLineMaxW = Math.max(30 * s, rightLimitX - firstLineX);
+  const fullLineMaxW = Math.max(50 * s, rightLimitX - labelX);
+  const availableHeight = Math.max(20 * s, maxBottomY - startY);
+
+  let chosenFontPx = 12.8 * s;
+  const minFontPx = 7.5 * s;
+  let chosenLines: string[] = [clean];
+  let chosenLineGap = 16.5 * s;
+
+  for (let fontPx = 12.8 * s; fontPx >= minFontPx; fontPx -= 0.4 * s) {
+    ctx.font = `700 ${fontPx.toFixed(1)}px ${fontFamily}`;
+    const lines = wrapCanvasTextLines(ctx, clean, firstLineMaxW, fullLineMaxW);
+    const lineGap = Math.max(fontPx * 1.28, 10.5 * s);
+    const totalNeededHeight = (lines.length - 1) * lineGap;
+
+    chosenFontPx = fontPx;
+    chosenLines = lines;
+    chosenLineGap = lineGap;
+
+    if (totalNeededHeight <= availableHeight) {
+      break;
+    }
+  }
+
+  ctx.save();
+  ctx.fillStyle = '#0f172a';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = `700 ${chosenFontPx.toFixed(1)}px ${fontFamily}`;
+
+  // If even at minimum font size there are more lines than vertical slots, merge trailing lines
+  // and clamp horizontally so not a single word is dropped.
+  const maxLinesAllowed = Math.max(1, Math.floor(availableHeight / chosenLineGap) + 1);
+  let renderLines = chosenLines;
+  if (renderLines.length > maxLinesAllowed) {
+    const head = renderLines.slice(0, maxLinesAllowed - 1);
+    const tail = renderLines.slice(maxLinesAllowed - 1).join(' ');
+    renderLines = [...head, tail];
+  }
+
+  renderLines.forEach((ln, idx) => {
+    const drawX = idx === 0 ? firstLineX : labelX;
+    const drawMaxW = idx === 0 ? firstLineMaxW : fullLineMaxW;
+    const drawY = startY + idx * chosenLineGap;
+    ctx.fillText(ln, drawX, drawY, drawMaxW);
+  });
+
+  ctx.restore();
 }
 
 /**
  * Draws a single SwanArh Academy Book Delivery Slip onto a 2D Canvas rectangle (x, y, w, h)
- * matching the exact layout of `/assets/aistudio/image_6f500bfd.png` and fitting the quadrant ကွက်တိ.
+ * matching the exact layout of `/assets/aistudio/image_6f500bfd.png` and auto-fitting
+ * every piece of text inside the card boundaries ကွက်တိ.
  */
 function drawSwanArhDeliverySlipOnCanvas(
   ctx: CanvasRenderingContext2D,
@@ -312,21 +436,36 @@ function drawSwanArhDeliverySlipOnCanvas(
     );
   }
 
-  // 3. Top-Left "From" Section
+  // 3. Vertical Black Divider Line between From and Roll No.
+  const divX = x + 259 * sx;
+
+  // 4. Top-Left "From" Section (Auto-fitted before divX)
   ctx.fillStyle = '#0f172a';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
+
+  const fromMaxRightX = divX - 8 * sx;
 
   // "From"
   ctx.font = `800 ${Math.round(17 * s)}px "Georgia", "Times New Roman", serif`;
   ctx.fillText('From', x + 18 * sx, y + 38 * sy);
 
   // "SwanArh Academy"
-  ctx.font = `800 ${Math.round(16 * s)}px "Georgia", "Times New Roman", serif`;
-  ctx.fillText(sender.academyName || 'SwanArh Academy', x + 56 * sx, y + 63 * sy);
+  drawAutoFitSingleLine(
+    ctx,
+    sender.academyName || 'SwanArh Academy',
+    x + 56 * sx,
+    y + 63 * sy,
+    fromMaxRightX - (x + 56 * sx),
+    {
+      fontWeight: 800,
+      fontFamily: '"Georgia", "Times New Roman", "Padauk", serif',
+      maxFontPx: 16 * s,
+      minFontPx: 10 * s,
+    }
+  );
 
-  // Address Lines (Burmese bold)
-  ctx.font = `700 ${Math.round(13.5 * s)}px "Padauk", "Myanmar Text", "Pyidaungsu", "Plus Jakarta Sans", sans-serif`;
+  // Sender Address Lines (Auto-fitted Burmese bold)
   const addrLines =
     sender.addressLines && sender.addressLines.length > 0
       ? sender.addressLines
@@ -337,11 +476,23 @@ function drawSwanArhDeliverySlipOnCanvas(
         ];
   let addrY = y + 88 * sy;
   addrLines.slice(0, 3).forEach((line) => {
-    ctx.fillText(line, x + 58 * sx, addrY);
+    drawAutoFitSingleLine(
+      ctx,
+      line,
+      x + 58 * sx,
+      addrY,
+      fromMaxRightX - (x + 58 * sx),
+      {
+        fontWeight: 700,
+        fontFamily: '"Padauk", "Myanmar Text", "Pyidaungsu", "Plus Jakarta Sans", sans-serif',
+        maxFontPx: 13.5 * s,
+        minFontPx: 8.5 * s,
+      }
+    );
     addrY += 23 * sy;
   });
 
-  // Phone Icon Circle + Phone Numbers
+  // Phone Icon Circle + Sender Phone Numbers (Auto-fitted)
   const phoneRowY = y + 154 * sy;
   const phoneIconCx = x + 44 * sx;
   const phoneIconCy = phoneRowY - 5 * sy;
@@ -360,14 +511,21 @@ function drawSwanArhDeliverySlipOnCanvas(
   ctx.fillText('✆', phoneIconCx, phoneIconCy + 0.5 * sy);
   ctx.restore();
 
-  ctx.fillStyle = '#0f172a';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'alphabetic';
-  ctx.font = `800 ${Math.round(13.5 * s)}px "Georgia", "Times New Roman", serif`;
-  ctx.fillText(sender.phones || '09-428121183, 09-969012234', x + 57 * sx, phoneRowY);
+  drawAutoFitSingleLine(
+    ctx,
+    sender.phones || '09-428121183, 09-969012234',
+    x + 57 * sx,
+    phoneRowY,
+    fromMaxRightX - (x + 57 * sx),
+    {
+      fontWeight: 800,
+      fontFamily: '"Georgia", "Times New Roman", serif',
+      maxFontPx: 13.5 * s,
+      minFontPx: 8.5 * s,
+    }
+  );
 
-  // 4. Vertical Black Divider Line between From and Roll No.
-  const divX = x + 259 * sx;
+  // Draw the Vertical Black Divider Line
   ctx.save();
   ctx.beginPath();
   ctx.moveTo(divX, y + 66 * sy);
@@ -377,105 +535,130 @@ function drawSwanArhDeliverySlipOnCanvas(
   ctx.stroke();
   ctx.restore();
 
-  // 5. "Roll No. (   2   )"
+  // 5. "Roll No. (   2   )" — Auto-fitted between parentheses
   const rollY = y + 100 * sy;
   ctx.fillStyle = '#0f172a';
   ctx.font = `800 ${Math.round(14 * s)}px "Georgia", "Times New Roman", serif`;
   ctx.textAlign = 'left';
-  ctx.fillText('Roll No. (', x + 276 * sx, rollY);
+  ctx.fillText('Roll No. (', x + 274 * sx, rollY);
+
+  const openParenEndX = x + 344 * sx;
+  const closeParenX = x + 384 * sx;
+  const rollSlotCenterX = (openParenEndX + closeParenX) / 2;
+  const rollSlotMaxW = Math.max(20 * sx, closeParenX - openParenEndX - 4 * sx);
 
   const rollValue = (record?.rollNo || '').trim();
   if (rollValue) {
-    ctx.font = `800 ${Math.round(19 * s)}px "Georgia", "Times New Roman", serif`;
-    ctx.textAlign = 'center';
-    ctx.fillText(rollValue, x + 360 * sx, rollY + 1 * sy);
+    drawAutoFitSingleLine(ctx, rollValue, rollSlotCenterX, rollY + 1 * sy, rollSlotMaxW, {
+      fontWeight: 800,
+      fontFamily: '"Georgia", "Times New Roman", "Plus Jakarta Sans", serif',
+      maxFontPx: 18.5 * s,
+      minFontPx: 9 * s,
+      align: 'center',
+    });
   }
 
+  ctx.fillStyle = '#0f172a';
   ctx.font = `800 ${Math.round(14 * s)}px "Georgia", "Times New Roman", serif`;
   ctx.textAlign = 'left';
-  ctx.fillText(')', x + 382 * sx, rollY);
+  ctx.fillText(')', closeParenX, rollY);
 
-  // 6. Bottom-Right "To" Section
-  const toBaseX = x + 269 * sx;
-  const labelX = x + 289 * sx;
-  const valueX = x + 356 * sx;
-  const maxValueWidth = x + w - valueX - 12 * sx;
+  // 6. Bottom-Right "To" Section — All fields auto-fitted inside [x + 266*sx, x + w - 10*sx]
+  const toBaseX = x + 266 * sx;
+  const labelX = x + 280 * sx;
+  const rightLimitX = x + w - 10 * sx;
 
   // "To"
   ctx.fillStyle = '#0f172a';
-  ctx.font = `800 ${Math.round(17 * s)}px "Georgia", "Times New Roman", serif`;
-  ctx.fillText('To', toBaseX, y + 185 * sy);
+  ctx.font = `800 ${Math.round(16.5 * s)}px "Georgia", "Times New Roman", serif`;
+  ctx.fillText('To', toBaseX, y + 178 * sy);
 
   // "Name:"
-  const nameY = y + 210 * sy;
+  const nameY = y + 202 * sy;
+  const nameLabel = 'Name:';
   ctx.fillStyle = '#334155';
-  ctx.font = `700 ${Math.round(14.5 * s)}px "Plus Jakarta Sans", sans-serif`;
-  ctx.fillText('Name:', labelX, nameY);
+  ctx.font = `700 ${Math.round(14 * s)}px "Plus Jakarta Sans", sans-serif`;
+  ctx.fillText(nameLabel, labelX, nameY);
+  const nameValX = labelX + ctx.measureText(nameLabel).width + 6 * sx;
 
   if (record?.studentName) {
-    ctx.fillStyle = '#0f172a';
-    ctx.font = `800 ${Math.round(14 * s)}px "Padauk", "Myanmar Text", "Pyidaungsu", "Plus Jakarta Sans", sans-serif`;
-    const nameLines = wrapCanvasText(ctx, record.studentName, maxValueWidth + 10 * sx, 1);
-    ctx.fillText(nameLines[0] || '', valueX - 10 * sx, nameY);
+    drawAutoFitSingleLine(
+      ctx,
+      record.studentName,
+      nameValX,
+      nameY,
+      rightLimitX - nameValX,
+      {
+        fontWeight: 800,
+        fontFamily:
+          '"Padauk", "Myanmar Text", "Pyidaungsu", "Plus Jakarta Sans", sans-serif',
+        maxFontPx: 14 * s,
+        minFontPx: 8.5 * s,
+      }
+    );
   }
 
-  // "Address:"
-  const addrLabelY = y + 234 * sy;
+  // "Address:" — Auto-fits multi-line Burmese/English address inside [y + 225*sy, y + 294*sy]
+  const addrLabelY = y + 225 * sy;
+  const addrLabel = 'Address:';
   ctx.fillStyle = '#334155';
-  ctx.font = `700 ${Math.round(14.5 * s)}px "Plus Jakarta Sans", sans-serif`;
-  ctx.fillText('Address:', labelX, addrLabelY);
+  ctx.font = `700 ${Math.round(14 * s)}px "Plus Jakarta Sans", sans-serif`;
+  ctx.fillText(addrLabel, labelX, addrLabelY);
+  const addrFirstLineX = labelX + ctx.measureText(addrLabel).width + 6 * sx;
 
   if (record?.address) {
-    ctx.fillStyle = '#0f172a';
-    ctx.font = `700 ${Math.round(12.5 * s)}px "Padauk", "Myanmar Text", "Pyidaungsu", "Plus Jakarta Sans", sans-serif`;
-    const fullAddr = record.address;
-    const firstLineMaxW = x + w - (valueX + 4 * sx) - 10 * sx;
-    const fullColMaxW = x + w - labelX - 12 * sx;
-    const wrappedFirst = wrapCanvasText(ctx, fullAddr, firstLineMaxW, 5);
-
-    if (wrappedFirst.length === 1) {
-      ctx.fillText(wrappedFirst[0], valueX + 4 * sx, addrLabelY);
-    } else {
-      const blockLines = wrapCanvasText(ctx, fullAddr, fullColMaxW, 3);
-      let curY = addrLabelY + 19 * sy;
-      blockLines.forEach((ln) => {
-        ctx.fillText(ln, labelX + 4 * sx, curY);
-        curY += 18 * sy;
-      });
-    }
+    drawAutoFitAddressBlock(
+      ctx,
+      record.address,
+      labelX,
+      addrFirstLineX,
+      rightLimitX,
+      addrLabelY,
+      y + 294 * sy,
+      s
+    );
   }
 
-  // "Ph No."
-  const phY = y + 312 * sy;
+  // "Ph No." — Auto-fits single or multiple phone numbers
+  const phY = y + 315 * sy;
+  const phLabel = 'Ph No.';
   ctx.fillStyle = '#334155';
-  ctx.font = `700 ${Math.round(14.5 * s)}px "Plus Jakarta Sans", sans-serif`;
-  ctx.fillText('Ph No.', labelX, phY);
+  ctx.font = `700 ${Math.round(14 * s)}px "Plus Jakarta Sans", sans-serif`;
+  ctx.fillText(phLabel, labelX, phY);
+  const phValX = labelX + ctx.measureText(phLabel).width + 6 * sx;
 
   if (record?.phone) {
-    ctx.fillStyle = '#0f172a';
-    ctx.font = `800 ${Math.round(14 * s)}px "Georgia", "Plus Jakarta Sans", sans-serif`;
-    ctx.fillText(record.phone, valueX - 6 * sx, phY);
+    drawAutoFitSingleLine(ctx, record.phone, phValX, phY, rightLimitX - phValX, {
+      fontWeight: 800,
+      fontFamily: '"Georgia", "Plus Jakarta Sans", sans-serif',
+      maxFontPx: 14 * s,
+      minFontPx: 8.5 * s,
+    });
   }
 
-  // "ပို့ဆောင်ရေး:"
-  const deliveryY = y + 338 * sy;
-  ctx.fillStyle = '#334155';
-  ctx.font = `700 ${Math.round(13.5 * s)}px "Padauk", "Myanmar Text", "Pyidaungsu", "Plus Jakarta Sans", sans-serif`;
+  // "ပို့ဆောင်ရေး:" — Auto-fits "Royal Express" or "ကိုယ်တိုင်လာရောက်ယူမည်" cleanly on one line
+  const deliveryY = y + 340 * sy;
   const deliveryLabel = 'ပို့ဆောင်ရေး:';
+  ctx.fillStyle = '#334155';
+  ctx.font = `700 ${Math.round(13 * s)}px "Padauk", "Myanmar Text", "Pyidaungsu", "Plus Jakarta Sans", sans-serif`;
   ctx.fillText(deliveryLabel, labelX, deliveryY);
 
   const deliveryMethodText = (record?.note || '').trim() || 'Royal Express';
-  const labelMeasuredW = ctx.measureText(deliveryLabel).width;
-  const deliveryValX = Math.max(valueX + 8 * sx, labelX + labelMeasuredW + 8 * sx);
-  ctx.fillStyle = '#0f172a';
-  ctx.font = `800 ${Math.round(13.5 * s)}px "Padauk", "Myanmar Text", "Pyidaungsu", "Plus Jakarta Sans", sans-serif`;
-  const deliveryLines = wrapCanvasText(
+  const deliveryValX = labelX + ctx.measureText(deliveryLabel).width + 6 * sx;
+  drawAutoFitSingleLine(
     ctx,
     deliveryMethodText,
-    Math.max(40 * sx, x + w - deliveryValX - 8 * sx),
-    1
+    deliveryValX,
+    deliveryY,
+    rightLimitX - deliveryValX,
+    {
+      fontWeight: 800,
+      fontFamily:
+        '"Padauk", "Myanmar Text", "Pyidaungsu", "Plus Jakarta Sans", sans-serif',
+      maxFontPx: 13 * s,
+      minFontPx: 8.5 * s,
+    }
   );
-  ctx.fillText(deliveryLines[0] || deliveryMethodText, deliveryValX, deliveryY);
 
   ctx.restore();
 }
