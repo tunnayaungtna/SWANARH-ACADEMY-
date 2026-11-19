@@ -8,6 +8,7 @@ import {
   AssignmentSubmission,
   Quiz,
   QuizSubmission,
+  StudentExamSession,
   StudentProgress,
   CertificateData,
   NotificationItem,
@@ -22,6 +23,9 @@ import {
   PrivateNote,
   PrivateNoteCategory,
   PrivateNoteStatus,
+  BookDeliveryRecord,
+  BookDeliveryStatus,
+  BookDeliverySenderConfig,
 } from '../types/classroom';
 import {
   SupabaseService,
@@ -93,6 +97,9 @@ const STORAGE_KEYS = {
   CLOUD_CONFIRMED_USERS: 'classroom_os_cloud_confirmed_users_v1',
   DELETED_USERS_META: 'classroom_deleted_users_meta_v2',
   PRIVATE_NOTES: 'classroom_private_notes_v1',
+  STUDENT_EXAM_SESSIONS: 'classroom_student_exam_sessions_v1',
+  BOOK_DELIVERIES: 'classroom_book_deliveries_v1',
+  BOOK_DELIVERY_SENDER: 'classroom_book_delivery_sender_v1',
 };
 
 // Rate limiting in-memory / storage tracker
@@ -7174,6 +7181,189 @@ export class ClassroomDB {
       .sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
   }
 
+  static formatMyanmarDateTime(ms: number = Date.now(), includeSeconds: boolean = false): string {
+    try {
+      return (
+        new Date(ms).toLocaleString('en-GB', {
+          timeZone: 'Asia/Yangon',
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          ...(includeSeconds ? { second: '2-digit' } : {}),
+          hour12: true,
+        }) + ' (MMT)'
+      );
+    } catch {
+      return new Date(ms).toLocaleString('en-US');
+    }
+  }
+
+  static normalizeScheduleStringWithTimezone(
+    raw?: string,
+    timezoneMode: 'MMT' | 'LOCAL' = 'MMT'
+  ): string | undefined {
+    const trimmed = (raw || '').trim();
+    if (!trimmed) return undefined;
+    if (timezoneMode !== 'LOCAL') {
+      // If string is YYYY-MM-DDTHH:mm or YYYY-MM-DDTHH:mm:ss without timezone offset, anchor explicitly to Myanmar Standard Time (+06:30)
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(trimmed)) {
+        return `${trimmed}:00+06:30`;
+      }
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(trimmed)) {
+        return `${trimmed}+06:30`;
+      }
+      // If it already has an offset, convert or keep as +06:30
+      const parsedMs = Date.parse(trimmed);
+      if (!Number.isNaN(parsedMs)) {
+        const mmtShifted = new Date(parsedMs + (6 * 60 + 30) * 60 * 1000);
+        const yyyy = mmtShifted.getUTCFullYear();
+        const mm = String(mmtShifted.getUTCMonth() + 1).padStart(2, '0');
+        const dd = String(mmtShifted.getUTCDate()).padStart(2, '0');
+        const hh = String(mmtShifted.getUTCHours()).padStart(2, '0');
+        const min = String(mmtShifted.getUTCMinutes()).padStart(2, '0');
+        const ss = String(mmtShifted.getUTCSeconds()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}+06:30`;
+      }
+    }
+    return trimmed;
+  }
+
+  static parseQuizScheduleMs(raw?: string, timezoneMode: 'MMT' | 'LOCAL' = 'MMT'): number {
+    if (!raw || !raw.trim()) return NaN;
+    const trimmed = raw.trim();
+    if (timezoneMode !== 'LOCAL') {
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(trimmed)) {
+        return Date.parse(`${trimmed}:00+06:30`);
+      }
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(trimmed)) {
+        return Date.parse(`${trimmed}+06:30`);
+      }
+    }
+    return Date.parse(trimmed);
+  }
+
+  static getStudentExamSession(quiz: Quiz, studentId: string): StudentExamSession | null {
+    const allSessions = this.getItem<Record<string, StudentExamSession>>(
+      STORAGE_KEYS.STUDENT_EXAM_SESSIONS,
+      {}
+    );
+    const key = `${quiz.id}__${studentId}`;
+    const existing = allSessions[key];
+    if (!existing) return null;
+
+    // If the teacher updated the quiz durationMinutes after the student started (while still active), adjust expiresAtMs proportionally
+    const targetDuration = Math.max(1, Number(quiz.durationMinutes) || 20);
+    if (existing.durationMinutes !== targetDuration && !existing.isLockedOut) {
+      const updated: StudentExamSession = {
+        ...existing,
+        durationMinutes: targetDuration,
+        expiresAtMs: existing.startedAtMs + targetDuration * 60 * 1000,
+      };
+      allSessions[key] = updated;
+      this.setItem(STORAGE_KEYS.STUDENT_EXAM_SESSIONS, allSessions);
+      return updated;
+    }
+    return existing;
+  }
+
+  static startOrResumeStudentExamSession(
+    quiz: Quiz,
+    studentId: string,
+    forceNewForPractice: boolean = false
+  ): StudentExamSession {
+    const allSessions = this.getItem<Record<string, StudentExamSession>>(
+      STORAGE_KEYS.STUDENT_EXAM_SESSIONS,
+      {}
+    );
+    const key = `${quiz.id}__${studentId}`;
+    const existing = allSessions[key];
+    const durationMinutes = Math.max(1, Number(quiz.durationMinutes) || 20);
+
+    if (existing && !forceNewForPractice) {
+      const nextExpiresAtMs = existing.startedAtMs + durationMinutes * 60 * 1000;
+      if (existing.durationMinutes !== durationMinutes || existing.expiresAtMs !== nextExpiresAtMs) {
+        const synced: StudentExamSession = {
+          ...existing,
+          durationMinutes,
+          expiresAtMs: nextExpiresAtMs,
+        };
+        allSessions[key] = synced;
+        this.setItem(STORAGE_KEYS.STUDENT_EXAM_SESSIONS, allSessions);
+        return synced;
+      }
+      return existing;
+    }
+
+    const nowMs = Date.now();
+    const newSession: StudentExamSession = {
+      quizId: quiz.id,
+      courseId: quiz.courseId,
+      studentId,
+      startedAtMs: nowMs,
+      startedAtMmt: this.formatMyanmarDateTime(nowMs, true),
+      durationMinutes,
+      expiresAtMs: nowMs + durationMinutes * 60 * 1000,
+      draftAnswers: {},
+      fiveMinWarningShown: false,
+      isLockedOut: false,
+      quizStatusUpdatedAtMs: quiz.statusUpdatedAtMs || nowMs,
+    };
+
+    allSessions[key] = newSession;
+    this.setItem(STORAGE_KEYS.STUDENT_EXAM_SESSIONS, allSessions);
+    return newSession;
+  }
+
+  static updateStudentExamSessionDraft(
+    quizId: string,
+    studentId: string,
+    draftAnswers: Record<string, number>,
+    fiveMinWarningShown?: boolean
+  ): void {
+    const allSessions = this.getItem<Record<string, StudentExamSession>>(
+      STORAGE_KEYS.STUDENT_EXAM_SESSIONS,
+      {}
+    );
+    const key = `${quizId}__${studentId}`;
+    const existing = allSessions[key];
+    if (!existing) return;
+    allSessions[key] = {
+      ...existing,
+      draftAnswers,
+      ...(typeof fiveMinWarningShown === 'boolean' ? { fiveMinWarningShown } : {}),
+    };
+    this.setItem(STORAGE_KEYS.STUDENT_EXAM_SESSIONS, allSessions);
+  }
+
+  static lockStudentExamSession(quizId: string, studentId: string): void {
+    const allSessions = this.getItem<Record<string, StudentExamSession>>(
+      STORAGE_KEYS.STUDENT_EXAM_SESSIONS,
+      {}
+    );
+    const key = `${quizId}__${studentId}`;
+    const existing = allSessions[key];
+    if (!existing) return;
+    allSessions[key] = {
+      ...existing,
+      isLockedOut: true,
+    };
+    this.setItem(STORAGE_KEYS.STUDENT_EXAM_SESSIONS, allSessions);
+  }
+
+  static clearStudentExamSession(quizId: string, studentId: string): void {
+    const allSessions = this.getItem<Record<string, StudentExamSession>>(
+      STORAGE_KEYS.STUDENT_EXAM_SESSIONS,
+      {}
+    );
+    const key = `${quizId}__${studentId}`;
+    if (key in allSessions) {
+      delete allSessions[key];
+      this.setItem(STORAGE_KEYS.STUDENT_EXAM_SESSIONS, allSessions);
+    }
+  }
+
   static saveQuiz(
     quizInput: {
       id?: string;
@@ -7188,6 +7378,7 @@ export class ClassroomDB {
       isOpen?: boolean;
       scheduledOpenAt?: string;
       scheduledCloseAt?: string;
+      timezoneMode?: 'MMT' | 'LOCAL';
       dueNotice?: string;
       questions: Quiz['questions'];
     },
@@ -7199,6 +7390,7 @@ export class ClassroomDB {
     const existing = isEditing ? quizzes.find((q) => q.id === quizInput.id) : undefined;
     const nowMs = Date.now();
     const quizId = existing?.id || `quiz-${nowMs}-${Math.random().toString(36).slice(2, 6)}`;
+    const tzMode: 'MMT' | 'LOCAL' = quizInput.timezoneMode === 'LOCAL' ? 'LOCAL' : 'MMT';
 
     const savedQuiz: Quiz = {
       id: quizId,
@@ -7211,14 +7403,16 @@ export class ClassroomDB {
       enableFlashcards: quizInput.enableFlashcards !== false,
       showAnswersImmediately: quizInput.showAnswersImmediately !== false,
       isOpen: quizInput.isOpen !== false,
-      scheduledOpenAt: quizInput.scheduledOpenAt?.trim() || undefined,
-      scheduledCloseAt: quizInput.scheduledCloseAt?.trim() || undefined,
+      timezoneMode: tzMode,
+      scheduledOpenAt: this.normalizeScheduleStringWithTimezone(quizInput.scheduledOpenAt, tzMode),
+      scheduledCloseAt: this.normalizeScheduleStringWithTimezone(quizInput.scheduledCloseAt, tzMode),
       statusUpdatedAtMs: nowMs,
       dueNotice: quizInput.dueNotice?.trim() || undefined,
       createdBy: existing?.createdBy || currentUser.name,
       createdAt:
         existing?.createdAt ||
         new Date(nowMs).toLocaleDateString('en-US', {
+          timeZone: 'Asia/Yangon',
           month: 'short',
           day: 'numeric',
           year: 'numeric',
@@ -7331,13 +7525,16 @@ export class ClassroomDB {
     if (!target) return null;
 
     const nowMs = Date.now();
+    const tzMode = target.timezoneMode === 'LOCAL' ? 'LOCAL' : 'MMT';
     let scheduledOpenAt = target.scheduledOpenAt;
     let scheduledCloseAt = target.scheduledCloseAt;
     if (nextIsOpen) {
-      if (scheduledOpenAt && Date.parse(scheduledOpenAt) > nowMs) {
+      const openMs = this.parseQuizScheduleMs(scheduledOpenAt, tzMode);
+      const closeMs = this.parseQuizScheduleMs(scheduledCloseAt, tzMode);
+      if (!Number.isNaN(openMs) && openMs > nowMs) {
         scheduledOpenAt = undefined;
       }
-      if (scheduledCloseAt && Date.parse(scheduledCloseAt) <= nowMs) {
+      if (!Number.isNaN(closeMs) && closeMs <= nowMs) {
         scheduledCloseAt = undefined;
       }
     }
@@ -7494,6 +7691,7 @@ export class ClassroomDB {
 
   static resetStudentQuizSubmission(quizId: string, studentId: string, currentUser: User): boolean {
     if (currentUser.role !== 'admin' && currentUser.role !== 'co_admin') return false;
+    this.clearStudentExamSession(quizId, studentId);
     const submissions = this.getItem<QuizSubmission[]>(
       STORAGE_KEYS.QUIZ_SUBMISSIONS,
       INITIAL_QUIZ_SUBMISSIONS
@@ -7524,7 +7722,12 @@ export class ClassroomDB {
     quiz: Quiz,
     answers: Record<string, number>,
     currentUser: User,
-    timeSpentSeconds?: number
+    timeSpentSeconds?: number,
+    options?: {
+      startedAtMs?: number;
+      startedAtMmt?: string;
+      autoSubmittedOnTimeout?: boolean;
+    }
   ): {
     submission: QuizSubmission;
     passed: boolean;
@@ -7551,6 +7754,13 @@ export class ClassroomDB {
     const passed = score >= quiz.passingScore;
     const nowMs = Date.now();
     const deterministicId = `qsub_${quiz.id}_${currentUser.id}`;
+
+    // Lock or clear student active session
+    if (quiz.mode === 'practice') {
+      this.clearStudentExamSession(quiz.id, currentUser.id);
+    } else {
+      this.lockStudentExamSession(quiz.id, currentUser.id);
+    }
 
     // Un-mark deterministicId from deletedIds in case teacher previously reset this student's attempt
     const deletedIds = this.getDeletedIds();
@@ -7583,14 +7793,13 @@ export class ClassroomDB {
       passed,
       answers,
       timeSpentSeconds,
+      startedAtMs: options?.startedAtMs,
+      startedAtMmt:
+        options?.startedAtMmt ||
+        (options?.startedAtMs ? this.formatMyanmarDateTime(options.startedAtMs, true) : undefined),
+      autoSubmittedOnTimeout: Boolean(options?.autoSubmittedOnTimeout),
       attemptCount,
-      submittedAt: new Date(nowMs).toLocaleString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
+      submittedAt: this.formatMyanmarDateTime(nowMs, false),
       submittedAtMs: nowMs,
     };
 
@@ -9944,6 +10153,362 @@ export class ClassroomDB {
       // ignore
     }
     return true;
+  }
+
+  /* ============================================================================
+   * BOOK DELIVERY (စာအုပ်ပို့ရန် လိပ်စာ နှင့် A4 4-Up PDF Label System)
+   * ============================================================================ */
+
+  static getDefaultBookDeliverySenderConfig(): BookDeliverySenderConfig {
+    return {
+      academyName: 'SwanArh Academy',
+      addressLines: [
+        'အမှတ် (၄၆၀)၊ ဗိုလ်လက်ျာလမ်း၊',
+        'ရန်အောင် (၁) ရပ်ကွက်၊ ပျဉ်းမနားမြို့၊',
+        'နေပြည်တော်။',
+      ],
+      phones: '09-428121183, 09-969012234',
+    };
+  }
+
+  static getBookDeliverySenderConfig(): BookDeliverySenderConfig {
+    const def = this.getDefaultBookDeliverySenderConfig();
+    const saved = this.getItem<BookDeliverySenderConfig | null>(
+      STORAGE_KEYS.BOOK_DELIVERY_SENDER,
+      null
+    );
+    if (!saved || !saved.academyName) return def;
+    return {
+      academyName: saved.academyName.trim() || def.academyName,
+      addressLines:
+        Array.isArray(saved.addressLines) && saved.addressLines.length > 0
+          ? saved.addressLines
+          : def.addressLines,
+      phones: saved.phones?.trim() || def.phones,
+    };
+  }
+
+  static saveBookDeliverySenderConfig(config: BookDeliverySenderConfig): BookDeliverySenderConfig {
+    const def = this.getDefaultBookDeliverySenderConfig();
+    const cleaned: BookDeliverySenderConfig = {
+      academyName: (config.academyName || '').trim() || def.academyName,
+      addressLines: (config.addressLines || [])
+        .map((l) => l.trim())
+        .filter(Boolean),
+      phones: (config.phones || '').trim() || def.phones,
+    };
+    if (cleaned.addressLines.length === 0) {
+      cleaned.addressLines = def.addressLines;
+    }
+    this.setItem(STORAGE_KEYS.BOOK_DELIVERY_SENDER, cleaned);
+    return cleaned;
+  }
+
+  static compareRollNumbers(aRoll: string, bRoll: string): number {
+    const cleanA = (aRoll || '').trim();
+    const cleanB = (bRoll || '').trim();
+    const numA = parseInt(cleanA.replace(/[^0-9]/g, ''), 10);
+    const numB = parseInt(cleanB.replace(/[^0-9]/g, ''), 10);
+    if (!isNaN(numA) && !isNaN(numB) && numA !== numB) {
+      return numA - numB;
+    }
+    if (!isNaN(numA) && isNaN(numB)) return -1;
+    if (isNaN(numA) && !isNaN(numB)) return 1;
+    return cleanA.localeCompare(cleanB, undefined, { numeric: true, sensitivity: 'base' });
+  }
+
+  static getBookDeliveries(courseId?: string): BookDeliveryRecord[] {
+    const deletedSet = new Set(this.getDeletedIds());
+    const all = this.getItem<BookDeliveryRecord[]>(STORAGE_KEYS.BOOK_DELIVERIES, []).filter(
+      (r) => r && r.id && !deletedSet.has(r.id)
+    );
+    const filtered = courseId ? all.filter((r) => r.courseId === courseId) : all;
+    return [...filtered].sort((a, b) => this.compareRollNumbers(a.rollNo, b.rollNo));
+  }
+
+  static getStudentBookDelivery(courseId: string, studentId: string): BookDeliveryRecord | null {
+    const records = this.getBookDeliveries(courseId);
+    return records.find((r) => r.studentId === studentId) || null;
+  }
+
+  static saveBookDelivery(
+    input: {
+      id?: string;
+      course: Course;
+      studentId?: string;
+      rollNo: string;
+      studentName: string;
+      address: string;
+      phone: string;
+      note?: string;
+      status?: BookDeliveryStatus;
+    },
+    actor: User
+  ): BookDeliveryRecord {
+    const existing = this.getItem<BookDeliveryRecord[]>(STORAGE_KEYS.BOOK_DELIVERIES, []);
+    const nowMs = Date.now();
+    const timeLabel = this.formatMyanmarDateTime(nowMs);
+    const targetStudentId =
+      input.studentId ||
+      (actor.role === 'student'
+        ? actor.id
+        : `manual-${nowMs}-${Math.random().toString(36).slice(2, 6)}`);
+
+    // Match by explicit id OR by (courseId + studentId) when not a manual duplicate
+    const matchIndex = existing.findIndex(
+      (r) =>
+        (input.id && r.id === input.id) ||
+        (!input.id &&
+          r.courseId === input.course.id &&
+          r.studentId === targetStudentId &&
+          !targetStudentId.startsWith('manual-'))
+    );
+
+    const prev = matchIndex >= 0 ? existing[matchIndex] : undefined;
+    const recordId =
+      prev?.id ||
+      input.id ||
+      `bookdel-${input.course.id}-${nowMs}-${Math.random().toString(36).slice(2, 6)}`;
+
+    const nextStatus: BookDeliveryStatus = input.status || prev?.status || 'pending';
+    const record: BookDeliveryRecord = {
+      id: recordId,
+      courseId: input.course.id,
+      courseCode: input.course.code,
+      courseTitle: input.course.title,
+      studentId: targetStudentId,
+      rollNo: (input.rollNo || '').trim(),
+      studentName: (input.studentName || '').trim(),
+      address: (input.address || '').trim(),
+      phone: (input.phone || '').trim(),
+      note: input.note?.trim() || undefined,
+      status: nextStatus,
+      shippedAt:
+        nextStatus === 'shipped' || nextStatus === 'received'
+          ? prev?.shippedAt || timeLabel
+          : undefined,
+      receivedAt:
+        nextStatus === 'received'
+          ? prev?.receivedAt || timeLabel
+          : undefined,
+      updatedByRole: actor.role,
+      createdAt: prev?.createdAt || timeLabel,
+      createdAtMs: prev?.createdAtMs || nowMs,
+      updatedAtMs: nowMs,
+    };
+
+    const nextList =
+      matchIndex >= 0
+        ? existing.map((r, idx) => (idx === matchIndex ? record : r))
+        : [record, ...existing];
+
+    this.setItem(STORAGE_KEYS.BOOK_DELIVERIES, nextList);
+    this.markLocalWrite(record.id);
+
+    try {
+      SupabaseService.upsertBookDelivery(record).catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    return record;
+  }
+
+  static bulkImportBookDeliveries(
+    course: Course,
+    entries: Array<{
+      rollNo: string;
+      studentName: string;
+      address: string;
+      phone: string;
+      note?: string;
+    }>,
+    actor: User
+  ): BookDeliveryRecord[] {
+    const existing = [...this.getItem<BookDeliveryRecord[]>(STORAGE_KEYS.BOOK_DELIVERIES, [])];
+    const nowMs = Date.now();
+    const timeLabel = this.formatMyanmarDateTime(nowMs);
+    const savedRecords: BookDeliveryRecord[] = [];
+
+    entries.forEach((item, idx) => {
+      const cleanName = (item.studentName || '').trim();
+      const cleanAddress = (item.address || '').trim();
+      if (!cleanName && !cleanAddress) return;
+
+      const cleanRoll = (item.rollNo || '').trim() || String(existing.length + idx + 1);
+      const recordId = `bookdel-${course.id}-${nowMs}-${idx}-${Math.random().toString(36).slice(2, 6)}`;
+      const record: BookDeliveryRecord = {
+        id: recordId,
+        courseId: course.id,
+        courseCode: course.code,
+        courseTitle: course.title,
+        studentId: `manual-${nowMs}-${idx}`,
+        rollNo: cleanRoll,
+        studentName: cleanName || 'Student',
+        address: cleanAddress,
+        phone: (item.phone || '').trim(),
+        note: item.note?.trim() || undefined,
+        status: 'pending',
+        updatedByRole: actor.role,
+        createdAt: timeLabel,
+        createdAtMs: nowMs + idx,
+        updatedAtMs: nowMs + idx,
+      };
+      existing.push(record);
+      savedRecords.push(record);
+      this.markLocalWrite(record.id);
+    });
+
+    if (savedRecords.length > 0) {
+      this.setItem(STORAGE_KEYS.BOOK_DELIVERIES, existing);
+      savedRecords.forEach((rec) => {
+        SupabaseService.upsertBookDelivery(rec, true).catch(() => {});
+      });
+    }
+
+    return savedRecords;
+  }
+
+  static updateBookDeliveryStatus(
+    recordIds: string[],
+    status: BookDeliveryStatus,
+    actor: User
+  ): number {
+    if (!recordIds || recordIds.length === 0) return 0;
+    const idSet = new Set(recordIds);
+    const existing = this.getItem<BookDeliveryRecord[]>(STORAGE_KEYS.BOOK_DELIVERIES, []);
+    const nowMs = Date.now();
+    const timeLabel = this.formatMyanmarDateTime(nowMs);
+    const updatedToSync: BookDeliveryRecord[] = [];
+
+    const nextList = existing.map((r) => {
+      if (!idSet.has(r.id)) return r;
+      const updated: BookDeliveryRecord = {
+        ...r,
+        status,
+        shippedAt:
+          status === 'shipped'
+            ? timeLabel
+            : status === 'received'
+            ? r.shippedAt || timeLabel
+            : undefined,
+        receivedAt: status === 'received' ? timeLabel : undefined,
+        updatedByRole: actor.role,
+        updatedAtMs: nowMs,
+      };
+      updatedToSync.push(updated);
+      this.markLocalWrite(updated.id);
+      return updated;
+    });
+
+    if (updatedToSync.length > 0) {
+      this.setItem(STORAGE_KEYS.BOOK_DELIVERIES, nextList);
+      updatedToSync.forEach((rec, i) => {
+        SupabaseService.upsertBookDelivery(rec, i > 0).catch(() => {});
+      });
+    }
+    return updatedToSync.length;
+  }
+
+  static confirmStudentBookReceived(
+    courseId: string,
+    student: User,
+    received: boolean
+  ): BookDeliveryRecord | null {
+    const existing = this.getItem<BookDeliveryRecord[]>(STORAGE_KEYS.BOOK_DELIVERIES, []);
+    const target = existing.find((r) => r.courseId === courseId && r.studentId === student.id);
+    if (!target) return null;
+
+    const nowMs = Date.now();
+    const timeLabel = this.formatMyanmarDateTime(nowMs);
+    const nextStatus: BookDeliveryStatus = received
+      ? 'received'
+      : target.shippedAt
+      ? 'shipped'
+      : 'pending';
+
+    const updated: BookDeliveryRecord = {
+      ...target,
+      status: nextStatus,
+      receivedAt: received ? timeLabel : undefined,
+      updatedByRole: student.role,
+      updatedAtMs: nowMs,
+    };
+
+    const nextList = existing.map((r) => (r.id === target.id ? updated : r));
+    this.setItem(STORAGE_KEYS.BOOK_DELIVERIES, nextList);
+    this.markLocalWrite(updated.id);
+
+    try {
+      SupabaseService.upsertBookDelivery(updated).catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    return updated;
+  }
+
+  static deleteBookDelivery(recordId: string, actor: User): boolean {
+    const existing = this.getItem<BookDeliveryRecord[]>(STORAGE_KEYS.BOOK_DELIVERIES, []);
+    const target = existing.find((r) => r.id === recordId);
+    if (!target) return false;
+    if (
+      actor.role !== 'admin' &&
+      actor.role !== 'co_admin' &&
+      target.studentId !== actor.id
+    ) {
+      return false;
+    }
+    this.recordDeletedIds([recordId]);
+    this.setItem(
+      STORAGE_KEYS.BOOK_DELIVERIES,
+      existing.filter((r) => r.id !== recordId)
+    );
+    try {
+      SupabaseService.deleteRemoteBookDelivery(recordId).catch(() => {});
+    } catch {
+      // ignore
+    }
+    return true;
+  }
+
+  static async syncBookDeliveriesFromCloud(forceRefresh: boolean = false): Promise<boolean> {
+    try {
+      const currentUser = this.getCurrentUser();
+      if (!currentUser) return false;
+      const remote = await SupabaseService.getRemoteBookDeliveries({
+        studentId: currentUser.role === 'student' ? currentUser.id : undefined,
+        forceRefresh,
+      });
+      if (!remote) return false;
+
+      const deletedSet = new Set(this.getDeletedIds());
+      const local = this.getItem<BookDeliveryRecord[]>(STORAGE_KEYS.BOOK_DELIVERIES, []).filter(
+        (r) => r && r.id && !deletedSet.has(r.id)
+      );
+      const mergedMap = new Map<string, BookDeliveryRecord>();
+      local.forEach((r) => mergedMap.set(r.id, r));
+
+      let changed = false;
+      for (const rem of remote) {
+        if (!rem || !rem.id || deletedSet.has(rem.id)) continue;
+        const loc = mergedMap.get(rem.id);
+        if (!loc) {
+          mergedMap.set(rem.id, rem);
+          changed = true;
+        } else if ((rem.updatedAtMs || 0) > (loc.updatedAtMs || 0) && !this.isRecentLocalWrite(loc.id, 15_000)) {
+          mergedMap.set(rem.id, rem);
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        this.setItem(STORAGE_KEYS.BOOK_DELIVERIES, Array.from(mergedMap.values()));
+      }
+      return changed;
+    } catch {
+      return false;
+    }
   }
 
   static addNotification(item: Omit<NotificationItem, 'id' | 'createdAt' | 'isRead'>): NotificationItem {

@@ -48,7 +48,7 @@ interface NavbarProps {
   onRefreshNotifications: () => void;
   onSelectNotificationCourse?: (
     courseId: string,
-    targetTab?: 'stream' | 'attendance' | 'quizzes' | 'private_notes' | 'people'
+    targetTab?: 'stream' | 'attendance' | 'quizzes' | 'book_delivery' | 'private_notes' | 'people'
   ) => void;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;

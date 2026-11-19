@@ -5,6 +5,7 @@ import { PeopleView } from './PeopleView';
 import { AttendanceView } from './AttendanceView';
 import { PrivateNotesView } from './PrivateNotesView';
 import { QuizzesView } from './QuizzesView';
+import { BookDeliveryView } from './BookDeliveryView';
 import { ClassroomDB } from '../services/storage';
 import { useBackHandler } from '../utils/backNavigation';
 import {
@@ -17,9 +18,16 @@ import {
   Clock,
   CheckCircle2,
   FileQuestion,
+  Package,
 } from 'lucide-react';
 
-export type ClassroomTab = 'stream' | 'attendance' | 'quizzes' | 'private_notes' | 'people';
+export type ClassroomTab =
+  | 'stream'
+  | 'attendance'
+  | 'quizzes'
+  | 'book_delivery'
+  | 'private_notes'
+  | 'people';
 
 interface CourseDetailProps {
   course: Course;
@@ -165,6 +173,10 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
         ClassroomDB.syncQuizzesFromCloud(true).then((updated) => {
           if (updated) onRefresh();
         });
+      } else if (nextTab === 'book_delivery') {
+        ClassroomDB.syncBookDeliveriesFromCloud(true).then((updated) => {
+          if (updated) onRefresh();
+        });
       } else {
         ClassroomDB.syncAttendanceFromCloud(true).then((attUpdated) => {
           if (attUpdated) onRefresh();
@@ -186,6 +198,7 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
   const hasOpenAttendance = openAttendanceSessions.length > 0;
   const unreadPrivateNotesCount = ClassroomDB.getUnreadPrivateNotesCount(course.id, currentUser);
   const courseQuizzesCount = ClassroomDB.getQuizzes(course.id).length;
+  const courseBookDeliveriesCount = ClassroomDB.getBookDeliveries(course.id).length;
 
   const handleQuickStudentCheckIn = (sessionId: string, status: AttendanceStatus) => {
     const res = ClassroomDB.studentCheckIn(sessionId, currentUser, status);
@@ -289,6 +302,25 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
           </button>
 
           <button
+            onClick={() => handleSwitchTab('book_delivery')}
+            className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
+              activeTab === 'book_delivery'
+                ? 'neu-raised-sm text-indigo-700 dark:text-indigo-300'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+            }`}
+            title="စာအုပ်ယူရန် (သင်တန်းစာအုပ်ပို့ရန် လိပ်စာ နှင့် A4 Landscape ၄ ယောက်စာ PDF စနစ်)"
+          >
+            <Package className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+            <span>စာအုပ်ယူရန်</span>
+            {courseBookDeliveriesCount > 0 &&
+              (currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
+                <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-indigo-600 text-white text-[10px] font-extrabold flex items-center justify-center shrink-0">
+                  {courseBookDeliveriesCount}
+                </span>
+              )}
+          </button>
+
+          <button
             onClick={() => handleSwitchTab('private_notes')}
             className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'private_notes'
@@ -312,7 +344,7 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
 
           <button
             onClick={() => handleSwitchTab('people')}
-            className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap col-span-2 sm:col-span-1 ${
+            className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'people'
                 ? 'neu-raised-sm text-indigo-700 dark:text-indigo-300'
                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -442,6 +474,14 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
 
         {activeTab === 'quizzes' && (
           <QuizzesView
+            course={course}
+            currentUser={currentUser}
+            onRefresh={onRefresh}
+          />
+        )}
+
+        {activeTab === 'book_delivery' && (
+          <BookDeliveryView
             course={course}
             currentUser={currentUser}
             onRefresh={onRefresh}

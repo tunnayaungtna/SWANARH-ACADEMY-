@@ -110,10 +110,25 @@ export interface Quiz {
   isOpen?: boolean; // Manual On/Off toggle (true = open, false = closed)
   scheduledOpenAt?: string; // ISO/datetime string for scheduled auto-open
   scheduledCloseAt?: string; // ISO/datetime string for scheduled auto-close
+  timezoneMode?: 'MMT' | 'LOCAL'; // 'MMT' = Myanmar Standard Time (UTC+06:30 Asia/Yangon)
   statusUpdatedAtMs?: number;
   createdBy?: string;
   createdAt?: string;
   createdAtMs?: number;
+}
+
+export interface StudentExamSession {
+  quizId: string;
+  courseId: string;
+  studentId: string;
+  startedAtMs: number;
+  startedAtMmt: string;
+  durationMinutes: number;
+  expiresAtMs: number;
+  draftAnswers: Record<string, number>;
+  fiveMinWarningShown?: boolean;
+  isLockedOut?: boolean;
+  quizStatusUpdatedAtMs?: number;
 }
 
 export interface QuizSubmission {
@@ -129,6 +144,9 @@ export interface QuizSubmission {
   passed: boolean;
   answers: Record<string, number>;
   timeSpentSeconds?: number;
+  startedAtMs?: number;
+  startedAtMmt?: string;
+  autoSubmittedOnTimeout?: boolean;
   attemptCount?: number;
   submittedAt: string;
   submittedAtMs?: number;
@@ -284,6 +302,42 @@ export interface RealtimePrivateNotePatch {
   typingAtMs?: number;
 }
 
+export type BookDeliveryStatus = 'pending' | 'printed' | 'shipped' | 'received';
+
+export interface BookDeliveryRecord {
+  id: string;
+  courseId: string;
+  courseCode?: string;
+  courseTitle?: string;
+  studentId: string;
+  rollNo: string;
+  studentName: string;
+  address: string;
+  phone: string;
+  note?: string;
+  status: BookDeliveryStatus;
+  shippedAt?: string;
+  receivedAt?: string;
+  updatedByRole: UserRole;
+  createdAt: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface BookDeliverySenderConfig {
+  academyName: string;
+  addressLines: string[];
+  phones: string;
+}
+
+export interface RealtimeBookDeliveryPatch {
+  type: 'delivery_upsert' | 'delivery_delete';
+  recordId?: string;
+  courseId?: string;
+  studentId?: string;
+  record?: BookDeliveryRecord;
+}
+
 export interface NotificationItem {
   id: string;
   userId: string;
@@ -296,7 +350,7 @@ export interface NotificationItem {
   title: string;
   message: string;
   type: 'post' | 'grade' | 'quiz' | 'certificate' | 'private_note';
-  targetTab?: 'stream' | 'attendance' | 'quizzes' | 'people' | 'private_notes';
+  targetTab?: 'stream' | 'attendance' | 'quizzes' | 'people' | 'private_notes' | 'book_delivery';
   privateNoteId?: string;
   isRead: boolean;
   createdAt: string;

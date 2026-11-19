@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Course, Quiz, QuizQuestion, QuizSubmission, User } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
 import {
@@ -29,6 +29,9 @@ import {
   X,
   RefreshCw,
   BookOpen,
+  Globe,
+  Lock,
+  BellRing,
 } from 'lucide-react';
 
 interface QuizzesViewProps {
@@ -75,21 +78,159 @@ export interface ExamAvailabilityInfo {
   detailText?: string;
 }
 
-function formatScheduleDateTime(iso?: string): string {
+const MMT_OFFSET_MS = (6 * 60 + 30) * 60 * 1000; // UTC+06:30 (Myanmar Standard Time)
+
+function parseScheduleDateTimeMs(
+  iso?: string,
+  timezoneMode: 'MMT' | 'LOCAL' = 'MMT'
+): number {
+  return ClassroomDB.parseQuizScheduleMs(iso, timezoneMode);
+}
+
+function formatScheduleDateTime(
+  iso?: string,
+  timezoneMode: 'MMT' | 'LOCAL' = 'MMT'
+): string {
   if (!iso) return '';
-  const dt = new Date(iso);
-  if (Number.isNaN(dt.getTime())) return iso;
-  return dt.toLocaleString('en-GB', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  });
+  const ms = parseScheduleDateTimeMs(iso, timezoneMode);
+  if (Number.isNaN(ms)) return iso;
+  try {
+    if (timezoneMode !== 'LOCAL') {
+      return (
+        new Date(ms).toLocaleString('en-GB', {
+          timeZone: 'Asia/Yangon',
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true,
+        }) + ' (မြန်မာစံတော်ချိန် MMT)'
+      );
+    }
+    return new Date(ms).toLocaleString('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+  } catch {
+    return new Date(ms).toLocaleString('en-US');
+  }
+}
+
+function formatLiveMyanmarClock(nowMs: number = Date.now()): string {
+  try {
+    return new Date(nowMs).toLocaleString('en-GB', {
+      timeZone: 'Asia/Yangon',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true,
+    });
+  } catch {
+    return new Date(nowMs).toLocaleTimeString();
+  }
+}
+
+function toDatetimeLocalInputValue(
+  raw?: string,
+  timezoneMode: 'MMT' | 'LOCAL' = 'MMT'
+): string {
+  if (!raw || !raw.trim()) return '';
+  const trimmed = raw.trim();
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+  const ms = parseScheduleDateTimeMs(trimmed, timezoneMode);
+  if (Number.isNaN(ms)) return '';
+  if (timezoneMode !== 'LOCAL') {
+    const mmtDate = new Date(ms + MMT_OFFSET_MS);
+    const yyyy = mmtDate.getUTCFullYear();
+    const mm = String(mmtDate.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(mmtDate.getUTCDate()).padStart(2, '0');
+    const hh = String(mmtDate.getUTCHours()).padStart(2, '0');
+    const min = String(mmtDate.getUTCMinutes()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+  }
+  const d = new Date(ms);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+}
+
+function getDatetimeLocalWithOffset(
+  offsetMinutes: number = 0,
+  timezoneMode: 'MMT' | 'LOCAL' = 'MMT',
+  baseMs: number = Date.now()
+): string {
+  const targetMs = baseMs + offsetMinutes * 60 * 1000;
+  if (timezoneMode !== 'LOCAL') {
+    const mmtDate = new Date(targetMs + MMT_OFFSET_MS);
+    const yyyy = mmtDate.getUTCFullYear();
+    const mm = String(mmtDate.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(mmtDate.getUTCDate()).padStart(2, '0');
+    const hh = String(mmtDate.getUTCHours()).padStart(2, '0');
+    const min = String(mmtDate.getUTCMinutes()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+  }
+  const d = new Date(targetMs);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+}
+
+function formatCountdownClock(totalSeconds: number): string {
+  const clamped = Math.max(0, Math.floor(totalSeconds));
+  const hrs = Math.floor(clamped / 3600);
+  const mins = Math.floor((clamped % 3600) / 60);
+  const secs = clamped % 60;
+  if (hrs > 0) {
+    return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  }
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+function playExamWarningTone(kind: 'five_min' | 'time_up'): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+    const freqs = kind === 'five_min' ? [587.33, 880, 587.33] : [440, 349.23, 293.66];
+    freqs.forEach((f, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(f, now + idx * 0.18);
+      gain.gain.setValueAtTime(0.12, now + idx * 0.18);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.18 + 0.16);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + idx * 0.18);
+      osc.stop(now + idx * 0.18 + 0.17);
+    });
+  } catch {
+    // ignore audio restrictions
+  }
 }
 
 function getExamAvailability(quiz: Quiz, nowMs: number = Date.now()): ExamAvailabilityInfo {
+  const tzMode = quiz.timezoneMode === 'LOCAL' ? 'LOCAL' : 'MMT';
   if (quiz.isOpen === false) {
     return {
       isAvailable: false,
@@ -99,15 +240,15 @@ function getExamAvailability(quiz: Quiz, nowMs: number = Date.now()): ExamAvaila
     };
   }
 
-  const openMs = quiz.scheduledOpenAt ? new Date(quiz.scheduledOpenAt).getTime() : NaN;
-  const closeMs = quiz.scheduledCloseAt ? new Date(quiz.scheduledCloseAt).getTime() : NaN;
+  const openMs = parseScheduleDateTimeMs(quiz.scheduledOpenAt, tzMode);
+  const closeMs = parseScheduleDateTimeMs(quiz.scheduledCloseAt, tzMode);
 
   if (!Number.isNaN(openMs) && nowMs < openMs) {
     return {
       isAvailable: false,
       state: 'scheduled_future',
       badgeLabel: '🕒 အချိန်ဇယားဖြင့် ဖွင့်မည် (Scheduled)',
-      detailText: `စတင်ဖြေဆိုနိုင်မည့်အချိန်: ${formatScheduleDateTime(quiz.scheduledOpenAt)}`,
+      detailText: `စတင်ဖြေဆိုနိုင်မည့်အချိန်: ${formatScheduleDateTime(quiz.scheduledOpenAt, tzMode)}`,
     };
   }
 
@@ -116,7 +257,7 @@ function getExamAvailability(quiz: Quiz, nowMs: number = Date.now()): ExamAvaila
       isAvailable: false,
       state: 'closed_expired',
       badgeLabel: '⏹️ ဖြေဆိုချိန် ကုန်ဆုံးပြီ (Ended)',
-      detailText: `ပိတ်သိမ်းချိန်: ${formatScheduleDateTime(quiz.scheduledCloseAt)}`,
+      detailText: `ပိတ်သိမ်းချိန်: ${formatScheduleDateTime(quiz.scheduledCloseAt, tzMode)}`,
     };
   }
 
@@ -125,7 +266,7 @@ function getExamAvailability(quiz: Quiz, nowMs: number = Date.now()): ExamAvaila
       isAvailable: true,
       state: 'open',
       badgeLabel: '🟢 Exam ဖွင့်ထားသည် (Open)',
-      detailText: `ပိတ်မည့်အချိန်: ${formatScheduleDateTime(quiz.scheduledCloseAt)}`,
+      detailText: `ပိတ်မည့်အချိန်: ${formatScheduleDateTime(quiz.scheduledCloseAt, tzMode)}`,
     };
   }
 
@@ -301,11 +442,12 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
   const [editorQuiz, setEditorQuiz] = useState<Quiz | 'new' | null>(null);
   const [deleteConfirmQuiz, setDeleteConfirmQuiz] = useState<Quiz | null>(null);
 
-  // Live clock tick every 10s so scheduled Exam Open/Close times update automatically
+  // Live 1-second clock tick so Myanmar Standard Time (MMT), scheduled Exam Open/Close times,
+  // and per-student active exam countdowns update in real time
   useEffect(() => {
     const timer = setInterval(() => {
       setNowMs(Date.now());
-    }, 10_000);
+    }, 1_000);
     return () => clearInterval(timer);
   }, []);
 
@@ -339,6 +481,32 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
     () => ClassroomDB.getQuizzes(course.id),
     [course.id, refreshTick]
   );
+
+  // Automatically close and auto-submit any active student exam session whose individual duration expired while modal was closed
+  useEffect(() => {
+    if (isInstructor || activeTakeQuiz) return;
+    let didExpireAny = false;
+    quizzes.forEach((q) => {
+      if (q.mode === 'practice') return;
+      const existingSubs = ClassroomDB.getQuizSubmissions(q.id, currentUser.id);
+      if (existingSubs.length > 0) return;
+      const session = ClassroomDB.getStudentExamSession(q, currentUser.id);
+      if (session && !session.isLockedOut && nowMs >= session.expiresAtMs) {
+        const elapsedSec = Math.max(1, Math.round((session.expiresAtMs - session.startedAtMs) / 1000));
+        ClassroomDB.submitQuiz(q, session.draftAnswers || {}, currentUser, elapsedSec, {
+          startedAtMs: session.startedAtMs,
+          startedAtMmt: session.startedAtMmt,
+          autoSubmittedOnTimeout: true,
+        });
+        ClassroomDB.lockStudentExamSession(q.id, currentUser.id);
+        didExpireAny = true;
+      }
+    });
+    if (didExpireAny) {
+      setRefreshTick((t) => t + 1);
+      onRefresh();
+    }
+  }, [nowMs, quizzes, isInstructor, activeTakeQuiz, currentUser]);
 
   const handleToggleExamOpen = (quiz: Quiz) => {
     const nextIsOpen = quiz.isOpen === false ? true : false;
@@ -419,7 +587,7 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
       {/* Top Header & Summary Banner */}
       <div className="neu-card rounded-3xl p-4 sm:p-6 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             <div className="flex items-center gap-2">
               <div className="w-9 h-9 rounded-2xl bg-indigo-600/10 dark:bg-indigo-400/10 border border-indigo-500/20 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shrink-0">
                 <FileQuestion className="w-5 h-5" />
@@ -429,9 +597,16 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
                   Exam Room (စာမေးပွဲခန်း နှင့် လေ့ကျင့်ခန်း)
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Schedule အချိန်ဇယား သို့မဟုတ် On/Off ခလုတ်ဖြင့် စာမေးပွဲအဖွင့်အပိတ် ထိန်းချုပ်နိုင်ပြီး ဖြေဆိုပြီးသည်နှင့် အမှတ်နှင့် အဖြေမှန်များကို ချက်ချင်း ကြည့်ရှုနိုင်ပါသည်
+                  မြန်မာ စံတော်ချိန် (MMT - UTC+06:30) အချိန်ဇယားဖြင့် နိုင်ငံစုံမှ တစ်ပြိုင်တည်း ဖြေဆိုနိုင်ပြီး ကျောင်းသား စနှိပ်သည့်အချိန်မှစ၍ သတ်မှတ်ကြာချိန်ပြည့်သည်နှင့် အလိုအလျောက် ဖြေဆိုခွင့်ပိတ်ပေးပါသည်
                 </p>
               </div>
+            </div>
+            <div className="inline-flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-xl bg-indigo-50/90 dark:bg-indigo-950/60 border border-indigo-200/80 dark:border-indigo-800/70 text-[11px] font-bold text-indigo-800 dark:text-indigo-200 font-mono">
+              <Globe className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+              <span>🇲🇲 လက်ရှိ မြန်မာစံတော်ချိန် (MMT · UTC+06:30):</span>
+              <span className="font-extrabold text-indigo-950 dark:text-white">
+                {formatLiveMyanmarClock(nowMs)}
+              </span>
             </div>
           </div>
 
@@ -575,9 +750,32 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
               ? ClassroomDB.getAllQuizSubmissionsForQuiz(quiz.id)
               : [];
             const isPracticeMode = quiz.mode === 'practice';
+            const tzMode = quiz.timezoneMode === 'LOCAL' ? 'LOCAL' : 'MMT';
             const availability = getExamAvailability(quiz, nowMs);
+
+            // Check per-student individual exam timer session
+            const activeStudentSession = ClassroomDB.getStudentExamSession(quiz, currentUser.id);
+            const sessionRemainingSec =
+              activeStudentSession && !activeStudentSession.isLockedOut
+                ? Math.max(0, Math.ceil((activeStudentSession.expiresAtMs - nowMs) / 1000))
+                : 0;
+            const isStudentSessionInProgress = Boolean(
+              activeStudentSession &&
+                !activeStudentSession.isLockedOut &&
+                sessionRemainingSec > 0 &&
+                (!myLatestSub || isPracticeMode)
+            );
+            const isStudentSessionExpiredOrLocked = Boolean(
+              !isPracticeMode &&
+                ((activeStudentSession &&
+                  (activeStudentSession.isLockedOut || nowMs >= activeStudentSession.expiresAtMs)) ||
+                  Boolean(myLatestSub))
+            );
+
             const canStudentTakeQuiz =
-              isInstructor || (availability.isAvailable && (!myLatestSub || isPracticeMode));
+              isInstructor ||
+              (availability.isAvailable &&
+                (isPracticeMode || (!myLatestSub && !isStudentSessionExpiredOrLocked)));
 
             const correctCount = myLatestSub
               ? typeof myLatestSub.correctCount === 'number'
@@ -627,12 +825,21 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
 
                       <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono">
                         <Clock className="w-3 h-3 text-amber-500" />
-                        <span>{quiz.durationMinutes} မိနစ်</span>
+                        <span>ဖြေဆိုချိန် {quiz.durationMinutes} မိနစ် (စနှိပ်ချိန်မှစတွက်သည်)</span>
                       </span>
 
                       <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono">
                         <Award className="w-3 h-3 text-emerald-500" />
                         <span>အောင်မှတ် {quiz.passingScore}%</span>
+                      </span>
+
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                        <Globe className="w-3 h-3" />
+                        <span>
+                          {tzMode === 'MMT'
+                            ? '🇲🇲 မြန်မာစံတော်ချိန် (MMT · UTC+06:30)'
+                            : '🌐 ဒေသစံတော်ချိန် (Local Time)'}
+                        </span>
                       </span>
 
                       {quiz.enableFlashcards !== false && (
@@ -658,18 +865,51 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
                       <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[11px] font-bold text-slate-600 dark:text-slate-300">
                         {quiz.scheduledOpenAt && (
                           <span className="px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 font-mono">
-                            🟢 စတင်ချိန်: {formatScheduleDateTime(quiz.scheduledOpenAt)}
+                            🟢 Exam စမည့်အချိန်: {formatScheduleDateTime(quiz.scheduledOpenAt, tzMode)}
                           </span>
                         )}
                         {quiz.scheduledCloseAt && (
                           <span className="px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 font-mono">
-                            🛑 ပိတ်သိမ်းချိန်: {formatScheduleDateTime(quiz.scheduledCloseAt)}
+                            🛑 Exam ပိတ်မည့်အချိန်: {formatScheduleDateTime(quiz.scheduledCloseAt, tzMode)}
                           </span>
                         )}
                         {availability.detailText && !quiz.scheduledOpenAt && !quiz.scheduledCloseAt && (
                           <span className="text-rose-600 dark:text-rose-400">
                             {availability.detailText}
                           </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Active Student Countdown Strip on Exam Card */}
+                    {isStudentSessionInProgress && activeStudentSession && (
+                      <div
+                        className={`p-3 rounded-2xl border flex flex-wrap items-center justify-between gap-2 text-xs ${
+                          sessionRemainingSec <= 300
+                            ? 'bg-rose-50 dark:bg-rose-950/60 border-rose-300 dark:border-rose-700 text-rose-900 dark:text-rose-200'
+                            : 'bg-indigo-50/90 dark:bg-indigo-950/60 border-indigo-300 dark:border-indigo-700 text-indigo-950 dark:text-indigo-200'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 font-extrabold">
+                          <Clock className="w-4 h-4 shrink-0 animate-pulse" />
+                          <span>
+                            ⏳ သင် စတင်ဖြေဆိုနေဆဲဖြစ်သည် — လက်ကျန်ချိန် (Count Time):{' '}
+                            <span className="font-mono text-sm underline">
+                              {formatCountdownClock(sessionRemainingSec)}
+                            </span>
+                          </span>
+                        </div>
+                        <div className="text-[11px] font-mono">
+                          စနှိပ်သည့်အချိန်: {activeStudentSession.startedAtMmt} · ပိတ်မည့်အချိန်:{' '}
+                          {ClassroomDB.formatMyanmarDateTime(activeStudentSession.expiresAtMs, true)}
+                        </div>
+                        {sessionRemainingSec <= 300 && (
+                          <div className="w-full text-[11px] font-extrabold text-rose-600 dark:text-rose-300 flex items-center gap-1">
+                            <BellRing className="w-3.5 h-3.5 shrink-0" />
+                            <span>
+                              ⚠️ သတိပေးချက်: သတ်မှတ်ချိန်ပြည့်ရန် (၅) မိနစ်အောက်သာ ကျန်ပါတော့သည်! အချိန်ပြည့်သည်နှင့် ဖြေဆိုခွင့် အလိုအလျောက် ပိတ်ပါမည်။
+                            </span>
+                          </div>
                         )}
                       </div>
                     )}
@@ -707,7 +947,10 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
                           </span>
                         </div>
                         <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
-                          ဖြေဆိုပြီး · {myLatestSub.submittedAt}
+                          {myLatestSub.autoSubmittedOnTimeout
+                            ? '⏰ သတ်မှတ်ချိန်ပြည့်၍ အလိုအလျောက်ပိတ်ပြီး'
+                            : 'ဖြေဆိုပြီး'}{' '}
+                          · {myLatestSub.submittedAt}
                         </div>
                       </div>
                     </div>
@@ -742,7 +985,14 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
                         onClick={() => setActiveTakeQuiz(quiz)}
                         className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
                       >
-                        {myLatestSub ? (
+                        {isStudentSessionInProgress ? (
+                          <>
+                            <Clock className="w-3.5 h-3.5 animate-pulse" />
+                            <span>
+                              ဆက်လက်ဖြေဆိုမည် (လက်ကျန်ချိန် {formatCountdownClock(sessionRemainingSec)})
+                            </span>
+                          </>
+                        ) : myLatestSub ? (
                           <>
                             <RotateCcw className="w-3.5 h-3.5" />
                             <span>ပြန်လည်လေ့ကျင့်ဖြေဆိုမည် (Retake Exam)</span>
@@ -753,11 +1003,20 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
                             <span>
                               {isInstructor
                                 ? 'စမ်းသပ်ဖြေဆိုကြည့်မည် (Preview Exam)'
-                                : 'စာမေးပွဲ စတင်ဖြေဆိုမည် (Start Exam)'}
+                                : 'ဖြေဆိုမည် (Start Exam)'}
                             </span>
                           </>
                         )}
                       </button>
+                    ) : isStudentSessionExpiredOrLocked ? (
+                      <div className="px-3.5 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 text-xs font-extrabold flex items-center gap-1.5">
+                        <Lock className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
+                        <span>
+                          {myLatestSub?.autoSubmittedOnTimeout
+                            ? `သတ်မှတ်ချိန် (${quiz.durationMinutes} မိနစ်) ပြည့်သွားသဖြင့် ဖြေဆိုခွင့် ပိတ်သိမ်းထားပါသည်`
+                            : 'ဖြေဆိုပြီးသားဖြစ်သဖြင့် Exam Form ဖြေဆိုခွင့် ပိတ်ထားပါသည်'}
+                        </span>
+                      </div>
                     ) : (
                       !myLatestSub && (
                         <div className="px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 text-xs font-bold flex items-center gap-1.5">
@@ -1014,7 +1273,7 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
 };
 
 /* ============================================================================
- * 1. TAKE QUIZ / EXAM MODAL (Client-Side 0ms Auto-Grading + Countdown Timer)
+ * 1. TAKE QUIZ / EXAM MODAL (Per-Student Timer, 5-Min Warning & Auto-Lock)
  * ============================================================================ */
 const TakeQuizModal: React.FC<{
   quiz: Quiz;
@@ -1026,221 +1285,475 @@ const TakeQuizModal: React.FC<{
     () => (quiz.questions || []).filter((q) => q && q.id !== '__quiz_meta__'),
     [quiz.questions]
   );
+
+  // Initialize or resume per-student individual exam session anchored to their click timestamp
+  const [session] = useState(() => {
+    const existingSubs = ClassroomDB.getQuizSubmissions(quiz.id, currentUser.id);
+    const existingSession = ClassroomDB.getStudentExamSession(quiz, currentUser.id);
+    const shouldStartFresh =
+      (quiz.mode === 'practice' &&
+        (existingSubs.length > 0 ||
+          !existingSession ||
+          existingSession.isLockedOut ||
+          Date.now() >= existingSession.expiresAtMs)) ||
+      ((currentUser.role === 'admin' || currentUser.role === 'co_admin') &&
+        (!existingSession ||
+          existingSession.isLockedOut ||
+          Date.now() >= existingSession.expiresAtMs));
+    return ClassroomDB.startOrResumeStudentExamSession(quiz, currentUser.id, shouldStartFresh);
+  });
+
   const [currentIdx, setCurrentIdx] = useState(0);
-  const [answers, setAnswers] = useState<Record<string, number>>({});
-  const [secondsLeft, setSecondsLeft] = useState(() =>
-    Math.max(60, (quiz.durationMinutes || 20) * 60)
+  const [answers, setAnswers] = useState<Record<string, number>>(
+    () => session.draftAnswers || {}
   );
-  const [startTimeMs] = useState(() => Date.now());
+  const answersRef = useRef<Record<string, number>>(session.draftAnswers || {});
+  const hasSubmittedRef = useRef(false);
+
+  const totalDurationSeconds = Math.max(60, (session.durationMinutes || quiz.durationMinutes || 20) * 60);
+  const [secondsLeft, setSecondsLeft] = useState(() =>
+    Math.max(0, Math.ceil((session.expiresAtMs - Date.now()) / 1000))
+  );
+  const [showFiveMinPopup, setShowFiveMinPopup] = useState(false);
+  const [fiveMinWarningTriggered, setFiveMinWarningTriggered] = useState(
+    () => Boolean(session.fiveMinWarningShown)
+  );
+  const [isTimeExpiredLocked, setIsTimeExpiredLocked] = useState(
+    () => Boolean(session.isLockedOut || Date.now() >= session.expiresAtMs)
+  );
+  const [autoLockedSubmission, setAutoLockedSubmission] = useState<QuizSubmission | null>(null);
   const [showConfirmUnanswered, setShowConfirmUnanswered] = useState(false);
 
-  const handleFinalSubmit = () => {
-    const elapsedSec = Math.max(1, Math.round((Date.now() - startTimeMs) / 1000));
-    const result = ClassroomDB.submitQuiz(quiz, answers, currentUser, elapsedSec);
-    onSubmitted(result.submission);
+  // Sync draft answers to student session whenever an answer is selected
+  useEffect(() => {
+    answersRef.current = answers;
+    if (!hasSubmittedRef.current && !isTimeExpiredLocked) {
+      ClassroomDB.updateStudentExamSessionDraft(
+        quiz.id,
+        currentUser.id,
+        answers,
+        fiveMinWarningTriggered
+      );
+    }
+  }, [answers, fiveMinWarningTriggered, quiz.id, currentUser.id, isTimeExpiredLocked]);
+
+  const executeSubmit = (isTimeoutAutoClose: boolean) => {
+    if (hasSubmittedRef.current) return;
+    hasSubmittedRef.current = true;
+    const now = Date.now();
+    const elapsedSec = isTimeoutAutoClose
+      ? totalDurationSeconds
+      : Math.max(1, Math.min(totalDurationSeconds, Math.round((now - session.startedAtMs) / 1000)));
+
+    const result = ClassroomDB.submitQuiz(
+      quiz,
+      answersRef.current,
+      currentUser,
+      elapsedSec,
+      {
+        startedAtMs: session.startedAtMs,
+        startedAtMmt: session.startedAtMmt,
+        autoSubmittedOnTimeout: isTimeoutAutoClose,
+      }
+    );
+
+    if (isTimeoutAutoClose) {
+      ClassroomDB.lockStudentExamSession(quiz.id, currentUser.id);
+      setIsTimeExpiredLocked(true);
+      setAutoLockedSubmission(result.submission);
+      playExamWarningTone('time_up');
+    } else {
+      onSubmitted(result.submission);
+    }
   };
 
+  // Authoritative 250ms clock check against session.expiresAtMs so background tabs never drift
   useEffect(() => {
-    const timer = setInterval(() => {
-      setSecondsLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+    const tick = () => {
+      const rem = Math.max(0, Math.ceil((session.expiresAtMs - Date.now()) / 1000));
+      setSecondsLeft(rem);
+      if (rem <= 0 && !hasSubmittedRef.current) {
+        executeSubmit(true);
+      }
+    };
+    tick();
+    const timer = setInterval(tick, 250);
     return () => clearInterval(timer);
-  }, []);
+  }, [session.expiresAtMs]);
 
+  // Trigger 5-Minute Warning Notification (သတ်မှတ်ချိန် မပြည့်ခင် ၅ မိနစ်အလို သတိပေးချက်)
   useEffect(() => {
-    if (secondsLeft === 0) {
-      handleFinalSubmit();
+    if (
+      secondsLeft > 0 &&
+      secondsLeft <= 300 &&
+      !fiveMinWarningTriggered &&
+      !isTimeExpiredLocked
+    ) {
+      setFiveMinWarningTriggered(true);
+      setShowFiveMinPopup(true);
+      ClassroomDB.updateStudentExamSessionDraft(
+        quiz.id,
+        currentUser.id,
+        answersRef.current,
+        true
+      );
+      playExamWarningTone('five_min');
     }
-  }, [secondsLeft]);
+  }, [secondsLeft, fiveMinWarningTriggered, isTimeExpiredLocked, quiz.id, currentUser.id]);
 
   if (questions.length === 0) return null;
 
   const currentQ = questions[currentIdx] || questions[0];
   const answeredCount = Object.keys(answers).length;
-  const mins = Math.floor(secondsLeft / 60);
-  const secs = secondsLeft % 60;
+  const remainingPct = Math.min(100, Math.max(0, (secondsLeft / totalDurationSeconds) * 100));
+  const isFiveMinWarningZone = secondsLeft > 0 && secondsLeft <= 300;
+  const isOneMinCriticalZone = secondsLeft > 0 && secondsLeft <= 60;
+  const expiresAtMmtLabel = ClassroomDB.formatMyanmarDateTime(session.expiresAtMs, true);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/80 backdrop-blur-sm">
-      <div className="relative w-full max-w-3xl max-h-[94dvh] bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden">
-        {/* Exam Header */}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/85 backdrop-blur-sm">
+      <div className="relative w-full max-w-3xl max-h-[95dvh] bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden">
+        {/* Live Countdown Progress Bar at Top Edge */}
+        <div className="w-full h-2 bg-slate-200 dark:bg-slate-800 shrink-0 overflow-hidden">
+          <div
+            className={`h-full transition-all duration-300 ${
+              isTimeExpiredLocked || isOneMinCriticalZone
+                ? 'bg-rose-600'
+                : isFiveMinWarningZone
+                ? 'bg-amber-500'
+                : 'bg-emerald-500'
+            }`}
+            style={{ width: `${isTimeExpiredLocked ? 0 : remainingPct}%` }}
+          />
+        </div>
+
+        {/* Exam Header with Live Count Time */}
         <div className="px-4 sm:px-6 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 flex flex-wrap items-center justify-between gap-2 shrink-0">
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <h3 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white truncate">
               {quiz.title}
             </h3>
-            <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
-              ဖြေဆိုပြီး: {answeredCount} / {questions.length} ပုဒ် · အောင်မှတ်: {quiz.passingScore}%
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-slate-500 dark:text-slate-400 font-mono mt-0.5">
+              <span>
+                ဖြေဆိုပြီး: <strong>{answeredCount}/{questions.length}</strong> ပုဒ်
+              </span>
+              <span>· သတ်မှတ်ကြာချိန်: {session.durationMinutes} မိနစ်</span>
+              <span>· အောင်မှတ်: {quiz.passingScore}%</span>
             </div>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            {/* Live Count Time Display */}
             <div
-              className={`px-3 py-1.5 rounded-xl font-mono text-xs sm:text-sm font-extrabold flex items-center gap-1.5 border ${
-                secondsLeft <= 60
+              className={`px-3.5 py-2 rounded-2xl font-mono text-xs sm:text-sm font-black flex items-center gap-2 border shadow-xs ${
+                isTimeExpiredLocked
+                  ? 'bg-rose-700 text-white border-rose-700'
+                  : isOneMinCriticalZone
                   ? 'bg-rose-600 text-white border-rose-600 animate-pulse'
-                  : 'bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800'
+                  : isFiveMinWarningZone
+                  ? 'bg-amber-500 text-slate-950 border-amber-600 animate-pulse'
+                  : 'bg-indigo-600 text-white border-indigo-600'
               }`}
+              title="လက်ကျန်ဖြေဆိုချိန် (Live Countdown Timer)"
             >
-              <Clock className="w-3.5 h-3.5" />
+              <Clock className="w-4 h-4 shrink-0" />
+              <div className="flex flex-col leading-tight">
+                <span className="text-[9px] uppercase tracking-wider opacity-90 font-sans font-extrabold">
+                  {isTimeExpiredLocked ? 'အချိန်ပြည့်ပြီ' : 'Count Time'}
+                </span>
+                <span className="text-sm sm:text-base tracking-tight">
+                  {formatCountdownClock(secondsLeft)}
+                </span>
+              </div>
+            </div>
+
+            {!isTimeExpiredLocked && (
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-2.5 py-2 rounded-xl bg-slate-200/70 dark:bg-slate-800 hover:bg-rose-100 text-slate-600 dark:text-slate-300 hover:text-rose-600 text-xs font-bold cursor-pointer"
+                title="ခေတ္တပိတ်မည် (Timer သည် နောက်ကွယ်တွင် ဆက်လက်မှတ်သားနေပါမည်)"
+              >
+                ✕ ပိတ်မည်
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Per-Student Start Time & Expiry Time Bar (Myanmar Standard Time MMT) */}
+        <div className="px-4 sm:px-6 py-2 bg-indigo-50/70 dark:bg-indigo-950/40 border-b border-indigo-100 dark:border-indigo-900/60 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-slate-700 dark:text-slate-300 shrink-0">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span>
+              🟢 စနှိပ်သည့်အချိန်: <strong>{session.startedAtMmt}</strong>
+            </span>
+            <span>
+              🛑 ပိတ်မည့်အချိန်: <strong className="text-rose-600 dark:text-rose-400">{expiresAtMmtLabel}</strong>
+            </span>
+          </div>
+          <span className="text-[10px] font-sans font-bold text-indigo-700 dark:text-indigo-300">
+            🇲🇲 မြန်မာစံတော်ချိန် (MMT · UTC+06:30)
+          </span>
+        </div>
+
+        {/* Persistent 5-Minute Warning Banner (Shown throughout the last 5 minutes) */}
+        {isFiveMinWarningZone && !isTimeExpiredLocked && (
+          <div
+            className={`px-4 sm:px-6 py-2.5 border-b flex items-center justify-between gap-3 shrink-0 ${
+              isOneMinCriticalZone
+                ? 'bg-rose-600 text-white border-rose-700'
+                : 'bg-amber-100 dark:bg-amber-950/90 text-amber-950 dark:text-amber-100 border-amber-300 dark:border-amber-700'
+            }`}
+          >
+            <div className="flex items-center gap-2 text-xs font-extrabold">
+              <BellRing className="w-4 h-4 shrink-0 animate-bounce" />
               <span>
-                {String(mins).padStart(2, '0')}:{String(secs).padStart(2, '0')}
+                ⚠️ သတိပေးချက် — သတ်မှတ်ဖြေဆိုချိန် ပြည့်ခါနီးပါပြီ! လက်ကျန်ချိန်{' '}
+                <span className="font-mono underline px-1">
+                  {formatCountdownClock(secondsLeft)}
+                </span>{' '}
+                သာ ကျန်ပါတော့သည်။ အချိန်ပြည့်သည်နှင့် Exam Form ဖြေဆိုခွင့် အလိုအလျောက် ပိတ်သိမ်းသွားပါမည်။
               </span>
             </div>
+          </div>
+        )}
 
+        {/* Pop-up 5-Minute Alert Card when crossing the 5-minute mark */}
+        {showFiveMinPopup && !isTimeExpiredLocked && (
+          <div className="mx-4 sm:mx-6 mt-3 p-4 rounded-2xl bg-amber-50 dark:bg-amber-950 border-2 border-amber-500 shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="space-y-0.5 text-xs">
+                <div className="font-black text-amber-950 dark:text-amber-100 text-sm">
+                  ⏰ ၅ မိနစ် သတိပေးချက် — ဖြေဆိုချိန် ပြည့်ခါနီးပြီဖြစ်ပါသည်!
+                </div>
+                <p className="text-amber-900 dark:text-amber-200 leading-relaxed">
+                  သတ်မှတ်ဖြေဆိုချိန် ပြည့်ရန်{' '}
+                  <strong className="font-mono">{formatCountdownClock(secondsLeft)}</strong> သာ
+                  ကျန်ပါတော့သည်။ သတ်မှတ်ချိန် ပြည့်သည်နှင့် Exam Form သည် အလိုအလျောက် ဖြေဆိုခွင့် ပိတ်သွားမည်ဖြစ်ပါသဖြင့် မိမိအဖြေများကို အမြန်ဆုံး စစ်ဆေးဖြေဆိုပေးပါ။
+                </p>
+              </div>
+            </div>
             <button
               type="button"
-              onClick={onClose}
-              className="px-2.5 py-1.5 rounded-xl bg-slate-200/70 dark:bg-slate-800 hover:bg-rose-100 text-slate-600 dark:text-slate-300 hover:text-rose-600 text-xs font-bold cursor-pointer"
+              onClick={() => setShowFiveMinPopup(false)}
+              className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-extrabold shrink-0 cursor-pointer"
             >
-              ✕ ပိတ်မည်
+              သိရှိပါပြီ၊ ဆက်ဖြေမည်
             </button>
           </div>
-        </div>
+        )}
 
         {/* Question Number Pills */}
-        <div className="px-4 sm:px-6 py-2.5 bg-slate-100/70 dark:bg-slate-900 border-b border-slate-200/70 dark:border-slate-800 flex items-center gap-1.5 overflow-x-auto shrink-0">
-          {questions.map((q, idx) => {
-            const isAnswered = answers[q.id] !== undefined;
-            const isCurrent = idx === currentIdx;
-            return (
-              <button
-                key={q.id}
-                type="button"
-                onClick={() => setCurrentIdx(idx)}
-                className={`w-7 h-7 rounded-lg font-mono text-xs font-extrabold shrink-0 transition-all cursor-pointer ${
-                  isCurrent
-                    ? 'bg-indigo-600 text-white ring-2 ring-indigo-400 scale-105'
-                    : isAnswered
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-300 dark:border-slate-700'
-                }`}
-              >
-                {idx + 1}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Question Body */}
-        <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-4">
-          <div className="space-y-1.5">
-            <span className="inline-block text-[11px] font-mono font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-              မေးခွန်း အမှတ်စဉ် ({currentIdx + 1} / {questions.length})
-            </span>
-            <div className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white leading-relaxed whitespace-pre-line">
-              {currentQ.question}
-            </div>
-          </div>
-
-          <div className="space-y-2.5 pt-1">
-            {currentQ.options.map((opt, oIdx) => {
-              const isSelected = answers[currentQ.id] === oIdx;
+        {!isTimeExpiredLocked && (
+          <div className="px-4 sm:px-6 py-2.5 bg-slate-100/70 dark:bg-slate-900 border-b border-slate-200/70 dark:border-slate-800 flex items-center gap-1.5 overflow-x-auto shrink-0">
+            {questions.map((q, idx) => {
+              const isAnswered = answers[q.id] !== undefined;
+              const isCurrent = idx === currentIdx;
               return (
                 <button
-                  key={oIdx}
+                  key={q.id}
                   type="button"
-                  onClick={() =>
-                    setAnswers((prev) => ({
-                      ...prev,
-                      [currentQ.id]: oIdx,
-                    }))
-                  }
-                  className={`w-full p-3.5 sm:p-4 rounded-2xl border-2 text-left transition-all cursor-pointer flex items-start gap-3 ${
-                    isSelected
-                      ? 'bg-indigo-50 dark:bg-indigo-950/70 border-indigo-600 dark:border-indigo-400 text-indigo-950 dark:text-white shadow-xs'
-                      : 'bg-white dark:bg-slate-800/80 border-slate-200 dark:border-slate-700/80 hover:border-indigo-300 text-slate-800 dark:text-slate-200'
+                  onClick={() => setCurrentIdx(idx)}
+                  className={`w-7 h-7 rounded-lg font-mono text-xs font-extrabold shrink-0 transition-all cursor-pointer ${
+                    isCurrent
+                      ? 'bg-indigo-600 text-white ring-2 ring-indigo-400 scale-105'
+                      : isAnswered
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-300 dark:border-slate-700'
                   }`}
                 >
-                  <span
-                    className={`w-7 h-7 rounded-xl font-mono text-xs font-extrabold flex items-center justify-center shrink-0 ${
-                      isSelected
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
-                    }`}
-                  >
-                    {OPTION_LABELS[oIdx] || oIdx + 1}
-                  </span>
-                  <span className="text-xs sm:text-sm font-semibold leading-relaxed pt-0.5 break-words flex-1">
-                    {opt}
-                  </span>
+                  {idx + 1}
                 </button>
               );
             })}
           </div>
+        )}
 
-          {showConfirmUnanswered && (
-            <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/70 border border-amber-300 dark:border-amber-700 text-xs text-amber-900 dark:text-amber-200 space-y-2">
-              <div className="font-extrabold">
-                ⚠️ မေးခွန်း ({questions.length - answeredCount}) ပုဒ် ဖြေဆိုရန် ကျန်နေပါသေးသည်!
-              </div>
-              <p>မဖြေရသေးသော မေးခွန်းများအတိုင်း အဖြေလွှာကို ယခု တန်းအပ်လိုပါသလား?</p>
-              <div className="flex items-center gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setShowConfirmUnanswered(false)}
-                  className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold cursor-pointer"
-                >
-                  ပြန်စစ်မည်
-                </button>
-                <button
-                  type="button"
-                  onClick={handleFinalSubmit}
-                  className="px-3.5 py-1.5 rounded-xl bg-emerald-600 text-white font-extrabold cursor-pointer"
-                >
-                  သေချာပါသည်၊ အဖြေလွှာအပ်မည်
-                </button>
-              </div>
+        {/* Main Body: Locked Screen if Time Expired, otherwise Question Form */}
+        {isTimeExpiredLocked ? (
+          <div className="p-6 sm:p-10 overflow-y-auto flex-1 flex flex-col items-center justify-center text-center space-y-5">
+            <div className="w-16 h-16 rounded-3xl bg-rose-100 dark:bg-rose-950/80 border-2 border-rose-500 text-rose-600 dark:text-rose-400 flex items-center justify-center shadow-md">
+              <Lock className="w-8 h-8" />
             </div>
-          )}
-        </div>
 
-        {/* Exam Footer Navigation */}
-        <div className="px-4 sm:px-6 py-3.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 flex items-center justify-between gap-2 shrink-0">
-          <button
-            type="button"
-            disabled={currentIdx === 0}
-            onClick={() => setCurrentIdx((i) => Math.max(0, i - 1))}
-            className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 disabled:opacity-40 flex items-center gap-1 cursor-pointer"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            <span>ရှေ့တစ်ပုဒ်</span>
-          </button>
+            <div className="space-y-2 max-w-lg">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 text-xs font-extrabold">
+                ⏰ သတ်မှတ်ဖြေဆိုချိန် ({session.durationMinutes} မိနစ်) ပြည့်သွားပါပြီ
+              </span>
+              <h4 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white">
+                Exam Form ဖြေဆိုခွင့် အလိုအလျောက် ပိတ်သိမ်းလိုက်ပါပြီ
+              </h4>
+              <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                သင် စတင်နှိပ်ခဲ့သည့်အချိန် (<strong>{session.startedAtMmt}</strong>) မှစ၍ သတ်မှတ်ကြာချိန်{' '}
+                <strong>{session.durationMinutes} မိနစ်</strong> ပြည့်သွားပြီဖြစ်သောကြောင့် Exam Form
+                ကို ဆက်လက်ဖြေဆိုခွင့် ပိတ်သိမ်းပြီး သင်ရွေးချယ်ထားသော အဖြေ ({answeredCount}/{questions.length} ပုဒ်)
+                ကို စနစ်မှ အလိုအလျောက် အမှတ်စစ်ဆေး သိမ်းဆည်းပေးထားပါသည်။
+              </p>
+            </div>
 
-          <div className="flex items-center gap-2">
-            {currentIdx < questions.length - 1 ? (
-              <button
-                type="button"
-                onClick={() => setCurrentIdx((i) => Math.min(questions.length - 1, i + 1))}
-                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold flex items-center gap-1 cursor-pointer"
-              >
-                <span>နောက်တစ်ပုဒ်</span>
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            ) : null}
+            <div className="w-full max-w-md p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 text-xs space-y-2 font-mono text-left">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">စတင်ဖြေဆိုချိန်:</span>
+                <span className="font-bold text-slate-900 dark:text-white">{session.startedAtMmt}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">ဖြေဆိုခွင့်ပိတ်ချိန်:</span>
+                <span className="font-bold text-rose-600 dark:text-rose-400">{expiresAtMmtLabel}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">ဖြေဆိုခဲ့သော မေးခွန်း:</span>
+                <span className="font-bold text-slate-900 dark:text-white">
+                  {answeredCount} / {questions.length} ပုဒ်
+                </span>
+              </div>
+              {autoLockedSubmission && (
+                <div className="flex items-center justify-between pt-1 border-t border-slate-200 dark:border-slate-700">
+                  <span className="text-slate-500">ရရှိသော ရမှတ်:</span>
+                  <span className="font-extrabold text-emerald-600 dark:text-emerald-400">
+                    {autoLockedSubmission.score}% ({autoLockedSubmission.correctCount}/{questions.length} မှတ်)
+                  </span>
+                </div>
+              )}
+            </div>
 
             <button
               type="button"
               onClick={() => {
-                if (answeredCount < questions.length) {
-                  setShowConfirmUnanswered(true);
+                if (autoLockedSubmission) {
+                  onSubmitted(autoLockedSubmission);
                 } else {
-                  handleFinalSubmit();
+                  const latest = ClassroomDB.getQuizSubmissions(quiz.id, currentUser.id)[0];
+                  if (latest) onSubmitted(latest);
+                  else onClose();
                 }
               }}
-              className="px-4 sm:px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shadow-sm flex items-center gap-1.5 cursor-pointer"
+              className="px-6 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-extrabold shadow-md flex items-center gap-2 cursor-pointer"
             >
-              <CheckCircle2 className="w-4 h-4" />
-              <span>အဖြေလွှာအပ်မည် ({answeredCount}/{questions.length})</span>
+              <Eye className="w-4 h-4" />
+              <span>ရမှတ်နှင့် အဖြေမှန်များ ကြည့်ရှုမည် →</span>
             </button>
           </div>
-        </div>
+        ) : (
+          <>
+            {/* Question Body */}
+            <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-4">
+              <div className="space-y-1.5">
+                <span className="inline-block text-[11px] font-mono font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                  မေးခွန်း အမှတ်စဉ် ({currentIdx + 1} / {questions.length})
+                </span>
+                <div className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white leading-relaxed whitespace-pre-line">
+                  {currentQ.question}
+                </div>
+              </div>
+
+              <div className="space-y-2.5 pt-1">
+                {currentQ.options.map((opt, oIdx) => {
+                  const isSelected = answers[currentQ.id] === oIdx;
+                  return (
+                    <button
+                      key={oIdx}
+                      type="button"
+                      disabled={isTimeExpiredLocked}
+                      onClick={() => {
+                        if (isTimeExpiredLocked) return;
+                        setAnswers((prev) => ({
+                          ...prev,
+                          [currentQ.id]: oIdx,
+                        }));
+                      }}
+                      className={`w-full p-3.5 sm:p-4 rounded-2xl border-2 text-left transition-all cursor-pointer flex items-start gap-3 ${
+                        isSelected
+                          ? 'bg-indigo-50 dark:bg-indigo-950/70 border-indigo-600 dark:border-indigo-400 text-indigo-950 dark:text-white shadow-xs'
+                          : 'bg-white dark:bg-slate-800/80 border-slate-200 dark:border-slate-700/80 hover:border-indigo-300 text-slate-800 dark:text-slate-200'
+                      }`}
+                    >
+                      <span
+                        className={`w-7 h-7 rounded-xl font-mono text-xs font-extrabold flex items-center justify-center shrink-0 ${
+                          isSelected
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+                        }`}
+                      >
+                        {OPTION_LABELS[oIdx] || oIdx + 1}
+                      </span>
+                      <span className="text-xs sm:text-sm font-semibold leading-relaxed pt-0.5 break-words flex-1">
+                        {opt}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {showConfirmUnanswered && (
+                <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/70 border border-amber-300 dark:border-amber-700 text-xs text-amber-900 dark:text-amber-200 space-y-2">
+                  <div className="font-extrabold">
+                    ⚠️ မေးခွန်း ({questions.length - answeredCount}) ပုဒ် ဖြေဆိုရန် ကျန်နေပါသေးသည်!
+                  </div>
+                  <p>မဖြေရသေးသော မေးခွန်းများအတိုင်း အဖြေလွှာကို ယခု တန်းအပ်လိုပါသလား?</p>
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmUnanswered(false)}
+                      className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold cursor-pointer"
+                    >
+                      ပြန်စစ်မည်
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => executeSubmit(false)}
+                      className="px-3.5 py-1.5 rounded-xl bg-emerald-600 text-white font-extrabold cursor-pointer"
+                    >
+                      သေချာပါသည်၊ အဖြေလွှာအပ်မည်
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Exam Footer Navigation */}
+            <div className="px-4 sm:px-6 py-3.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 flex items-center justify-between gap-2 shrink-0">
+              <button
+                type="button"
+                disabled={currentIdx === 0}
+                onClick={() => setCurrentIdx((i) => Math.max(0, i - 1))}
+                className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 disabled:opacity-40 flex items-center gap-1 cursor-pointer"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                <span>ရှေ့တစ်ပုဒ်</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                {currentIdx < questions.length - 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => setCurrentIdx((i) => Math.min(questions.length - 1, i + 1))}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>နောက်တစ်ပုဒ်</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                ) : null}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (answeredCount < questions.length) {
+                      setShowConfirmUnanswered(true);
+                    } else {
+                      executeSubmit(false);
+                    }
+                  }}
+                  className="px-4 sm:px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shadow-sm flex items-center gap-1.5 cursor-pointer"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>အဖြေလွှာအပ်မည် ({answeredCount}/{questions.length})</span>
+                </button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1371,7 +1884,15 @@ const QuizAnswerReviewModal: React.FC<{
                   {submission.timeSpentSeconds ? (
                     <span>⏱ ကြာချိန်: {formatDurationSeconds(submission.timeSpentSeconds)}</span>
                   ) : null}
-                  <span>📅 {submission.submittedAt}</span>
+                  {submission.startedAtMmt ? (
+                    <span>🟢 စနှိပ်ချိန်: {submission.startedAtMmt}</span>
+                  ) : null}
+                  <span>📅 အပ်နှံချိန်: {submission.submittedAt}</span>
+                  {submission.autoSubmittedOnTimeout ? (
+                    <span className="px-2 py-0.5 rounded-md bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 font-bold">
+                      ⏰ သတ်မှတ်ချိန်ပြည့်၍ အလိုအလျောက်ပိတ်သိမ်းခဲ့သည်
+                    </span>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -1887,10 +2408,12 @@ const TeacherQuizScoreboardModal: React.FC<{
                       </div>
                       {sub ? (
                         <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
-                          ဖြေဆိုချိန်: {sub.submittedAt}{' '}
+                          {sub.startedAtMmt ? `စနှိပ်ချိန်: ${sub.startedAtMmt} · ` : ''}
+                          အပ်နှံချိန်: {sub.submittedAt}{' '}
                           {sub.timeSpentSeconds
                             ? `· ကြာချိန် ${formatDurationSeconds(sub.timeSpentSeconds)}`
                             : ''}
+                          {sub.autoSubmittedOnTimeout ? ' · (⏰ အချိန်ပြည့် Auto-Closed)' : ''}
                         </div>
                       ) : (
                         <div className="text-[11px] text-amber-600 dark:text-amber-400 font-semibold">
@@ -2168,12 +2691,27 @@ const QuizEditorModal: React.FC<{
     initialQuiz?.enableFlashcards !== false
   );
   const [isOpen, setIsOpen] = useState<boolean>(initialQuiz?.isOpen !== false);
-  const [scheduledOpenAt, setScheduledOpenAt] = useState<string>(
-    initialQuiz?.scheduledOpenAt || ''
+  const [timezoneMode, setTimezoneMode] = useState<'MMT' | 'LOCAL'>(
+    initialQuiz?.timezoneMode === 'LOCAL' ? 'LOCAL' : 'MMT'
   );
-  const [scheduledCloseAt, setScheduledCloseAt] = useState<string>(
-    initialQuiz?.scheduledCloseAt || ''
+  const [scheduledOpenAt, setScheduledOpenAt] = useState<string>(() =>
+    toDatetimeLocalInputValue(
+      initialQuiz?.scheduledOpenAt,
+      initialQuiz?.timezoneMode === 'LOCAL' ? 'LOCAL' : 'MMT'
+    )
   );
+  const [scheduledCloseAt, setScheduledCloseAt] = useState<string>(() =>
+    toDatetimeLocalInputValue(
+      initialQuiz?.scheduledCloseAt,
+      initialQuiz?.timezoneMode === 'LOCAL' ? 'LOCAL' : 'MMT'
+    )
+  );
+  const [liveClockMs, setLiveClockMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const t = setInterval(() => setLiveClockMs(Date.now()), 1_000);
+    return () => clearInterval(t);
+  }, []);
 
   const [inputTab, setInputTab] = useState<'builder' | 'bulk'>('builder');
   const [bulkText, setBulkText] = useState('');
@@ -2299,8 +2837,8 @@ const QuizEditorModal: React.FC<{
     }
 
     if (scheduledOpenAt && scheduledCloseAt) {
-      const openMs = new Date(scheduledOpenAt).getTime();
-      const closeMs = new Date(scheduledCloseAt).getTime();
+      const openMs = parseScheduleDateTimeMs(scheduledOpenAt, timezoneMode);
+      const closeMs = parseScheduleDateTimeMs(scheduledCloseAt, timezoneMode);
       if (!Number.isNaN(openMs) && !Number.isNaN(closeMs) && closeMs <= openMs) {
         setErrorMsg('Exam ပိတ်သိမ်းချိန် (Close Time) သည် စတင်ဖွင့်ချိန် (Open Time) ထက် နောက်ကျရပါမည်။');
         return;
@@ -2342,6 +2880,7 @@ const QuizEditorModal: React.FC<{
         enableFlashcards,
         showAnswersImmediately: true,
         isOpen,
+        timezoneMode,
         scheduledOpenAt: scheduledOpenAt.trim() || undefined,
         scheduledCloseAt: scheduledCloseAt.trim() || undefined,
         questions: validQuestions,
@@ -2369,7 +2908,7 @@ const QuizEditorModal: React.FC<{
                 : '✨ Exam Room — စာမေးပွဲအသစ် ဖန်တီးရန်'}
             </h3>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              {course.code} — {course.title} (မြန်မာစာ + English နှစ်ဘာသာလုံးနှင့် Schedule On/Off စနစ် ပါဝင်သည်)
+              {course.code} — {course.title} (မြန်မာစံတော်ချိန် MMT Schedule + ကျောင်းသားတစ်ဦးချင်း ကြာချိန်ထိန်းချုပ်စနစ် ပါဝင်သည်)
             </p>
           </div>
           <button
@@ -2427,7 +2966,7 @@ const QuizEditorModal: React.FC<{
                 className="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white font-bold"
               >
                 <option value="exam">
-                  📝 စာမေးပွဲပုံစံ (Exam Mode — ၁ ကြိမ်ဖြေပြီး အမှတ်တန်းပြသည်)
+                  📝 စာမေးပွဲပုံစံ (Exam Mode — ၁ ကြိမ်ဖြေပြီး အချိန်ပြည့်သည်နှင့် ပိတ်သည်)
                 </option>
                 <option value="practice">
                   🔄 လေ့ကျင့်ခန်းပုံစံ (Practice Mode — အကြိမ်ကြိမ် ပြန်ဖြေနိုင်သည်)
@@ -2438,16 +2977,19 @@ const QuizEditorModal: React.FC<{
             <div className="grid grid-cols-2 gap-2.5">
               <div>
                 <label className="block font-extrabold text-slate-700 dark:text-slate-200 mb-1">
-                  ဖြေဆိုချိန် (မိနစ်)
+                  ကျောင်းသား ဖြေဆိုချိန် ကြာချိန် (မိနစ်)
                 </label>
                 <input
                   type="number"
                   min={1}
-                  max={180}
+                  max={300}
                   value={durationMinutes}
                   onChange={(e) => setDurationMinutes(Number(e.target.value) || 20)}
                   className="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white font-mono font-bold"
                 />
+                <span className="block text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                  * ကျောင်းသား "ဖြေဆိုမည်" စနှိပ်ချိန်မှစ၍ တွက်ချက်ပြီး ၅ မိနစ်အလိုတွင် သတိပေးပါသည်
+                </span>
               </div>
               <div>
                 <label className="block font-extrabold text-slate-700 dark:text-slate-200 mb-1">
@@ -2464,16 +3006,16 @@ const QuizEditorModal: React.FC<{
               </div>
             </div>
 
-            {/* Exam On/Off & Schedule Control Box */}
-            <div className="sm:col-span-2 p-3.5 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/70 space-y-3">
+            {/* Exam On/Off & Myanmar Standard Time (MMT) Schedule Control Box */}
+            <div className="sm:col-span-2 p-3.5 sm:p-4 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/70 space-y-3.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <div className="font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
                     <Clock className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                    <span>Exam On/Off နှင့် Schedule (အချိန်ဇယားဖြင့် အလိုအလျောက် အဖွင့်/အပိတ်)</span>
+                    <span>Exam On/Off နှင့် Schedule (မြန်မာ စံတော်ချိန် MMT သတ်မှတ်ချက်)</span>
                   </div>
                   <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                    စာမေးပွဲကို ချက်ချင်း အဖွင့်/အပိတ် လုပ်နိုင်သလို စတင်ဖွင့်မည့်အချိန်နှင့် ပိတ်မည့်အချိန်ကိုပါ ကြိုတင်သတ်မှတ်ထားနိုင်ပါသည်
+                    နိုင်ငံစုံမှ ဆရာများနှင့် ကျောင်းသားများ အချိန်တစ်ပြေးညီ ဖြစ်စေရန် မြန်မာ စံတော်ချိန် (UTC+06:30) ဖြင့် စမည့်အချိန်နှင့် ပိတ်မည့်အချိန် သတ်မှတ်နိုင်ပါသည်
                   </div>
                 </div>
 
@@ -2490,11 +3032,49 @@ const QuizEditorModal: React.FC<{
                 </button>
               </div>
 
+              {/* Timezone Standard Selector (Myanmar Standard Time MMT vs Local) */}
+              <div className="p-3 rounded-xl bg-white/90 dark:bg-slate-900/90 border border-indigo-200/80 dark:border-indigo-800/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="space-y-0.5">
+                  <div className="text-xs font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
+                    <Globe className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                    <span>စံတော်ချိန် သတ်မှတ်ချက် (Exam Timezone Standard)</span>
+                  </div>
+                  <div className="text-[11px] font-mono text-indigo-700 dark:text-indigo-300">
+                    🇲🇲 လက်ရှိ မြန်မာစံတော်ချိန် (MMT): <strong>{formatLiveMyanmarClock(liveClockMs)}</strong>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setTimezoneMode('MMT')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-extrabold cursor-pointer border transition-all ${
+                      timezoneMode === 'MMT'
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                    }`}
+                  >
+                    🇲🇲 မြန်မာ စံတော်ချိန် (MMT · UTC+06:30)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTimezoneMode('LOCAL')}
+                    className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold cursor-pointer border transition-all ${
+                      timezoneMode === 'LOCAL'
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                    }`}
+                  >
+                    🌐 Local Time
+                  </button>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
                     <label className="font-extrabold text-slate-700 dark:text-slate-200">
-                      🟢 စတင်ဖွင့်မည့်အချိန် (Scheduled Open)
+                      🟢 Exam စတင်ဖွင့်မည့်အချိန် ({timezoneMode === 'MMT' ? 'မြန်မာစံတော်ချိန် MMT' : 'Local'})
                     </label>
                     {scheduledOpenAt && (
                       <button
@@ -2512,12 +3092,41 @@ const QuizEditorModal: React.FC<{
                     onChange={(e) => setScheduledOpenAt(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white font-mono text-xs"
                   />
+                  <div className="flex flex-wrap items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setScheduledOpenAt(getDatetimeLocalWithOffset(0, timezoneMode))
+                      }
+                      className="px-2 py-0.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[10px] font-bold text-indigo-600 dark:text-indigo-400 cursor-pointer hover:bg-indigo-50"
+                    >
+                      ယခုချက်ချင်း (MMT Now)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setScheduledOpenAt(getDatetimeLocalWithOffset(30, timezoneMode))
+                      }
+                      className="px-2 py-0.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[10px] font-bold text-slate-600 dark:text-slate-300 cursor-pointer hover:bg-slate-100"
+                    >
+                      +၃၀ မိနစ်
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setScheduledOpenAt(getDatetimeLocalWithOffset(60, timezoneMode))
+                      }
+                      className="px-2 py-0.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[10px] font-bold text-slate-600 dark:text-slate-300 cursor-pointer hover:bg-slate-100"
+                    >
+                      +၁ နာရီ
+                    </button>
+                  </div>
                 </div>
 
-                <div>
-                  <div className="flex items-center justify-between mb-1">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
                     <label className="font-extrabold text-slate-700 dark:text-slate-200">
-                      🛑 အလိုအလျောက်ပိတ်မည့်အချိန် (Scheduled Close)
+                      🛑 Exam ပိတ်သိမ်းမည့်အချိန် ({timezoneMode === 'MMT' ? 'မြန်မာစံတော်ချိန် MMT' : 'Local'})
                     </label>
                     {scheduledCloseAt && (
                       <button
@@ -2535,6 +3144,34 @@ const QuizEditorModal: React.FC<{
                     onChange={(e) => setScheduledCloseAt(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white font-mono text-xs"
                   />
+                  <div className="flex flex-wrap items-center gap-1">
+                    {[
+                      { label: '+၁ နာရီ', mins: 60 },
+                      { label: '+၂ နာရီ', mins: 120 },
+                      { label: '+၆ နာရီ', mins: 360 },
+                      { label: '+၁ ရက်', mins: 1440 },
+                    ].map((preset) => (
+                      <button
+                        key={preset.mins}
+                        type="button"
+                        onClick={() => {
+                          const baseMs = scheduledOpenAt
+                            ? parseScheduleDateTimeMs(scheduledOpenAt, timezoneMode)
+                            : Date.now();
+                          setScheduledCloseAt(
+                            getDatetimeLocalWithOffset(
+                              preset.mins,
+                              timezoneMode,
+                              Number.isNaN(baseMs) ? Date.now() : baseMs
+                            )
+                          );
+                        }}
+                        className="px-2 py-0.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[10px] font-bold text-slate-600 dark:text-slate-300 cursor-pointer hover:bg-slate-100"
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>

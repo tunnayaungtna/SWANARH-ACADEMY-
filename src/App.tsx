@@ -96,7 +96,7 @@ export default function App() {
   const [livePushBanner, setLivePushBanner] = useState<DeviceAlertPayload | null>(null);
   const livePushTimerRef = useRef<number | null>(null);
   const [selectedCourseInitialTab, setSelectedCourseInitialTab] = useState<
-    'stream' | 'attendance' | 'quizzes' | 'private_notes' | 'people'
+    'stream' | 'attendance' | 'quizzes' | 'book_delivery' | 'private_notes' | 'people'
   >('stream');
 
   // Mobile Back Key step-by-step navigation handlers (outer to inner)
@@ -668,7 +668,13 @@ export default function App() {
 
   const handleOpenCourse = (
     course: Course,
-    initialTab: 'stream' | 'attendance' | 'quizzes' | 'private_notes' | 'people' = 'stream'
+    initialTab:
+      | 'stream'
+      | 'attendance'
+      | 'quizzes'
+      | 'book_delivery'
+      | 'private_notes'
+      | 'people' = 'stream'
   ) => {
     if (!currentUser) return;
     const check = ClassroomDB.getCourseById(course.id, currentUser);
@@ -697,7 +703,13 @@ export default function App() {
 
   const handleOpenCourseById = (
     courseId: string,
-    initialTab: 'stream' | 'attendance' | 'quizzes' | 'private_notes' | 'people' = 'stream'
+    initialTab:
+      | 'stream'
+      | 'attendance'
+      | 'quizzes'
+      | 'book_delivery'
+      | 'private_notes'
+      | 'people' = 'stream'
   ) => {
     if (!currentUser) return;
     const target = courses.find((c) => c.id === courseId);

@@ -16,6 +16,7 @@ import {
   NotificationItem,
   AuditLogEntry,
   PrivateNote,
+  BookDeliveryRecord,
 } from '../types/classroom';
 import { encryptPassword } from '../utils/passwordCrypto';
 import {
@@ -32,8 +33,10 @@ export const NOTIFICATION_TTL_MS = 30 * 60 * 1000; // 30 minutes auto-delete win
 export const AUDIT_LOG_TTL_MS = 2 * 24 * 60 * 60 * 1000; // 2 days (48 hours) security audit auto-delete window
 export const COMMENT_TTL_MS = 2 * 24 * 60 * 60 * 1000; // 2 days (48 hours) silent post comment auto-delete window
 export const PRIVATE_NOTE_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days (6 months) retention for Private Notes
+export const BOOK_DELIVERY_TTL_MS = 365 * 24 * 60 * 60 * 1000; // 365 days retention for Book Delivery records
 const AUDIT_LOG_SYSTEM_USER_ID = 'SYSTEM_AUDIT_LOG';
 const PRIVATE_NOTE_SYSTEM_USER_ID = 'SYSTEM_PRIVATE_NOTE';
+const BOOK_DELIVERY_SYSTEM_USER_ID = 'SYSTEM_BOOK_DELIVERY';
 
 export function resolveCommentTimestampMs(
   comment: { id?: unknown; createdAt?: unknown; createdAtMs?: unknown },
@@ -2933,6 +2936,7 @@ export class SupabaseService {
       isOpen: quiz.isOpen !== false,
       scheduledOpenAt: quiz.scheduledOpenAt || '',
       scheduledCloseAt: quiz.scheduledCloseAt || '',
+      timezoneMode: quiz.timezoneMode || 'MMT',
       statusUpdatedAtMs: quiz.statusUpdatedAtMs || Date.now(),
       dueNotice: quiz.dueNotice || '',
       createdBy: quiz.createdBy || '',
@@ -2978,6 +2982,7 @@ export class SupabaseService {
             isOpen?: boolean;
             scheduledOpenAt?: string;
             scheduledCloseAt?: string;
+            timezoneMode?: 'MMT' | 'LOCAL';
             statusUpdatedAtMs?: number;
             dueNotice?: string;
             createdBy?: string;
@@ -3018,6 +3023,7 @@ export class SupabaseService {
             isOpen: meta.isOpen !== false,
             scheduledOpenAt: meta.scheduledOpenAt || undefined,
             scheduledCloseAt: meta.scheduledCloseAt || undefined,
+            timezoneMode: meta.timezoneMode === 'LOCAL' ? 'LOCAL' : 'MMT',
             statusUpdatedAtMs: meta.statusUpdatedAtMs || createdAtMs,
             dueNotice: meta.dueNotice || undefined,
             createdBy: meta.createdBy || undefined,
@@ -3084,6 +3090,9 @@ export class SupabaseService {
             correctCount?: number;
             totalQuestions?: number;
             timeSpentSeconds?: number;
+            startedAtMs?: number;
+            startedAtMmt?: string;
+            autoSubmittedOnTimeout?: boolean;
             attemptCount?: number;
             submittedAt?: string;
             submittedAtMs?: number;
@@ -3122,10 +3131,14 @@ export class SupabaseService {
             answers: cleanAnswers,
             timeSpentSeconds:
               typeof meta.timeSpentSeconds === 'number' ? meta.timeSpentSeconds : undefined,
+            startedAtMs: typeof meta.startedAtMs === 'number' ? meta.startedAtMs : undefined,
+            startedAtMmt: meta.startedAtMmt ? String(meta.startedAtMmt) : undefined,
+            autoSubmittedOnTimeout: Boolean(meta.autoSubmittedOnTimeout),
             attemptCount: typeof meta.attemptCount === 'number' ? meta.attemptCount : 1,
             submittedAt:
               meta.submittedAt ||
               new Date(submittedAtMs).toLocaleString('en-US', {
+                timeZone: 'Asia/Yangon',
                 month: 'short',
                 day: 'numeric',
                 year: 'numeric',
@@ -3337,7 +3350,8 @@ export class SupabaseService {
         } else {
           query = query
             .neq('user_id', AUDIT_LOG_SYSTEM_USER_ID)
-            .neq('user_id', PRIVATE_NOTE_SYSTEM_USER_ID);
+            .neq('user_id', PRIVATE_NOTE_SYSTEM_USER_ID)
+            .neq('user_id', BOOK_DELIVERY_SYSTEM_USER_ID);
         }
 
         const { data, error } = await query;
@@ -3473,6 +3487,7 @@ export class SupabaseService {
           .delete()
           .neq('user_id', AUDIT_LOG_SYSTEM_USER_ID)
           .neq('user_id', PRIVATE_NOTE_SYSTEM_USER_ID)
+          .neq('user_id', BOOK_DELIVERY_SYSTEM_USER_ID)
           .or(`created_at.lt.${cutoffIso},expires_at.lte.${nowIso}`);
 
         if (error) {
@@ -3555,6 +3570,7 @@ export class SupabaseService {
         .delete()
         .neq('user_id', AUDIT_LOG_SYSTEM_USER_ID)
         .neq('user_id', PRIVATE_NOTE_SYSTEM_USER_ID)
+        .neq('user_id', BOOK_DELIVERY_SYSTEM_USER_ID)
         .eq('post_id', postId);
       if (error && (error.code === '42P01' || error.message?.includes('notifications'))) {
         this.notificationsTableStatus = 'missing';
@@ -3922,6 +3938,156 @@ export class SupabaseService {
               studentId,
             },
           ],
+        });
+      }
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Fetch Book Delivery address records from Supabase (`user_id = 'SYSTEM_BOOK_DELIVERY'`)
+   */
+  static async getRemoteBookDeliveries(options?: {
+    courseIds?: string[];
+    studentId?: string;
+    limit?: number;
+    forceRefresh?: boolean;
+  }): Promise<BookDeliveryRecord[] | null> {
+    if (this.notificationsTableStatus === 'missing') {
+      return null;
+    }
+    const studentKey = options?.studentId || 'all';
+    const courseKey =
+      options?.courseIds && options.courseIds.length > 0
+        ? [...options.courseIds].sort().join(',')
+        : 'all';
+    const limit = options?.limit || 500;
+    const cacheKey = `book_deliveries:${studentKey}:${courseKey}:${limit}`;
+
+    if (!options?.forceRefresh) {
+      const cached = this.getCachedQuery<BookDeliveryRecord[]>(cacheKey);
+      if (cached) return cached;
+    }
+
+    return this.dedupeGet(cacheKey, async () => {
+      try {
+        let query = supabase
+          .from('notifications')
+          .select('id,course_id,course_code,course_title,post_id,author_name,title,message,created_at')
+          .eq('user_id', BOOK_DELIVERY_SYSTEM_USER_ID)
+          .order('created_at', { ascending: false })
+          .limit(limit);
+
+        if (options?.studentId) {
+          query = query.eq('post_id', options.studentId);
+        }
+        if (options?.courseIds && options.courseIds.length > 0 && options.courseIds.length <= 25) {
+          query = query.in('course_id', options.courseIds);
+        }
+
+        const { data, error } = await query;
+        if (error) {
+          if (error.code === '42P01' || error.message?.includes('notifications')) {
+            this.notificationsTableStatus = 'missing';
+          }
+          return null;
+        }
+        this.notificationsTableStatus = 'available';
+        if (!data) return [];
+
+        const records: BookDeliveryRecord[] = [];
+        for (const row of data) {
+          try {
+            if (row.message && String(row.message).trim().startsWith('{')) {
+              const parsed = JSON.parse(String(row.message)) as BookDeliveryRecord;
+              if (parsed && parsed.id && parsed.courseId) {
+                records.push(parsed);
+              }
+            }
+          } catch {
+            // ignore malformed JSON
+          }
+        }
+        this.setCachedQuery(cacheKey, records, 5_000);
+        return records;
+      } catch {
+        return null;
+      }
+    });
+  }
+
+  /**
+   * Upsert a Book Delivery address record to Supabase (`user_id = 'SYSTEM_BOOK_DELIVERY'`)
+   */
+  static async upsertBookDelivery(
+    record: BookDeliveryRecord,
+    silent: boolean = false
+  ): Promise<boolean> {
+    if (this.notificationsTableStatus === 'missing') {
+      return false;
+    }
+    try {
+      this.invalidateClientCache('book_deliveries');
+      for (const k of Array.from(this.inflightGetRequests.keys())) {
+        if (k.startsWith('book_deliveries:')) {
+          this.inflightGetRequests.delete(k);
+        }
+      }
+
+      const createdMs = record.createdAtMs || Date.now();
+      const expiresMs = createdMs + BOOK_DELIVERY_TTL_MS;
+      const row = {
+        id: record.id,
+        user_id: BOOK_DELIVERY_SYSTEM_USER_ID,
+        course_id: record.courseId,
+        course_code: record.courseCode || null,
+        course_title: record.courseTitle || '',
+        post_id: record.studentId || record.id,
+        author_name: record.studentName,
+        author_role: record.updatedByRole || 'student',
+        title: `Roll (${record.rollNo || '-'}) ${record.studentName}`,
+        message: JSON.stringify(record),
+        type: 'private_note',
+        is_read: record.status === 'shipped',
+        created_at: new Date(createdMs).toISOString(),
+        expires_at: new Date(expiresMs).toISOString(),
+      };
+
+      const { error } = await supabase.from('notifications').upsert([row], { onConflict: 'id' });
+      if (error) {
+        if (error.code === '42P01' || error.message?.includes('notifications')) {
+          this.notificationsTableStatus = 'missing';
+        }
+        return false;
+      }
+      this.notificationsTableStatus = 'available';
+      if (!silent) {
+        this.notifyRealtimePeers('notifs');
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Delete a Book Delivery record from Supabase
+   */
+  static async deleteRemoteBookDelivery(recordId: string): Promise<boolean> {
+    if (this.notificationsTableStatus === 'missing') return false;
+    try {
+      this.invalidateClientCache('book_deliveries');
+      this.ignoredRealtimeDeleteIds.add(recordId);
+      const { error } = await supabase
+        .from('notifications')
+        .delete()
+        .eq('id', recordId)
+        .eq('user_id', BOOK_DELIVERY_SYSTEM_USER_ID);
+      if (!error) {
+        this.notifyRealtimePeers('delete', {
+          deletedIds: [recordId],
         });
       }
       return !error;
@@ -4679,6 +4845,9 @@ export class SupabaseService {
           correctCount: sub.correctCount,
           totalQuestions: sub.totalQuestions,
           timeSpentSeconds: sub.timeSpentSeconds,
+          startedAtMs: sub.startedAtMs,
+          startedAtMmt: sub.startedAtMmt,
+          autoSubmittedOnTimeout: sub.autoSubmittedOnTimeout,
           attemptCount: sub.attemptCount || 1,
           submittedAt: sub.submittedAt,
           submittedAtMs: sub.submittedAtMs || Date.now(),
@@ -5404,8 +5573,11 @@ export class SupabaseService {
           const cId = String(r.course_id || '');
           const uId = String(r.user_id || '');
           const pId = r.post_id ? String(r.post_id) : '';
-          // Never delete SYSTEM_AUDIT_LOG rows during orphan notification sweeps
-          if (uId === AUDIT_LOG_SYSTEM_USER_ID) {
+          // Never delete SYSTEM_AUDIT_LOG or SYSTEM_BOOK_DELIVERY rows during orphan notification sweeps
+          if (uId === AUDIT_LOG_SYSTEM_USER_ID || uId === BOOK_DELIVERY_SYSTEM_USER_ID) {
+            if (uId === BOOK_DELIVERY_SYSTEM_USER_ID && (deletedSet.has(id) || (cId && !courseIdSet.has(cId)))) {
+              orphanNotifIds.push(id);
+            }
             return;
           }
           // For SYSTEM_PRIVATE_NOTE rows, pId stores studentId (not postId)
