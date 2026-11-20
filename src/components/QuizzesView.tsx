@@ -32,7 +32,18 @@ import {
   Globe,
   Lock,
   BellRing,
+  ClipboardList,
+  FileSpreadsheet,
+  FileText,
 } from 'lucide-react';
+import {
+  DataFormEditorModal,
+  StudentDataFormFillModal,
+  DataFormResponsesModal,
+  downloadDataFormExcelCsv,
+  downloadDataFormPdf,
+  DEFAULT_DATA_FORM_FIELDS,
+} from './ExamRoomDataFormModals';
 
 interface QuizzesViewProps {
   course: Course;
@@ -442,6 +453,13 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
   const [editorQuiz, setEditorQuiz] = useState<Quiz | 'new' | null>(null);
   const [deleteConfirmQuiz, setDeleteConfirmQuiz] = useState<Quiz | null>(null);
 
+  // Student Data Collection Form modals & filter state
+  const [roomFilter, setRoomFilter] = useState<'all' | 'exam' | 'data_form'>('all');
+  const [editorDataForm, setEditorDataForm] = useState<Quiz | 'new' | null>(null);
+  const [activeFillDataForm, setActiveFillDataForm] = useState<Quiz | null>(null);
+  const [responsesDataForm, setResponsesDataForm] = useState<Quiz | null>(null);
+  const [downloadingFormPdfId, setDownloadingFormPdfId] = useState<string | null>(null);
+
   // Live 1-second clock tick so Myanmar Standard Time (MMT), scheduled Exam Open/Close times,
   // and per-student active exam countdowns update in real time
   useEffect(() => {
@@ -487,7 +505,7 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
     if (isInstructor || activeTakeQuiz) return;
     let didExpireAny = false;
     quizzes.forEach((q) => {
-      if (q.mode === 'practice') return;
+      if (q.itemType === 'data_form' || q.mode === 'practice') return;
       const existingSubs = ClassroomDB.getQuizSubmissions(q.id, currentUser.id);
       if (existingSubs.length > 0) return;
       const session = ClassroomDB.getStudentExamSession(q, currentUser.id);
@@ -533,15 +551,51 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
     }
   };
 
+  const examCount = useMemo(
+    () => quizzes.filter((q) => q.itemType !== 'data_form').length,
+    [quizzes]
+  );
+  const dataFormCount = useMemo(
+    () => quizzes.filter((q) => q.itemType === 'data_form').length,
+    [quizzes]
+  );
+  const filteredQuizzes = useMemo(() => {
+    if (roomFilter === 'exam') return quizzes.filter((q) => q.itemType !== 'data_form');
+    if (roomFilter === 'data_form') return quizzes.filter((q) => q.itemType === 'data_form');
+    return quizzes;
+  }, [quizzes, roomFilter]);
+
+  const handleQuickDownloadFormPdf = async (
+    form: Quiz,
+    submissions: QuizSubmission[],
+    mode: 'responses' | 'blank_form' = 'responses'
+  ) => {
+    setDownloadingFormPdfId(`${form.id}_${mode}`);
+    try {
+      await downloadDataFormPdf(form, course, submissions, mode === 'blank_form' ? 'blank_form' : 'auto');
+    } finally {
+      setDownloadingFormPdfId(null);
+    }
+  };
+
   // Student overall quiz stats
   const studentStats = useMemo(() => {
     if (isInstructor) return null;
     let completed = 0;
     let passed = 0;
     let totalScore = 0;
+    let examItems = 0;
+    let dataFormTotal = 0;
+    let dataFormCompleted = 0;
 
     quizzes.forEach((q) => {
       const subs = ClassroomDB.getQuizSubmissions(q.id, currentUser.id);
+      if (q.itemType === 'data_form') {
+        dataFormTotal++;
+        if (subs.length > 0) dataFormCompleted++;
+        return;
+      }
+      examItems++;
       if (subs.length > 0) {
         completed++;
         totalScore += subs[0].score;
@@ -550,10 +604,12 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
     });
 
     return {
-      total: quizzes.length,
+      total: examItems,
       completed,
       passed,
       avgScore: completed > 0 ? Math.round(totalScore / completed) : 0,
+      dataFormTotal,
+      dataFormCompleted,
     };
   }, [quizzes, currentUser.id, isInstructor, refreshTick]);
 
@@ -563,9 +619,18 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
     let totalSubs = 0;
     let passedSubs = 0;
     let scoreSum = 0;
+    let examItems = 0;
+    let dataFormItems = 0;
+    let dataFormSubs = 0;
 
     quizzes.forEach((q) => {
       const subs = ClassroomDB.getAllQuizSubmissionsForQuiz(q.id);
+      if (q.itemType === 'data_form') {
+        dataFormItems++;
+        dataFormSubs += subs.length;
+        return;
+      }
+      examItems++;
       totalSubs += subs.length;
       subs.forEach((s) => {
         scoreSum += s.score;
@@ -574,7 +639,9 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
     });
 
     return {
-      totalQuizzes: quizzes.length,
+      totalQuizzes: examItems,
+      dataFormItems,
+      dataFormSubs,
       enrolledCount: enrolledStudents.length,
       totalSubmissions: totalSubs,
       avgScore: totalSubs > 0 ? Math.round(scoreSum / totalSubs) : 0,
@@ -623,14 +690,25 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
             </button>
 
             {isInstructor && (
-              <button
-                type="button"
-                onClick={() => setEditorQuiz('new')}
-                className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold shadow-sm flex items-center gap-1.5 cursor-pointer transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Exam အသစ်ဖန်တီးမည်</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => setEditorDataForm('new')}
+                  className="px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-extrabold shadow-sm flex items-center gap-1.5 cursor-pointer transition-colors"
+                  title="ကျောင်းသားများထံမှ လိုအပ်သော အချက်အလက်များ တောင်းခံရန် Form ဖန်တီးပြီး PDF / Excel ဒေါင်းလုဒ်ရယူရန်"
+                >
+                  <ClipboardList className="w-4 h-4" />
+                  <span>+ အချက်အလက်တောင်းရန် Form ဖန်တီးမည်</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditorQuiz('new')}
+                  className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold shadow-sm flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Exam အသစ်ဖန်တီးမည်</span>
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -640,10 +718,10 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
             <div className="neu-inset-sm p-3 rounded-2xl">
               <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                Exam စုစုပေါင်း
+                Exam / Data Form စုစုပေါင်း
               </div>
               <div className="text-lg font-extrabold text-indigo-600 dark:text-indigo-400 font-mono mt-0.5">
-                {instructorStats.totalQuizzes} ခု
+                {instructorStats.totalQuizzes} Exam · {instructorStats.dataFormItems} Form
               </div>
             </div>
             <div className="neu-inset-sm p-3 rounded-2xl">
@@ -700,47 +778,378 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
               </div>
               <div className="neu-inset-sm p-3 rounded-2xl">
                 <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                  အောင်မြင်ပြီး (Passed)
+                  အောင်မြင်ပြီး / ဖောင်ဖြည့်ပြီး
                 </div>
                 <div className="text-lg font-extrabold text-amber-600 dark:text-amber-400 font-mono mt-0.5">
-                  {studentStats.passed} ခု
+                  {studentStats.passed} Exam · {studentStats.dataFormCompleted}/{studentStats.dataFormTotal} Form
                 </div>
               </div>
             </div>
           )
         )}
+
+        {/* Filter Tabs: All / Exams / Data Forms */}
+        <div className="pt-2 border-t border-slate-200/70 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setRoomFilter('all')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-extrabold cursor-pointer transition-all ${
+                roomFilter === 'all'
+                  ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 shadow-xs'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+              }`}
+            >
+              အားလုံး ({quizzes.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setRoomFilter('exam')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-extrabold cursor-pointer transition-all flex items-center gap-1.5 ${
+                roomFilter === 'exam'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100'
+              }`}
+            >
+              <FileQuestion className="w-3.5 h-3.5" />
+              <span>စာမေးပွဲများ - Exams ({examCount})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setRoomFilter('data_form')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-extrabold cursor-pointer transition-all flex items-center gap-1.5 ${
+                roomFilter === 'data_form'
+                  ? 'bg-teal-600 text-white shadow-xs'
+                  : 'bg-teal-50 dark:bg-teal-950/60 text-teal-700 dark:text-teal-300 hover:bg-teal-100'
+              }`}
+            >
+              <ClipboardList className="w-3.5 h-3.5" />
+              <span>အချက်အလက် တောင်းခံလွှာများ - Data Forms ({dataFormCount})</span>
+            </button>
+          </div>
+          <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
+            📋 Data Form များကို PDF သို့မဟုတ် Excel (.csv) ဖိုင်အဖြစ် တိုက်ရိုက် ဒေါင်းလုဒ်ရယူနိုင်ပါသည်
+          </span>
+        </div>
       </div>
 
-      {/* Exam List */}
-      {quizzes.length === 0 ? (
+      {/* Exam & Data Form List */}
+      {filteredQuizzes.length === 0 ? (
         <div className="neu-card rounded-3xl p-8 sm:p-12 text-center space-y-3">
           <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mx-auto">
-            <FileQuestion className="w-6 h-6" />
+            {roomFilter === 'data_form' ? (
+              <ClipboardList className="w-6 h-6 text-teal-600" />
+            ) : (
+              <FileQuestion className="w-6 h-6" />
+            )}
           </div>
           <h4 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white">
-            Exam Room တွင် စာမေးပွဲ မရှိသေးပါ
+            {roomFilter === 'data_form'
+              ? 'အချက်အလက် တောင်းခံလွှာ (Data Form) မရှိသေးပါ'
+              : 'Exam Room တွင် စာမေးပွဲ မရှိသေးပါ'}
           </h4>
           <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto leading-relaxed">
             {isInstructor
-              ? 'ကျောင်းသားများ တစ်ပြိုင်တည်း ဖြေဆိုပြီး အမှတ်နှင့် အဖြေမှန်များကို ချက်ချင်း ကြည့်ရှုနိုင်မည့် Auto-Graded Exam သို့မဟုတ် Flashcard လေ့ကျင့်ခန်းများကို စတင်ဖန်တီးနိုင်ပါသည်။'
-              : 'ဆရာမှ စာမေးပွဲ သို့မဟုတ် လေ့ကျင့်ခန်း Exam အသစ်တင်ပေးသည့်အခါ ဤနေရာတွင် ချက်ချင်း ပေါ်လာပါမည်။'}
+              ? 'ကျောင်းသားများ တစ်ပြိုင်တည်း ဖြေဆိုရန် Auto-Graded Exam သို့မဟုတ် ကျောင်းသားများထံမှ လိုအပ်သည့် အချက်အလက်များ တောင်းခံပြီး PDF / Excel ဒေါင်းလုဒ်ရယူနိုင်သည့် Data Form များကို ဖန်တီးနိုင်ပါသည်။'
+              : 'ဆရာမှ စာမေးပွဲ သို့မဟုတ် အချက်အလက်ဖြည့်သွင်းရန် Form အသစ်တင်ပေးသည့်အခါ ဤနေရာတွင် ချက်ချင်း ပေါ်လာပါမည်။'}
           </p>
           {isInstructor && (
-            <div className="pt-2">
+            <div className="pt-2 flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => setEditorDataForm('new')}
+                className="px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
+              >
+                <ClipboardList className="w-4 h-4" />
+                <span>+ အချက်အလက်တောင်းရန် Form ဖန်တီးမည်</span>
+              </button>
               <button
                 type="button"
                 onClick={() => setEditorQuiz('new')}
                 className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
               >
                 <Plus className="w-4 h-4" />
-                <span>ပထမဆုံး Exam စတင်ဖန်တီးမည်</span>
+                <span>+ Exam အသစ်ဖန်တီးမည်</span>
               </button>
             </div>
           )}
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4">
-          {quizzes.map((quiz) => {
+          {filteredQuizzes.map((quiz) => {
+            const isDataForm = quiz.itemType === 'data_form';
+            const formFields =
+              quiz.formFields && quiz.formFields.length > 0
+                ? quiz.formFields
+                : DEFAULT_DATA_FORM_FIELDS;
+
+            if (isDataForm) {
+              const mySubmissions = ClassroomDB.getQuizSubmissions(quiz.id, currentUser.id);
+              const myLatestSub = mySubmissions[0];
+              const allFormSubs = isInstructor
+                ? ClassroomDB.getAllQuizSubmissionsForQuiz(quiz.id)
+                : mySubmissions;
+              const tzMode = quiz.timezoneMode === 'LOCAL' ? 'LOCAL' : 'MMT';
+              const availability = getExamAvailability(quiz, nowMs);
+              const canStudentFill =
+                isInstructor ||
+                (availability.isAvailable &&
+                  (!myLatestSub || quiz.allowStudentEditSubmission !== false));
+
+              return (
+                <div
+                  key={quiz.id}
+                  className="neu-card rounded-3xl p-4 sm:p-6 space-y-4 border-2 border-teal-500/30 dark:border-teal-500/30 transition-all"
+                >
+                  <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+                    <div className="space-y-2.5 min-w-0 flex-1">
+                      {/* Badges Row */}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-extrabold ${
+                            availability.state === 'open'
+                              ? 'bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700'
+                              : availability.state === 'scheduled_future'
+                                ? 'bg-amber-100 dark:bg-amber-950/90 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700'
+                                : 'bg-rose-100 dark:bg-rose-950/90 text-rose-800 dark:text-rose-300 border border-rose-300 dark:border-rose-700'
+                          }`}
+                        >
+                          <span>
+                            {availability.state === 'open'
+                              ? '🟢 Form ဖွင့်ထားသည် (ဖြည့်သွင်းနိုင်သည်)'
+                              : availability.state === 'scheduled_future'
+                                ? '⏳ သတ်မှတ်ချိန်ရောက်မှ ပွင့်မည်'
+                                : '🔒 Form ပိတ်ထားသည်'}
+                          </span>
+                        </span>
+
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-teal-100 dark:bg-teal-950/90 text-teal-800 dark:text-teal-300 border border-teal-300 dark:border-teal-700">
+                          <ClipboardList className="w-3 h-3" />
+                          <span>📋 အချက်အလက် တောင်းခံလွှာ (Student Data Form)</span>
+                        </span>
+
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono">
+                          <span>တောင်းခံထားသော အချက်အလက် {formFields.length} ချက်</span>
+                        </span>
+
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                          <Globe className="w-3 h-3" />
+                          <span>
+                            {tzMode === 'MMT'
+                              ? '🇲🇲 မြန်မာစံတော်ချိန် (MMT · UTC+06:30)'
+                              : '🌐 ဒေသစံတော်ချိန် (Local Time)'}
+                          </span>
+                        </span>
+                      </div>
+
+                      <h4 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white leading-snug">
+                        {quiz.title}
+                      </h4>
+
+                      {quiz.description && (
+                        <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed whitespace-pre-line">
+                          {quiz.description}
+                        </p>
+                      )}
+
+                      {/* Requested Fields Chips Preview */}
+                      <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                        <span className="text-[11px] font-extrabold text-slate-500 dark:text-slate-400">
+                          တောင်းခံထားသည့် အချက်အလက်များ:
+                        </span>
+                        {formFields.map((field, idx) => (
+                          <span
+                            key={field.id}
+                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-teal-50/90 dark:bg-teal-950/50 border border-teal-200/80 dark:border-teal-800 text-[11px] font-bold text-teal-900 dark:text-teal-200"
+                          >
+                            <span className="font-mono text-teal-600 dark:text-teal-400">
+                              {idx + 1}.
+                            </span>
+                            <span>{field.label}</span>
+                            {field.required && <span className="text-rose-500 font-black">*</span>}
+                          </span>
+                        ))}
+                      </div>
+
+                      {/* Schedule Info Banner */}
+                      {(quiz.scheduledOpenAt || quiz.scheduledCloseAt || quiz.isOpen === false) && (
+                        <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                          {quiz.scheduledOpenAt && (
+                            <span className="px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 font-mono">
+                              🟢 Form စဖွင့်ချိန်: {formatScheduleDateTime(quiz.scheduledOpenAt, tzMode)}
+                            </span>
+                          )}
+                          {quiz.scheduledCloseAt && (
+                            <span className="px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 font-mono">
+                              🛑 Form ပိတ်ချိန်: {formatScheduleDateTime(quiz.scheduledCloseAt, tzMode)}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Right Status Box: Student Submitted Badge or Teacher Response Counter */}
+                    {myLatestSub && !isInstructor ? (
+                      <div className="p-3.5 rounded-2xl border bg-emerald-50/90 dark:bg-emerald-950/50 border-emerald-300 dark:border-emerald-700 shrink-0 flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                          <CheckCircle2 className="w-5 h-5" />
+                        </div>
+                        <div className="text-xs space-y-0.5">
+                          <div className="font-extrabold text-emerald-950 dark:text-emerald-200">
+                            အချက်အလက် ပေးပို့ပြီး ✓
+                          </div>
+                          <div className="text-[11px] text-emerald-700 dark:text-emerald-300 font-mono">
+                            {myLatestSub.submittedAt}
+                          </div>
+                        </div>
+                      </div>
+                    ) : isInstructor ? (
+                      <div
+                        onClick={() => setResponsesDataForm(quiz)}
+                        className="neu-inset-sm p-3.5 rounded-2xl shrink-0 cursor-pointer hover:ring-2 hover:ring-teal-500/40 transition-all flex items-center gap-3"
+                        title="ကျောင်းသားများ ဖြည့်သွင်းထားသော အချက်အလက်စာရင်းနှင့် PDF / Excel ဒေါင်းလုဒ်ရယူရန်"
+                      >
+                        <div className="w-10 h-10 rounded-xl bg-teal-600/10 text-teal-600 dark:text-teal-400 flex items-center justify-center font-mono font-extrabold text-xs">
+                          {allFormSubs.length}/{enrolledStudents.length}
+                        </div>
+                        <div className="text-xs">
+                          <div className="font-extrabold text-slate-900 dark:text-white">
+                            ဖောင်ဖြည့်ပြီးသူ {allFormSubs.length} ဦး
+                          </div>
+                          <div className="text-[11px] text-teal-600 dark:text-teal-400 font-semibold">
+                            စာရင်းနှင့် PDF/Excel ကြည့်ရန် →
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {/* Action Buttons Footer for Data Form */}
+                  <div className="pt-3 border-t border-slate-200/60 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {canStudentFill ? (
+                        <button
+                          type="button"
+                          onClick={() => setActiveFillDataForm(quiz)}
+                          className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-extrabold shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>
+                            {isInstructor
+                              ? '✍️ စမ်းသပ်ဖြည့်သွင်းကြည့်မည် (Fill Form)'
+                              : myLatestSub
+                                ? '✏️ ဖြည့်သွင်းထားသည်ကို ကြည့်မည် / ပြန်ပြင်မည်'
+                                : '✍️ ဖောင်ဖြည့်သွင်းမည် (Fill Form)'}
+                          </span>
+                        </button>
+                      ) : myLatestSub ? (
+                        <button
+                          type="button"
+                          onClick={() => setActiveFillDataForm(quiz)}
+                          className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>ဖြည့်သွင်းထားသော အချက်အလက် ပြန်ကြည့်ရန်</span>
+                        </button>
+                      ) : (
+                        <div className="px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 text-xs font-bold flex items-center gap-1.5">
+                          <Lock className="w-3.5 h-3.5 text-rose-500" />
+                          <span>
+                            {availability.detailText || 'Form ဖြည့်သွင်းခွင့် ပိတ်ထားပါသည်'}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Direct 1-Click PDF & Excel Download Buttons on the Card */}
+                      <button
+                        type="button"
+                        disabled={downloadingFormPdfId === `${quiz.id}_responses`}
+                        onClick={() => handleQuickDownloadFormPdf(quiz, allFormSubs, 'responses')}
+                        className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-extrabold shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                        title={
+                          isInstructor
+                            ? 'ကျောင်းသားများ ဖြည့်သွင်းထားသော အချက်အလက်စာရင်း (သို့) ဖောင်အလွတ်ကို PDF ဖိုင်အဖြစ် ဒေါင်းလုဒ်ဆွဲရန်'
+                            : 'ဖောင်ကို PDF ဖိုင်အဖြစ် ဒေါင်းလုဒ်ဆွဲရန်'
+                        }
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        <span>
+                          {downloadingFormPdfId === `${quiz.id}_responses`
+                            ? 'PDF ထုတ်နေသည်...'
+                            : isInstructor
+                              ? `📄 PDF Download (${allFormSubs.length} ဦး)`
+                              : '📄 PDF Download'}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => downloadDataFormExcelCsv(quiz, course, allFormSubs)}
+                        className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                        title="Excel (.csv) ဖိုင်အဖြစ် ဒေါင်းလုဒ်ဆွဲရန်"
+                      >
+                        <FileSpreadsheet className="w-3.5 h-3.5" />
+                        <span>
+                          {isInstructor
+                            ? `📗 Excel Download (${allFormSubs.length} ဦး)`
+                            : '📗 Excel Download'}
+                        </span>
+                      </button>
+                    </div>
+
+                    {/* Teacher Management Controls for Data Form */}
+                    {isInstructor && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleExamOpen(quiz)}
+                          className={`px-3.5 py-2 rounded-xl text-xs font-extrabold flex items-center gap-1.5 cursor-pointer transition-colors border ${
+                            quiz.isOpen === false
+                              ? 'bg-rose-50 dark:bg-rose-950/70 hover:bg-rose-100 text-rose-700 dark:text-rose-300 border-rose-300 dark:border-rose-700'
+                              : 'bg-emerald-50 dark:bg-emerald-950/70 hover:bg-emerald-100 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700'
+                          }`}
+                        >
+                          <span>
+                            {quiz.isOpen === false
+                              ? '🔒 Form ပိတ်ထားသည် (နှိပ်၍ ဖွင့်မည်)'
+                              : '🟢 Form ဖွင့်ထားသည် (နှိပ်၍ ပိတ်မည်)'}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setResponsesDataForm(quiz)}
+                          className="px-3.5 py-2 rounded-xl bg-teal-50 dark:bg-teal-950/70 hover:bg-teal-100 dark:hover:bg-teal-900/60 text-teal-800 dark:text-teal-300 border border-teal-300 dark:border-teal-700 text-xs font-extrabold flex items-center gap-1.5 cursor-pointer transition-colors"
+                        >
+                          <Users className="w-3.5 h-3.5" />
+                          <span>
+                            📊 ဖြည့်သွင်းထားသူ စာရင်း ({allFormSubs.length}/{enrolledStudents.length})
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setEditorDataForm(quiz)}
+                          className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-teal-50 dark:hover:bg-teal-950/60 text-slate-600 dark:text-slate-300 hover:text-teal-600 text-xs font-bold cursor-pointer transition-colors"
+                          title="Form အချက်အလက်များ ပြင်ဆင်ရန် (Edit Data Form)"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setDeleteConfirmQuiz(quiz)}
+                          className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/60 text-slate-600 dark:text-slate-300 hover:text-rose-600 text-xs font-bold cursor-pointer transition-colors"
+                          title="Form ဖျက်သိမ်းရန် (Delete Form)"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            }
             const cleanQuestions = (quiz.questions || []).filter(
               (q) => q && q.id !== '__quiz_meta__'
             );
@@ -1214,6 +1623,53 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
           onClose={() => setEditorQuiz(null)}
           onSaved={() => {
             setEditorQuiz(null);
+            setRefreshTick((t) => t + 1);
+            onRefresh();
+          }}
+        />
+      )}
+
+      {/* 5b. Teacher Create / Edit Student Data Collection Form Modal */}
+      {editorDataForm && isInstructor && (
+        <DataFormEditorModal
+          course={course}
+          currentUser={currentUser}
+          initialForm={editorDataForm === 'new' ? undefined : editorDataForm}
+          onClose={() => setEditorDataForm(null)}
+          onSaved={() => {
+            setEditorDataForm(null);
+            setRefreshTick((t) => t + 1);
+            onRefresh();
+          }}
+        />
+      )}
+
+      {/* 5c. Student Fill Data Collection Form Modal */}
+      {activeFillDataForm && (
+        <StudentDataFormFillModal
+          form={activeFillDataForm}
+          course={course}
+          currentUser={currentUser}
+          existingSubmission={
+            ClassroomDB.getQuizSubmissions(activeFillDataForm.id, currentUser.id)[0]
+          }
+          onClose={() => setActiveFillDataForm(null)}
+          onSubmitted={() => {
+            setRefreshTick((t) => t + 1);
+            onRefresh();
+          }}
+        />
+      )}
+
+      {/* 5d. Teacher Data Form Responses & PDF / Excel Export Modal */}
+      {responsesDataForm && isInstructor && (
+        <DataFormResponsesModal
+          form={responsesDataForm}
+          course={course}
+          enrolledStudents={enrolledStudents}
+          currentUser={currentUser}
+          onClose={() => setResponsesDataForm(null)}
+          onRefresh={() => {
             setRefreshTick((t) => t + 1);
             onRefresh();
           }}

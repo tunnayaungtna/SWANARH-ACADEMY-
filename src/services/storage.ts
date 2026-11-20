@@ -7372,6 +7372,9 @@ export class ClassroomDB {
       description: string;
       durationMinutes: number;
       passingScore: number;
+      itemType?: 'exam' | 'data_form';
+      formFields?: Quiz['formFields'];
+      allowStudentEditSubmission?: boolean;
       mode?: 'exam' | 'practice';
       enableFlashcards?: boolean;
       showAnswersImmediately?: boolean;
@@ -7389,18 +7392,32 @@ export class ClassroomDB {
     const isEditing = Boolean(quizInput.id && quizzes.some((q) => q.id === quizInput.id));
     const existing = isEditing ? quizzes.find((q) => q.id === quizInput.id) : undefined;
     const nowMs = Date.now();
-    const quizId = existing?.id || `quiz-${nowMs}-${Math.random().toString(36).slice(2, 6)}`;
+    const isDataForm =
+      quizInput.itemType === 'data_form' || existing?.itemType === 'data_form';
+    const quizId =
+      existing?.id ||
+      `${isDataForm ? 'dform' : 'quiz'}-${nowMs}-${Math.random().toString(36).slice(2, 6)}`;
     const tzMode: 'MMT' | 'LOCAL' = quizInput.timezoneMode === 'LOCAL' ? 'LOCAL' : 'MMT';
 
     const savedQuiz: Quiz = {
       id: quizId,
       courseId: quizInput.courseId,
       title: quizInput.title.trim(),
-      description: quizInput.description.trim() || 'Auto-Graded Assessment & Flashcards',
+      description:
+        quizInput.description.trim() ||
+        (isDataForm
+          ? 'ကျောင်းသား အချက်အလက် တောင်းခံလွှာ (Student Data Collection Form)'
+          : 'Auto-Graded Assessment & Flashcards'),
       durationMinutes: Math.max(1, Number(quizInput.durationMinutes) || 20),
       passingScore: Math.min(100, Math.max(1, Number(quizInput.passingScore) || 60)),
+      itemType: isDataForm ? 'data_form' : 'exam',
+      formFields: isDataForm ? quizInput.formFields || [] : undefined,
+      allowStudentEditSubmission:
+        quizInput.allowStudentEditSubmission !== undefined
+          ? quizInput.allowStudentEditSubmission
+          : true,
       mode: quizInput.mode === 'practice' ? 'practice' : 'exam',
-      enableFlashcards: quizInput.enableFlashcards !== false,
+      enableFlashcards: isDataForm ? false : quizInput.enableFlashcards !== false,
       showAnswersImmediately: quizInput.showAnswersImmediately !== false,
       isOpen: quizInput.isOpen !== false,
       timezoneMode: tzMode,
@@ -7459,12 +7476,13 @@ export class ClassroomDB {
       // ignore
     }
 
-    // Broadcast notification when creating a new quiz
+    // Broadcast notification when creating a new quiz or data form
     if (!isEditing && targetCourse) {
-      const modeLabel =
-        savedQuiz.mode === 'practice'
-          ? 'လေ့ကျင့်ခန်း Quiz & ကတ်ပြား'
-          : 'စာမေးပွဲ (Exam Room)';
+      const modeLabel = isDataForm
+        ? 'ကျောင်းသား အချက်အလက် တောင်းခံလွှာ (Data Form)'
+        : savedQuiz.mode === 'practice'
+        ? 'လေ့ကျင့်ခန်း Quiz & ကတ်ပြား'
+        : 'စာမေးပွဲ (Exam Room)';
       const newNotif: NotificationItem = {
         id: `notif-quiz-${nowMs}`,
         userId: 'COURSE_BROADCAST',
@@ -7473,8 +7491,10 @@ export class ClassroomDB {
         courseTitle: targetCourse.title,
         authorName: currentUser.name,
         authorRole: currentUser.role,
-        title: `📝 ${targetCourse.code}: ${modeLabel} အသစ် — "${savedQuiz.title}"`,
-        message: `မေးခွန်း (${savedQuiz.questions.length}) ပုဒ် · ဖြေဆိုချိန် ${savedQuiz.durationMinutes} မိနစ် · အောင်မှတ် ${savedQuiz.passingScore}% (ဆရာ ${currentUser.name})`,
+        title: `${isDataForm ? '📋' : '📝'} ${targetCourse.code}: ${modeLabel} အသစ် — "${savedQuiz.title}"`,
+        message: isDataForm
+          ? `တောင်းခံထားသော အချက်အလက် (${(savedQuiz.formFields || []).length}) ချက် — Exam Room ထဲတွင် ဝင်ရောက်ဖြည့်သွင်းပေးပါ (ဆရာ ${currentUser.name})`
+          : `မေးခွန်း (${savedQuiz.questions.length}) ပုဒ် · ဖြေဆိုချိန် ${savedQuiz.durationMinutes} မိနစ် · အောင်မှတ် ${savedQuiz.passingScore}% (ဆရာ ${currentUser.name})`,
         type: 'quiz',
         targetTab: 'quizzes',
         isRead: false,
@@ -7826,6 +7846,79 @@ export class ClassroomDB {
     }
 
     return { submission: newSub, passed, score, correctCount, totalQuestions };
+  }
+
+  static submitDataForm(
+    form: Quiz,
+    formResponses: Record<string, string>,
+    currentUser: User
+  ): QuizSubmission {
+    const access = this.getCourseById(form.courseId, currentUser);
+    if (!access.course) {
+      throw new Error(access.error || 'Access denied.');
+    }
+
+    const nowMs = Date.now();
+    const deterministicId = `qsub_${form.id}_${currentUser.id}`;
+
+    // Un-mark deterministicId from deletedIds if previously deleted
+    const deletedIds = this.getDeletedIds();
+    if (deletedIds.includes(deterministicId)) {
+      this.setItem(
+        STORAGE_KEYS.DELETED_IDS,
+        deletedIds.filter((id) => id !== deterministicId)
+      );
+    }
+
+    const submissions = this.getItem<QuizSubmission[]>(
+      STORAGE_KEYS.QUIZ_SUBMISSIONS,
+      INITIAL_QUIZ_SUBMISSIONS
+    );
+    const prevSub = submissions.find(
+      (qs) => qs.id === deterministicId || (qs.quizId === form.id && qs.studentId === currentUser.id)
+    );
+    const attemptCount = (prevSub?.attemptCount || 0) + 1;
+
+    const cleanResponses: Record<string, string> = {};
+    Object.entries(formResponses || {}).forEach(([k, v]) => {
+      cleanResponses[k] = String(v ?? '').trim();
+    });
+
+    const newSub: QuizSubmission = {
+      id: deterministicId,
+      quizId: form.id,
+      courseId: form.courseId,
+      studentId: currentUser.id,
+      studentName: currentUser.name,
+      studentUsername: currentUser.username,
+      score: 100,
+      correctCount: (form.formFields || []).length,
+      totalQuestions: (form.formFields || []).length,
+      passed: true,
+      answers: {},
+      formResponses: cleanResponses,
+      attemptCount,
+      submittedAt: this.formatMyanmarDateTime(nowMs, false),
+      submittedAtMs: nowMs,
+    };
+
+    const filteredSubs = submissions.filter(
+      (qs) => !(qs.quizId === form.id && qs.studentId === currentUser.id) && qs.id !== deterministicId
+    );
+    this.setItem(STORAGE_KEYS.QUIZ_SUBMISSIONS, [newSub, ...filteredSubs]);
+    this.markLocalWrite(deterministicId);
+
+    const jitterMs =
+      currentUser.role === 'student' ? 80 + Math.floor(Math.random() * 870) : 20;
+    setTimeout(() => {
+      try {
+        SupabaseService.upsertQuizSubmission(newSub).catch(() => {});
+      } catch {
+        // ignore
+      }
+    }, jitterMs);
+
+    return newSub;
   }
 
   static async syncQuizzesFromCloud(

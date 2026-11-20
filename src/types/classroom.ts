@@ -95,6 +95,17 @@ export interface QuizQuestion {
   explanation: string;
 }
 
+export type DataFormFieldType = 'text' | 'textarea' | 'number' | 'phone' | 'date' | 'select';
+
+export interface DataFormField {
+  id: string;
+  label: string;
+  type: DataFormFieldType;
+  required: boolean;
+  placeholder?: string;
+  options?: string[]; // Used when type === 'select'
+}
+
 export interface Quiz {
   id: string;
   courseId: string;
@@ -103,6 +114,9 @@ export interface Quiz {
   durationMinutes: number;
   passingScore: number; // percentage, e.g. 70
   questions: QuizQuestion[];
+  itemType?: 'exam' | 'data_form';
+  formFields?: DataFormField[];
+  allowStudentEditSubmission?: boolean;
   dueNotice?: string;
   mode?: 'exam' | 'practice';
   enableFlashcards?: boolean;
@@ -143,6 +157,7 @@ export interface QuizSubmission {
   totalQuestions?: number;
   passed: boolean;
   answers: Record<string, number>;
+  formResponses?: Record<string, string>;
   timeSpentSeconds?: number;
   startedAtMs?: number;
   startedAtMmt?: string;

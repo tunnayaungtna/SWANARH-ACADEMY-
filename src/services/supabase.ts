@@ -2930,6 +2930,9 @@ export class SupabaseService {
     );
     const metaPayload = {
       description: quiz.description || '',
+      itemType: quiz.itemType || 'exam',
+      formFields: Array.isArray(quiz.formFields) ? quiz.formFields : [],
+      allowStudentEditSubmission: quiz.allowStudentEditSubmission !== false,
       mode: quiz.mode || 'exam',
       enableFlashcards: quiz.enableFlashcards !== false,
       showAnswersImmediately: quiz.showAnswersImmediately !== false,
@@ -2976,6 +2979,9 @@ export class SupabaseService {
           const rawQuestions: QuizQuestion[] = Array.isArray(row.questions) ? row.questions : [];
           let meta: {
             description?: string;
+            itemType?: 'exam' | 'data_form';
+            formFields?: Quiz['formFields'];
+            allowStudentEditSubmission?: boolean;
             mode?: 'exam' | 'practice';
             enableFlashcards?: boolean;
             showAnswersImmediately?: boolean;
@@ -3017,6 +3023,9 @@ export class SupabaseService {
             description: meta.description || 'Auto-Graded Assessment & Flashcards',
             durationMinutes: row.time_limit_minutes ?? 20,
             passingScore: row.passing_score ?? 60,
+            itemType: meta.itemType === 'data_form' ? 'data_form' : 'exam',
+            formFields: Array.isArray(meta.formFields) ? meta.formFields : undefined,
+            allowStudentEditSubmission: meta.allowStudentEditSubmission !== false,
             mode: meta.mode === 'practice' ? 'practice' : 'exam',
             enableFlashcards: meta.enableFlashcards !== false,
             showAnswersImmediately: meta.showAnswersImmediately !== false,
@@ -3089,6 +3098,7 @@ export class SupabaseService {
             studentUsername?: string;
             correctCount?: number;
             totalQuestions?: number;
+            formResponses?: Record<string, string>;
             timeSpentSeconds?: number;
             startedAtMs?: number;
             startedAtMmt?: string;
@@ -3129,6 +3139,10 @@ export class SupabaseService {
               typeof meta.totalQuestions === 'number' ? meta.totalQuestions : undefined,
             passed: Boolean(row.passed),
             answers: cleanAnswers,
+            formResponses:
+              meta.formResponses && typeof meta.formResponses === 'object'
+                ? meta.formResponses
+                : undefined,
             timeSpentSeconds:
               typeof meta.timeSpentSeconds === 'number' ? meta.timeSpentSeconds : undefined,
             startedAtMs: typeof meta.startedAtMs === 'number' ? meta.startedAtMs : undefined,
@@ -4844,6 +4858,7 @@ export class SupabaseService {
           studentUsername: sub.studentUsername,
           correctCount: sub.correctCount,
           totalQuestions: sub.totalQuestions,
+          formResponses: sub.formResponses || undefined,
           timeSpentSeconds: sub.timeSpentSeconds,
           startedAtMs: sub.startedAtMs,
           startedAtMmt: sub.startedAtMmt,

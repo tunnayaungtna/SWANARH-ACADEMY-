@@ -63,10 +63,11 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
   useBackHandler(!!editingAccountUser, () => setEditingAccountUser(null));
 
   // Fast O(1) lookup Map so 2,000 enrolled students resolve in <1ms instead of O(N^2)
+  const isStaff = currentUser.role === 'admin' || currentUser.role === 'co_admin';
   const userByIdMap = new Map<string, User>(allUsers.map((u) => [u.id, u]));
   const cleanSearch = searchFilter.toLowerCase().trim();
 
-  // Get enrolled students objects
+  // Get enrolled students objects (Students can only search classmates by Name, never by other students' Usernames/Emails)
   const enrolledStudents = course.enrolledStudentIds
     .map((id) => userByIdMap.get(id))
     .filter((u): u is User => !!u)
@@ -74,8 +75,9 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
       (u) =>
         !cleanSearch ||
         u.name.toLowerCase().includes(cleanSearch) ||
-        u.username.toLowerCase().includes(cleanSearch) ||
-        u.email.toLowerCase().includes(cleanSearch)
+        ((isStaff || u.id === currentUser.id) &&
+          (u.username.toLowerCase().includes(cleanSearch) ||
+            u.email.toLowerCase().includes(cleanSearch)))
     );
 
   const handleConfirmUnenroll = () => {
@@ -147,7 +149,7 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
                         </span>
                       </div>
                       <span className="text-xs text-slate-500 dark:text-slate-400 font-mono">
-                        @{instructor.username} · {instructor.email}
+                        {isStaff ? `@${instructor.username} · ${instructor.email}` : instructor.email}
                       </span>
                     </div>
                   </div>
@@ -223,7 +225,11 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
                 setSearchFilter(e.target.value);
                 setVisibleStudentLimit(60);
               }}
-              placeholder="အတန်းတွင်း ကျောင်းသားအမည် သို့မဟုတ် Username ဖြင့် ရှာဖွေပါ..."
+              placeholder={
+                isStaff
+                  ? 'အတန်းတွင်း ကျောင်းသားအမည် သို့မဟုတ် Username ဖြင့် ရှာဖွေပါ...'
+                  : 'အတန်းတွင်း ကျောင်းသား/သူ အမည်ဖြင့် ရှာဖွေပါ...'
+              }
               className="w-full pl-10 pr-4 py-2.5 text-xs neu-input rounded-2xl text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 transition-all"
             />
           </div>
@@ -304,10 +310,12 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
                           </span>
                         )}
                       </div>
-                      <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono truncate">
-                        @{student.username}
-                        {isStaff && ` · ${student.phone || ''} · ${student.email}`}
-                      </div>
+                      {(isStaff || isSelf) && (
+                        <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono truncate">
+                          @{student.username}
+                          {isStaff && ` · ${student.phone || ''} · ${student.email}`}
+                        </div>
+                      )}
                       {isStaff && student.address && (
                         <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
                           📍 {student.address}

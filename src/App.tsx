@@ -7,7 +7,6 @@ import { useBackHandler } from './utils/backNavigation';
 import { LoginView } from './components/LoginView';
 import { Navbar } from './components/Navbar';
 import { CourseCard } from './components/CourseCard';
-import { LowBandwidthBar } from './components/LowBandwidthBar';
 import { CourseDetail } from './components/CourseDetail';
 import { CertificateModal } from './components/CertificateModal';
 import { SecurityArchitectureModal } from './components/SecurityArchitectureModal';
@@ -773,13 +772,6 @@ export default function App() {
   return (
     <div className="min-h-screen w-full max-w-full overflow-x-hidden neu-canvas text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-300">
       <Suspense fallback={null}>
-        {/* Low Bandwidth & One-Click Update Bar */}
-        <LowBandwidthBar
-          isLowBandwidth={isLowBandwidth}
-          onToggle={() => setIsLowBandwidth(!isLowBandwidth)}
-          onRefreshData={refreshData}
-        />
-
         {/* Top Bar Contract Navbar */}
         <Navbar
           currentUser={currentUser}
