@@ -1029,12 +1029,18 @@ export const BookDeliveryView: React.FC<BookDeliveryViewProps> = ({
       ]);
     });
 
+    const escapeCsvCell = (cell: unknown): string => {
+      let str = String(cell || '');
+      if (/^[=+\-@\t\r]/.test(str)) {
+        str = `'${str}`;
+      }
+      return `"${str.replace(/"/g, '""')}"`;
+    };
+
     const csvContent =
       '\uFEFF' +
       rows
-        .map((row) =>
-          row.map((cell) => `"${String(cell || '').replace(/"/g, '""')}"`).join(',')
-        )
+        .map((row) => row.map(escapeCsvCell).join(','))
         .join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });

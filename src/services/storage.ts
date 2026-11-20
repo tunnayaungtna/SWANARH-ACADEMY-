@@ -3680,6 +3680,15 @@ export class ClassroomDB {
     cleanedOrphans: number;
     details: string;
   }> {
+    const currentLogged = this.getCurrentUser();
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
+      return {
+        success: false,
+        slimmedRows: 0,
+        cleanedOrphans: 0,
+        details: 'Unauthorized: Only Admin or Co-Admin can slim cloud database.',
+      };
+    }
     const [slimRes, orphanRes] = await Promise.all([
       SupabaseService.slimDatabaseForLowEgress(),
       this.cleanOrphanedLocalAndCloudData(true),
@@ -3706,6 +3715,15 @@ export class ClassroomDB {
     cleanedOrphans?: number;
     error?: string;
   }> {
+    const currentLogged = this.getCurrentUser();
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
+      return {
+        success: false,
+        syncedUsers: 0,
+        syncedCourses: 0,
+        error: 'Unauthorized: Only Admin or Co-Admin can run full database push sync.',
+      };
+    }
     if (!options?.pushOnly) {
       // First pull authoritative remote state so we never resurrect items deleted on another device
       await this.pullFromSupabase({ force: true });
@@ -3758,6 +3776,22 @@ export class ClassroomDB {
       attendance: number;
     };
   } {
+    const currentLogged = this.getCurrentUser();
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
+      return {
+        filename: 'unauthorized.json',
+        json: '{}',
+        counts: {
+          users: 0,
+          courses: 0,
+          posts: 0,
+          assignments: 0,
+          submissions: 0,
+          quizzes: 0,
+          attendance: 0,
+        },
+      };
+    }
     const deletedSet = new Set(this.getDeletedIds());
     const users = this.getAllUsers().filter((u) => !deletedSet.has(u.id));
     const courses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES).filter(
@@ -4538,8 +4572,10 @@ export class ClassroomDB {
         }
 
         let updated = purgedLocalNotifs;
-        // Detect if the remote Supabase project was just created (ONLY when both profiles and courses are empty AND never cloud synced before)
+        // Detect if the remote Supabase project was just created (ONLY when Admin/Co-Admin is logged in, both profiles and courses are empty AND never cloud synced before)
         const isFreshUnseededRemoteDb =
+          !isStudentLightweight &&
+          Boolean(loggedUser && (loggedUser.role === 'admin' || loggedUser.role === 'co_admin')) &&
           !isAlreadyCloudSynced &&
           shouldFetchCatalog &&
           remoteProfiles !== null &&
@@ -7689,11 +7725,16 @@ export class ClassroomDB {
   }
 
   static getAllQuizSubmissionsForQuiz(quizId: string): QuizSubmission[] {
+    const loggedUser = this.getCurrentUser();
     const deletedSet = new Set(this.getDeletedIds());
     const submissions = this.getItem<QuizSubmission[]>(
       STORAGE_KEYS.QUIZ_SUBMISSIONS,
       INITIAL_QUIZ_SUBMISSIONS
     );
+    // Strict Student Privacy: Students can ONLY read their own submissions!
+    if (loggedUser && loggedUser.role === 'student') {
+      return this.getQuizSubmissions(quizId, loggedUser.id);
+    }
     // Deduplicate by studentId (keeping latest submission per student)
     const byStudent = new Map<string, QuizSubmission>();
     submissions.forEach((qs) => {
@@ -7759,9 +7800,40 @@ export class ClassroomDB {
     if (!access.course) {
       throw new Error(access.error || 'Access denied.');
     }
-    let correctCount = 0;
+
     const cleanQuestions = (quiz.questions || []).filter((q) => q && q.id !== '__quiz_meta__');
     const totalQuestions = cleanQuestions.length;
+    const deterministicId = `qsub_${quiz.id}_${currentUser.id}`;
+    const submissions = this.getItem<QuizSubmission[]>(
+      STORAGE_KEYS.QUIZ_SUBMISSIONS,
+      INITIAL_QUIZ_SUBMISSIONS
+    );
+    const deletedSet = new Set(this.getDeletedIds());
+    const prevSub = submissions.find(
+      (qs) =>
+        !deletedSet.has(qs.id) &&
+        (qs.id === deterministicId || (qs.quizId === quiz.id && qs.studentId === currentUser.id))
+    );
+
+    // Security Guard for Students in Official Exam Mode:
+    // 1. Prevent overwriting an already-submitted official exam
+    // 2. Prevent submitting if the exam was manually closed (unless auto-submitting an active timed session on timeout)
+    if (currentUser.role === 'student' && quiz.mode !== 'practice') {
+      if (prevSub) {
+        return {
+          submission: prevSub,
+          passed: prevSub.passed,
+          score: prevSub.score,
+          correctCount: prevSub.correctCount ?? 0,
+          totalQuestions: prevSub.totalQuestions ?? totalQuestions,
+        };
+      }
+      if (quiz.isOpen === false && !options?.autoSubmittedOnTimeout) {
+        throw new Error('ဤစာမေးပွဲသည် ပိတ်သိမ်းထားပြီးဖြစ်သဖြင့် ဖြေဆိုပေးပို့၍ မရတော့ပါ။');
+      }
+    }
+
+    let correctCount = 0;
     if (totalQuestions > 0) {
       cleanQuestions.forEach((q) => {
         if (answers[q.id] === q.correctIndex) {
@@ -7773,7 +7845,6 @@ export class ClassroomDB {
     const score = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 100;
     const passed = score >= quiz.passingScore;
     const nowMs = Date.now();
-    const deterministicId = `qsub_${quiz.id}_${currentUser.id}`;
 
     // Lock or clear student active session
     if (quiz.mode === 'practice') {
@@ -7791,13 +7862,6 @@ export class ClassroomDB {
       );
     }
 
-    const submissions = this.getItem<QuizSubmission[]>(
-      STORAGE_KEYS.QUIZ_SUBMISSIONS,
-      INITIAL_QUIZ_SUBMISSIONS
-    );
-    const prevSub = submissions.find(
-      (qs) => qs.id === deterministicId || (qs.quizId === quiz.id && qs.studentId === currentUser.id)
-    );
     const attemptCount = (prevSub?.attemptCount || 0) + 1;
 
     const newSub: QuizSubmission = {
@@ -7860,6 +7924,35 @@ export class ClassroomDB {
 
     const nowMs = Date.now();
     const deterministicId = `qsub_${form.id}_${currentUser.id}`;
+    const submissions = this.getItem<QuizSubmission[]>(
+      STORAGE_KEYS.QUIZ_SUBMISSIONS,
+      INITIAL_QUIZ_SUBMISSIONS
+    );
+    const deletedSet = new Set(this.getDeletedIds());
+    const prevSub = submissions.find(
+      (qs) =>
+        !deletedSet.has(qs.id) &&
+        (qs.id === deterministicId || (qs.quizId === form.id && qs.studentId === currentUser.id))
+    );
+
+    // Security Guard for Students submitting Data Forms:
+    if (currentUser.role === 'student') {
+      if (form.isOpen === false) {
+        throw new Error('ဤ Form သည် ပိတ်သိမ်းထားပြီးဖြစ်သဖြင့် ဖြည့်သွင်းပေးပို့၍ မရတော့ပါ။');
+      }
+      const tzMode = form.timezoneMode === 'LOCAL' ? 'LOCAL' : 'MMT';
+      const openMs = this.parseQuizScheduleMs(form.scheduledOpenAt, tzMode);
+      const closeMs = this.parseQuizScheduleMs(form.scheduledCloseAt, tzMode);
+      if (!Number.isNaN(openMs) && nowMs < openMs) {
+        throw new Error('ဤ Form စတင်ဖွင့်လှစ်မည့် သတ်မှတ်ချိန် မရောက်သေးပါ။');
+      }
+      if (!Number.isNaN(closeMs) && nowMs >= closeMs) {
+        throw new Error('ဤ Form ပိတ်သိမ်းချိန် ကျော်လွန်သွားပြီဖြစ်သဖြင့် ဖြည့်သွင်း၍ မရတော့ပါ။');
+      }
+      if (prevSub && form.allowStudentEditSubmission === false) {
+        throw new Error('ဤ Form သည် တစ်ကြိမ်သာ ပေးပို့ခွင့်ပြုထားပြီး ပြန်လည်ပြင်ဆင်ခွင့် ပိတ်ထားပါသည်။');
+      }
+    }
 
     // Un-mark deterministicId from deletedIds if previously deleted
     const deletedIds = this.getDeletedIds();
@@ -7870,13 +7963,6 @@ export class ClassroomDB {
       );
     }
 
-    const submissions = this.getItem<QuizSubmission[]>(
-      STORAGE_KEYS.QUIZ_SUBMISSIONS,
-      INITIAL_QUIZ_SUBMISSIONS
-    );
-    const prevSub = submissions.find(
-      (qs) => qs.id === deterministicId || (qs.quizId === form.id && qs.studentId === currentUser.id)
-    );
     const attemptCount = (prevSub?.attemptCount || 0) + 1;
 
     const cleanResponses: Record<string, string> = {};
@@ -7973,7 +8059,12 @@ export class ClassroomDB {
         const localSubs = this.getItem<QuizSubmission[]>(
           STORAGE_KEYS.QUIZ_SUBMISSIONS,
           INITIAL_QUIZ_SUBMISSIONS
-        ).filter((s) => !deletedSet.has(s.id) && !deletedSet.has(s.quizId));
+        ).filter(
+          (s) =>
+            !deletedSet.has(s.id) &&
+            !deletedSet.has(s.quizId) &&
+            (!studentFilterId || s.studentId === studentFilterId)
+        );
         const prevSubsJson = JSON.stringify(localSubs);
         const subMap = new Map<string, QuizSubmission>();
 
@@ -7982,6 +8073,7 @@ export class ClassroomDB {
         });
         remoteSubs.forEach((rs) => {
           if (deletedSet.has(rs.id) || deletedSet.has(rs.quizId)) return;
+          if (studentFilterId && rs.studentId !== studentFilterId) return;
           const existing = subMap.get(rs.id);
           if (existing && this.isRecentLocalWrite(rs.id)) return;
           subMap.set(rs.id, {
@@ -9266,6 +9358,10 @@ export class ClassroomDB {
     filename?: string;
     rowCount?: number;
   } {
+    const currentLogged = this.getCurrentUser();
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
+      return { success: false };
+    }
     const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
     const course = allCourses.find((c) => c.id === courseId);
     if (!course) return { success: false };
@@ -9279,7 +9375,7 @@ export class ClassroomDB {
     const escapeCsv = (val: string | number | undefined) => {
       let str = String(val ?? '');
       // Prevent CSV Formula Injection in Excel / Google Sheets
-      if (/^[=+\-\t\r]/.test(str)) {
+      if (/^[=+\-@\t\r]/.test(str)) {
         str = `'${str}`;
       }
       if (str.includes(',') || str.includes('"') || str.includes('\n')) {
@@ -9370,6 +9466,10 @@ export class ClassroomDB {
     filename?: string;
     rowCount?: number;
   } {
+    const currentLogged = this.getCurrentUser();
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
+      return { success: false };
+    }
     const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
     const allUsers = this.getAllUsers();
     const students = allUsers.filter((u) => u.role === 'student');
@@ -9377,7 +9477,7 @@ export class ClassroomDB {
     const escapeCsv = (val: string | number | undefined) => {
       let str = String(val ?? '');
       // Prevent CSV Formula Injection in Excel / Google Sheets
-      if (/^[=+\-\t\r]/.test(str)) {
+      if (/^[=+\-@\t\r]/.test(str)) {
         str = `'${str}`;
       }
       if (str.includes(',') || str.includes('"') || str.includes('\n')) {
@@ -9463,6 +9563,10 @@ export class ClassroomDB {
     acceptedCount: number;
     totalStudents: number;
   } {
+    const currentLogged = this.getCurrentUser();
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
+      return { success: false, acceptedCount: 0, totalStudents: 0 };
+    }
     const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
     const allUsers = this.getAllUsers();
     const allStudents = allUsers.filter((u) => u.role === 'student');
@@ -10282,6 +10386,10 @@ export class ClassroomDB {
   }
 
   static saveBookDeliverySenderConfig(config: BookDeliverySenderConfig): BookDeliverySenderConfig {
+    const currentLogged = this.getCurrentUser();
+    if (!currentLogged || (currentLogged.role !== 'admin' && currentLogged.role !== 'co_admin')) {
+      return this.getBookDeliverySenderConfig();
+    }
     const def = this.getDefaultBookDeliverySenderConfig();
     const cleaned: BookDeliverySenderConfig = {
       academyName: (config.academyName || '').trim() || def.academyName,
@@ -10311,9 +10419,15 @@ export class ClassroomDB {
   }
 
   static getBookDeliveries(courseId?: string): BookDeliveryRecord[] {
+    const loggedUser = this.getCurrentUser();
     const deletedSet = new Set(this.getDeletedIds());
     const all = this.getItem<BookDeliveryRecord[]>(STORAGE_KEYS.BOOK_DELIVERIES, []).filter(
-      (r) => r && r.id && !deletedSet.has(r.id)
+      (r) =>
+        r &&
+        r.id &&
+        !deletedSet.has(r.id) &&
+        // Strict Student Privacy: Students can ONLY see their own book delivery record!
+        (!loggedUser || loggedUser.role !== 'student' || r.studentId === loggedUser.id)
     );
     const filtered = courseId ? all.filter((r) => r.courseId === courseId) : all;
     return [...filtered].sort((a, b) => this.compareRollNumbers(a.rollNo, b.rollNo));
@@ -10338,19 +10452,26 @@ export class ClassroomDB {
     },
     actor: User
   ): BookDeliveryRecord {
+    const access = this.getCourseById(input.course.id, actor);
+    if (!access.course) {
+      throw new Error(access.error || 'Access denied.');
+    }
+
     const existing = this.getItem<BookDeliveryRecord[]>(STORAGE_KEYS.BOOK_DELIVERIES, []);
     const nowMs = Date.now();
     const timeLabel = this.formatMyanmarDateTime(nowMs);
-    const targetStudentId =
-      input.studentId ||
-      (actor.role === 'student'
-        ? actor.id
-        : `manual-${nowMs}-${Math.random().toString(36).slice(2, 6)}`);
+    const isStaff = actor.role === 'admin' || actor.role === 'co_admin';
+    // Strict Student Ownership: A student can ONLY save/update their own studentId
+    const targetStudentId = isStaff
+      ? input.studentId || `manual-${nowMs}-${Math.random().toString(36).slice(2, 6)}`
+      : actor.id;
 
-    // Match by explicit id OR by (courseId + studentId) when not a manual duplicate
+    // Match by explicit id (only if owned by student or staff) OR by (courseId + studentId)
     const matchIndex = existing.findIndex(
       (r) =>
-        (input.id && r.id === input.id) ||
+        (input.id &&
+          r.id === input.id &&
+          (isStaff || r.studentId === actor.id)) ||
         (!input.id &&
           r.courseId === input.course.id &&
           r.studentId === targetStudentId &&
@@ -10360,10 +10481,13 @@ export class ClassroomDB {
     const prev = matchIndex >= 0 ? existing[matchIndex] : undefined;
     const recordId =
       prev?.id ||
-      input.id ||
+      (isStaff && input.id ? input.id : undefined) ||
       `bookdel-${input.course.id}-${nowMs}-${Math.random().toString(36).slice(2, 6)}`;
 
-    const nextStatus: BookDeliveryStatus = input.status || prev?.status || 'pending';
+    // Students cannot set status to 'shipped' — only preserve existing status or default to 'pending'
+    const nextStatus: BookDeliveryStatus = isStaff
+      ? input.status || prev?.status || 'pending'
+      : prev?.status || 'pending';
     const record: BookDeliveryRecord = {
       id: recordId,
       courseId: input.course.id,
@@ -10418,6 +10542,9 @@ export class ClassroomDB {
     }>,
     actor: User
   ): BookDeliveryRecord[] {
+    if (actor.role !== 'admin' && actor.role !== 'co_admin') {
+      return [];
+    }
     const existing = [...this.getItem<BookDeliveryRecord[]>(STORAGE_KEYS.BOOK_DELIVERIES, [])];
     const nowMs = Date.now();
     const timeLabel = this.formatMyanmarDateTime(nowMs);
@@ -10468,6 +10595,7 @@ export class ClassroomDB {
     status: BookDeliveryStatus,
     actor: User
   ): number {
+    if (actor.role !== 'admin' && actor.role !== 'co_admin') return 0;
     if (!recordIds || recordIds.length === 0) return 0;
     const idSet = new Set(recordIds);
     const existing = this.getItem<BookDeliveryRecord[]>(STORAGE_KEYS.BOOK_DELIVERIES, []);
@@ -10570,15 +10698,20 @@ export class ClassroomDB {
     try {
       const currentUser = this.getCurrentUser();
       if (!currentUser) return false;
+      const isStudent = currentUser.role === 'student';
       const remote = await SupabaseService.getRemoteBookDeliveries({
-        studentId: currentUser.role === 'student' ? currentUser.id : undefined,
+        studentId: isStudent ? currentUser.id : undefined,
         forceRefresh,
       });
       if (!remote) return false;
 
       const deletedSet = new Set(this.getDeletedIds());
       const local = this.getItem<BookDeliveryRecord[]>(STORAGE_KEYS.BOOK_DELIVERIES, []).filter(
-        (r) => r && r.id && !deletedSet.has(r.id)
+        (r) =>
+          r &&
+          r.id &&
+          !deletedSet.has(r.id) &&
+          (!isStudent || r.studentId === currentUser.id)
       );
       const mergedMap = new Map<string, BookDeliveryRecord>();
       local.forEach((r) => mergedMap.set(r.id, r));
@@ -10586,6 +10719,7 @@ export class ClassroomDB {
       let changed = false;
       for (const rem of remote) {
         if (!rem || !rem.id || deletedSet.has(rem.id)) continue;
+        if (isStudent && rem.studentId !== currentUser.id) continue;
         const loc = mergedMap.get(rem.id);
         if (!loc) {
           mergedMap.set(rem.id, rem);

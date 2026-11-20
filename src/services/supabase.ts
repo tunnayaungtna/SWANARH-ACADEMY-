@@ -2425,6 +2425,17 @@ export class SupabaseService {
             this.cachedAdminAvatars.set(uId, userObj.avatar);
             avatarCacheChanged = true;
           }
+          // Strict Student Privacy & Security: never expose Admin/Co-Admin or other users' password hashes, phones, addresses, or session tokens to student devices
+          if (isStudentLite && userObj.id !== options?.currentUserId) {
+            return {
+              ...userObj,
+              password: '',
+              phone: '',
+              address: '',
+              activeDeviceId: undefined,
+              activeSessionToken: undefined,
+            };
+          }
           return userObj;
         });
 
