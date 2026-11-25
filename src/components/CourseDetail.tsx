@@ -503,5 +503,3 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
     </div>
   );
 };
-
-
