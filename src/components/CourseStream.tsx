@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Course, CoursePost, User, Attachment, AttendanceStatus } from '../types/classroom';
 import { EditPostModal } from './EditPostModal';
 import { PinSwapModal } from './PinSwapModal';
@@ -112,8 +112,35 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   // Scheduled posts drawer expand state
   const [scheduledDrawerOpen, setScheduledDrawerOpen] = useState(true);
   // Progressive stream post limit for smooth 60fps scrolling
-  const [visiblePostLimit, setVisiblePostLimit] = useState<number>(20);
-  const userByIdMap = new Map<string, User>(ClassroomDB.getAllUsers().map((u) => [u.id, u]));
+  const [visiblePostLimit, setVisiblePostLimit] = useState<number>(12);
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setVisiblePostLimit(12);
+  }, [course.id]);
+
+  // Automatically load next batch of posts smoothly as user scrolls near bottom
+  useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current;
+    if (!sentinel || visiblePostLimit >= posts.length) return;
+    if (typeof IntersectionObserver === 'undefined') return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisiblePostLimit((prev) => Math.min(posts.length, prev + 12));
+        }
+      },
+      { rootMargin: '420px 0px' }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [visiblePostLimit, posts.length]);
+
+  const userByIdMap = useMemo(
+    () => new Map<string, User>(ClassroomDB.getAllUsers().map((u) => [u.id, u])),
+    [posts, currentUser.id]
+  );
 
   const [rateLimitError, setRateLimitError] = useState<string | null>(null);
   const [successToast, setSuccessToast] = useState<string | null>(null);
@@ -125,18 +152,29 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
   const [expandedComments, setExpandedComments] = useState<Record<string, boolean>>({});
 
-  // Filtered post collections
-  const pinnedPosts = posts
-    .filter((p) => p.isPinned && p.status !== 'scheduled')
-    .sort((a, b) => (a.pinOrder || 99) - (b.pinOrder || 99));
-  const scheduledPosts = posts.filter((p) => p.status === 'scheduled');
-  const currentPinnedCount = posts.filter((p) => p.isPinned).length;
-  const openAttendanceSessions = ClassroomDB.getAttendanceSessions(course.id).filter(
-    (s) => Boolean(s.isOpen)
+  // Filtered post collections (memoized for fast scroll & render)
+  const pinnedPosts = useMemo(
+    () =>
+      posts
+        .filter((p) => p.isPinned && p.status !== 'scheduled')
+        .sort((a, b) => (a.pinOrder || 99) - (b.pinOrder || 99)),
+    [posts]
+  );
+  const scheduledPosts = useMemo(
+    () => posts.filter((p) => p.status === 'scheduled'),
+    [posts]
+  );
+  const currentPinnedCount = useMemo(
+    () => posts.filter((p) => p.isPinned).length,
+    [posts]
+  );
+  const [streamAttTick, setStreamAttTick] = useState(0);
+  const openAttendanceSessions = useMemo(
+    () =>
+      ClassroomDB.getAttendanceSessions(course.id).filter((s) => Boolean(s.isOpen)),
+    [course.id, posts.length, streamAttTick]
   );
   const [editingStreamAttIds, setEditingStreamAttIds] = useState<Record<string, boolean>>({});
-
-  const [, setStreamAttTick] = useState(0);
 
   // Immediately update student check-in UI & notify student when Admin/Co-Admin opens or closes attendance remotely
   useEffect(() => {
@@ -226,8 +264,9 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
     onRefresh();
   };
 
-  // Live 3-second watcher in CourseStream so scheduled posts transition to #1 in the Stream at the exact scheduled moment
+  // Live watcher in CourseStream ONLY when there are scheduled posts waiting to be published
   useEffect(() => {
+    if (scheduledPosts.length === 0) return;
     const checkDue = () => {
       const publishedAny = ClassroomDB.checkAndPublishDueScheduledPosts();
       if (publishedAny) {
@@ -1782,13 +1821,13 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
             return (
               <article
                 key={post.id}
-                className={`neu-card rounded-3xl ${
+                className={`neu-card stream-post-card rounded-3xl ${
                   post.isPinned
                     ? 'ring-2 ring-amber-400/40'
                     : isPostScheduled
                     ? 'ring-2 ring-indigo-400/40'
                     : ''
-                } overflow-hidden transition-all`}
+                } overflow-hidden`}
               >
                 {/* Scheduled Notice Banner on Card (Visible to Admin) */}
                 {isPostScheduled && (
@@ -1820,6 +1859,8 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                             userByIdMap.get(post.authorId)?.avatar || post.authorAvatar
                           )}
                           alt={post.authorName}
+                          loading="lazy"
+                          decoding="async"
                           referrerPolicy="no-referrer"
                           onError={(e) => {
                             (e.target as HTMLImageElement).src = DEFAULT_AVATAR_SVG;
@@ -1984,6 +2025,8 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                                 <img
                                   src={att.url}
                                   alt={att.name}
+                                  loading="lazy"
+                                  decoding="async"
                                   referrerPolicy="no-referrer"
                                   className="w-full h-full object-cover group-hover/img:scale-105 transition-transform"
                                 />
@@ -2247,19 +2290,22 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
           })
         )}
 
-        {/* Load Older Posts Button */}
+        {/* Load Older Posts Sentinel & Button */}
         {posts.length > visiblePostLimit && (
-          <div className="neu-card rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+          <div
+            ref={loadMoreSentinelRef}
+            className="neu-card rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs"
+          >
             <span className="text-slate-600 dark:text-slate-300 font-medium">
               ပြသထားသော ပို့စ်: <strong>{visiblePostLimit}</strong> / စုစုပေါင်း <strong>{posts.length}</strong> ခု
             </span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setVisiblePostLimit((prev) => prev + 20)}
+                onClick={() => setVisiblePostLimit((prev) => Math.min(posts.length, prev + 15))}
                 className="px-4 py-2 rounded-xl neu-btn-indigo font-bold cursor-pointer"
               >
-                + ပို့စ်အဟောင်းများ ထပ်ပြမည် (+20)
+                + ပို့စ်အဟောင်းများ ထပ်ပြမည် (+15)
               </button>
               <button
                 type="button"
