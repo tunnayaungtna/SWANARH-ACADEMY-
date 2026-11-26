@@ -63,10 +63,18 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   const [openImmediately, setOpenImmediately] = useState(true);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [sessionToDelete, setSessionToDelete] = useState<AttendanceSession | null>(null);
-  const [visibleRosterLimit, setVisibleRosterLimit] = useState<number>(60);
+  const [visibleRosterLimit, setVisibleRosterLimit] = useState<number>(100);
+  const [instructorSubTab, setInstructorSubTab] = useState<'roll_call' | 'summary'>('roll_call');
+  const [showCreateSessionForm, setShowCreateSessionForm] = useState<boolean>(
+    sessions.length === 0
+  );
+  const [compactGridView, setCompactGridView] = useState<boolean>(true);
   const [editingStudentSessionIds, setEditingStudentSessionIds] = useState<Record<string, boolean>>({});
   const [rollCallFilter, setRollCallFilter] = useState<
     'all' | 'checked_in' | 'not_checked_in' | 'present' | 'late' | 'excused' | 'absent'
+  >('all');
+  const [percentageFilter, setPercentageFilter] = useState<
+    'all' | '100' | '80_plus' | '75_plus' | '50_to_79' | 'under_50'
   >('all');
   const [rollCallSearch, setRollCallSearch] = useState<string>('');
   const [blockedLeaveAlert, setBlockedLeaveAlert] = useState<string | null>(null);
@@ -186,6 +194,8 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
     ).length;
     setNewTitle('');
     setSelectedSessionId(created.id);
+    setShowCreateSessionForm(false);
+    setInstructorSubTab('roll_call');
     setBlockedLeaveAlert(null);
     showToast(
       openImmediately
@@ -378,6 +388,42 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       ).length
     : 0;
 
+  // Precompute overall attendance stats per student for Roll Call % badge and percentage filtering
+  const studentStatsMap = new Map<
+    string,
+    ReturnType<typeof ClassroomDB.getStudentAttendanceStats>
+  >();
+  enrolledStudents.forEach((stu) => {
+    studentStatsMap.set(stu.id, ClassroomDB.getStudentAttendanceStats(course.id, stu.id));
+  });
+
+  const matchesPercentageFilter = (pct: number) => {
+    if (percentageFilter === 'all') return true;
+    if (percentageFilter === '100') return pct === 100;
+    if (percentageFilter === '80_plus') return pct >= 80;
+    if (percentageFilter === '75_plus') return pct >= 75;
+    if (percentageFilter === '50_to_79') return pct >= 50 && pct < 80;
+    if (percentageFilter === 'under_50') return pct < 50;
+    return true;
+  };
+
+  const countPct100 = enrolledStudents.filter(
+    (s) => (studentStatsMap.get(s.id)?.percentage ?? 0) === 100
+  ).length;
+  const countPct80Plus = enrolledStudents.filter(
+    (s) => (studentStatsMap.get(s.id)?.percentage ?? 0) >= 80
+  ).length;
+  const countPct75Plus = enrolledStudents.filter(
+    (s) => (studentStatsMap.get(s.id)?.percentage ?? 0) >= 75
+  ).length;
+  const countPct50To79 = enrolledStudents.filter((s) => {
+    const p = studentStatsMap.get(s.id)?.percentage ?? 0;
+    return p >= 50 && p < 80;
+  }).length;
+  const countPctUnder50 = enrolledStudents.filter(
+    (s) => (studentStatsMap.get(s.id)?.percentage ?? 0) < 50
+  ).length;
+
   const filteredRollCallStudents = enrolledStudents.filter((stu) => {
     if (rollCallSearch.trim()) {
       const q = rollCallSearch.trim().toLowerCase();
@@ -386,6 +432,9 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       const matchPhone = stu.phone ? stu.phone.toLowerCase().includes(q) : false;
       if (!matchName && !matchUser && !matchPhone) return false;
     }
+    const stuPct = studentStatsMap.get(stu.id)?.percentage ?? 0;
+    if (!matchesPercentageFilter(stuPct)) return false;
+
     if (!activeSession || rollCallFilter === 'all') return true;
     const rec = ClassroomDB.getStudentAttendanceRecord(activeSession, stu);
     const isCheckedIn = Boolean(
@@ -398,6 +447,18 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
     if (rollCallFilter === 'excused') return rec?.status === 'excused';
     if (rollCallFilter === 'absent') return !rec || rec.status === 'absent';
     return true;
+  });
+
+  const filteredSummaryStudents = enrolledStudents.filter((stu) => {
+    if (rollCallSearch.trim()) {
+      const q = rollCallSearch.trim().toLowerCase();
+      const matchName = stu.name.toLowerCase().includes(q);
+      const matchUser = stu.username.toLowerCase().includes(q);
+      const matchPhone = stu.phone ? stu.phone.toLowerCase().includes(q) : false;
+      if (!matchName && !matchUser && !matchPhone) return false;
+    }
+    const stuPct = studentStatsMap.get(stu.id)?.percentage ?? 0;
+    return matchesPercentageFilter(stuPct);
   });
 
   const handleCopyAttendanceGroupList = (mode: 'checked_in' | 'not_checked_in') => {
@@ -808,7 +869,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                 ဤအတန်းအတွက် Attendance မှတ်တမ်း မရှိသေးပါ။
               </div>
             ) : (
-              <div className="divide-y divide-slate-100 dark:divide-slate-800">
+              <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-[380px] overflow-y-auto">
                 {sessions.map((sess) => {
                   const myRec = ClassroomDB.getStudentAttendanceRecord(sess, currentUser);
                   const isInstructorApprovedExcused =
@@ -816,7 +877,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                   return (
                     <div
                       key={sess.id}
-                      className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"
+                      className="px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"
                     >
                       <div>
                         <div className="flex items-center gap-2 flex-wrap">
@@ -832,22 +893,10 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                               🔒 ပိတ်ထားပြီ (Closed)
                             </span>
                           )}
+                          <span className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-slate-100">
+                            {sess.title}
+                          </span>
                         </div>
-                        <div className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
-                          {sess.title}
-                        </div>
-                        {myRec?.checkedInAt && (
-                          <div className="text-[11px] text-emerald-700 dark:text-emerald-400 font-mono font-semibold mt-0.5 flex items-center gap-1 flex-wrap">
-                            <Clock className="w-3 h-3 shrink-0" />
-                            <span>
-                              နှိပ်သည့်အချိန်: {myRec.checkedInAt} (
-                              {myRec.checkedInBy === 'student'
-                                ? 'ကျောင်းသားကိုယ်တိုင် နှိပ်ထားသည်'
-                                : myRec.note || 'ဆရာမှ ခြစ်ပေးထားသည်'}
-                              )
-                            </span>
-                          </div>
-                        )}
                       </div>
 
                       <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
@@ -904,7 +953,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       )}
 
       {/* ===================================================================== */}
-      {/* INSTRUCTOR VIEW (Admin & Co-Admin): Open Attendance & Roll Call       */}
+      {/* INSTRUCTOR VIEW (Admin & Co-Admin): Compact Sub-Tabbed Attendance     */}
       {/* ===================================================================== */}
       {isInstructor && (() => {
         const pendingLeavesForActive = activeSession
@@ -920,22 +969,22 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
         const pendingLeavesToReview = Array.from(allPendingLeavesMap.values());
 
         return (
-          <div className="space-y-6">
+          <div className="space-y-4">
             {/* Blocked Attendance Close / Re-Open Warning & Direct Leave Approval Card */}
             {(pendingLeavesToReview.length > 0 || blockedLeaveAlert) && (
-              <div className="neu-card rounded-3xl p-4 sm:p-5 space-y-4 ring-2 ring-amber-500/60 border border-amber-400/50 animate-fade-in">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-start gap-3">
-                    <div className="p-2.5 rounded-2xl bg-amber-600 text-white shrink-0 shadow-xs">
-                      <AlertCircle className="w-5 h-5 animate-pulse" />
+              <div className="neu-card rounded-3xl p-4 space-y-3 ring-2 ring-amber-500/60 border border-amber-400/50 animate-fade-in">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                  <div className="flex items-start gap-2.5">
+                    <div className="p-2 rounded-xl bg-amber-600 text-white shrink-0 shadow-xs">
+                      <AlertCircle className="w-4 h-4 animate-pulse" />
                     </div>
                     <div>
                       <h3 className="text-xs sm:text-sm font-extrabold text-amber-900 dark:text-amber-200">
                         ⚠️ ဤနေ့အတွက် ကျောင်းသား ခွင့်တိုင်ကြားစာ ({pendingLeavesToReview.length} စောင်) စစ်ဆေးရန် ကျန်ရှိနေပါသည်!
                       </h3>
-                      <p className="text-[11px] sm:text-xs text-slate-600 dark:text-slate-300 mt-0.5 leading-relaxed">
+                      <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5">
                         {blockedLeaveAlert ||
-                          'ကျောင်းသားတင်ပြထားသော ခွင့်တိုင်စာကို Approve (ခွင့်ပြု) သို့မဟုတ် Reject (ငြင်းပယ်) လုပ်ပြီးမှသာ Attendance ပိတ်ခွင့် နှင့် ပြန်ဖွင့်ခွင့် ရရှိပါမည်။ အောက်တွင် တိုက်ရိုက် Approve သို့မဟုတ် Reject နှိပ်နိုင်ပါသည်။'}
+                          'ခွင့်တိုင်စာကို Approve သို့မဟုတ် Reject လုပ်ပြီးမှသာ Attendance ပိတ်/ဖွင့် ပြုလုပ်နိုင်ပါမည်။'}
                       </p>
                     </div>
                   </div>
@@ -943,57 +992,54 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                     <button
                       type="button"
                       onClick={onOpenPrivateNotes}
-                      className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-800 hover:bg-amber-50 dark:hover:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700 text-xs font-bold shrink-0 cursor-pointer self-start sm:self-center"
+                      className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-amber-50 dark:hover:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700 text-xs font-bold shrink-0 cursor-pointer self-start sm:self-center"
                     >
-                      သီးသန့်စာ Tab သို့ သွားကြည့်မည် →
+                      သီးသန့်စာ Tab သို့ →
                     </button>
                   )}
                 </div>
 
                 {pendingLeavesToReview.length > 0 && (
-                  <div className="space-y-2.5">
+                  <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
                     {pendingLeavesToReview.map((leaveNote) => (
                       <div
                         key={leaveNote.id}
-                        className="p-3.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/35 border border-amber-300/70 dark:border-amber-800/70 space-y-2.5"
+                        className="p-3 rounded-2xl bg-amber-50/70 dark:bg-amber-950/35 border border-amber-300/70 dark:border-amber-800/70 space-y-2"
                       >
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                           <div>
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white">
+                              <span className="text-xs font-extrabold text-slate-900 dark:text-white">
                                 🎓 {leaveNote.studentName}
                               </span>
                               <span className="text-[11px] font-mono text-indigo-600 dark:text-indigo-400">
                                 @{leaveNote.studentUsername}
                               </span>
                               <span className="px-2 py-0.5 rounded-lg bg-amber-200/80 dark:bg-amber-900 text-amber-900 dark:text-amber-200 text-[10px] font-bold">
-                                📅 ခွင့်ရက်: {leaveNote.leaveDate || activeSession?.date}
+                                📅 {leaveNote.leaveDate || activeSession?.date}
                               </span>
                             </div>
-                            <div className="text-xs font-bold text-slate-800 dark:text-slate-200 mt-1">
-                              {leaveNote.subject}
-                            </div>
-                            <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5 whitespace-pre-wrap">
-                              "{leaveNote.content}"
+                            <p className="text-xs text-slate-700 dark:text-slate-200 mt-0.5">
+                              <strong>{leaveNote.subject}:</strong> "{leaveNote.content}"
                             </p>
                           </div>
 
-                          <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                             <button
                               type="button"
                               onClick={() => handleQuickResolveLeaveRequest(leaveNote, 'approved')}
-                              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-xs cursor-pointer"
+                              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center gap-1 shadow-xs cursor-pointer"
                             >
                               <CheckCircle2 className="w-3.5 h-3.5" />
-                              <span>✓ ခွင့်ပြုသည် (Approve → Auto Excused)</span>
+                              <span>✓ Approve (Auto Excused)</span>
                             </button>
                             <button
                               type="button"
                               onClick={() => handleQuickResolveLeaveRequest(leaveNote, 'rejected')}
-                              className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer"
+                              className="px-2.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-1 shadow-xs cursor-pointer"
                             >
                               <XCircle className="w-3.5 h-3.5" />
-                              <span>✕ ငြင်းပယ်သည် (Reject)</span>
+                              <span>✕ Reject</span>
                             </button>
                           </div>
                         </div>
@@ -1007,8 +1053,8 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                               [leaveNote.id]: e.target.value,
                             }))
                           }
-                          placeholder="ကျောင်းသားထံ ပြန်ကြားလိုသော မှတ်ချက် (မထည့်ဘဲ တိုက်ရိုက် Approve / Reject နှိပ်လျှင်လည်း ရပါသည်)..."
-                          className="w-full px-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-amber-300/80 dark:border-amber-800 text-xs text-slate-900 dark:text-slate-100"
+                          placeholder="မှတ်ချက် (မထည့်ဘဲ တိုက်ရိုက် Approve / Reject နှိပ်နိုင်ပါသည်)..."
+                          className="w-full px-3 py-1 rounded-xl bg-white dark:bg-slate-900 border border-amber-300/80 dark:border-amber-800 text-xs text-slate-900 dark:text-slate-100"
                         />
                       </div>
                     ))}
@@ -1017,786 +1063,879 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
               </div>
             )}
 
-            {/* Active Open Attendance Quick-Close Banner for Admin / Co-Admin */}
-            {openSessions.length > 0 && (
-              <div className="neu-card rounded-3xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ring-2 ring-emerald-400/60">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-extrabold text-xs sm:text-sm flex-wrap">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-                    <span>
-                      🟢 လက်ရှိတွင် Attendance ဖွင့်ထားဆဲဖြစ်ပါသည် ({openSessions[0]?.displayDate} — {openSessions[0]?.title})
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-600 dark:text-slate-300">
-                    ကျောင်းသားများ ယခုချိန်တွင် မိမိတို့အကောင့်မှ Attendance နှိပ်နိုင်ပါသည်။ ပိတ်လိုပါက ညာဘက်ရှိ <strong>"Attendance ပိတ်မည်"</strong> ခလုတ်ကို နှိပ်ပါ။
-                  </p>
-                </div>
+            {/* Compact Top Navigation Bar: Sub-Tabs + Open New Session Toggle + Quick Close */}
+            <div className="neu-card rounded-2xl p-3 flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+              {/* Sub-Tab Switcher */}
+              <div className="flex flex-wrap items-center gap-1.5">
                 <button
                   type="button"
-                  onClick={handleCloseAllOpenAttendance}
-                  className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs sm:text-sm font-extrabold shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0"
+                  onClick={() => setInstructorSubTab('roll_call')}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-extrabold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    instructorSubTab === 'roll_call'
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'bg-white/70 dark:bg-slate-900/70 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:border-indigo-400'
+                  }`}
                 >
-                  <Lock className="w-4 h-4" />
-                  <span>
-                    🔒 Attendance ပိတ်မည်{' '}
-                    {!closeCheckForCourse.allowed
-                      ? `(⚠️ ခွင့်စာ ${closeCheckForCourse.pendingLeaves.length} စောင် စစ်ဆေးရန်ကျန်)`
-                      : '(Close For All Students)'}
+                  <CalendarCheck className="w-3.5 h-3.5" />
+                  <span>📋 နေ့စဉ် Attendance ခြစ်ရန်</span>
+                  {activeSession && (
+                    <span
+                      className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono ${
+                        instructorSubTab === 'roll_call'
+                          ? 'bg-indigo-800/80 text-indigo-100'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                      }`}
+                    >
+                      {checkedInStudents.length}/{enrolledStudents.length}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setInstructorSubTab('summary')}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-extrabold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    instructorSubTab === 'summary'
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'bg-white/70 dark:bg-slate-900/70 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:border-indigo-400'
+                  }`}
+                >
+                  <Award className="w-3.5 h-3.5" />
+                  <span>📊 စုစုပေါင်း Roll Call % နှင့် Certificate စာရင်း</span>
+                  <span
+                    className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono ${
+                      instructorSubTab === 'summary'
+                        ? 'bg-indigo-800/80 text-indigo-100'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    {enrolledStudents.length} ဦး
                   </span>
                 </button>
               </div>
-            )}
 
-            {/* 1. Open New Daily Attendance Card */}
-            <div className="neu-card rounded-3xl p-5 sm:p-6">
-              <div className="flex items-center justify-between gap-2 mb-4">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-2.5 rounded-xl bg-indigo-600 text-white shadow-xs">
-                    <CalendarCheck className="w-5 h-5" />
+              {/* Right Quick Actions: Active Open Status + Toggle New Session Form */}
+              <div className="flex flex-wrap items-center gap-2">
+                {openSessions.length > 0 && (
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/70 border border-emerald-300 dark:border-emerald-700">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                    <span className="text-[11px] font-bold text-emerald-800 dark:text-emerald-200">
+                      ဖွင့်ထားဆဲ: {openSessions[0]?.displayDate}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCloseAllOpenAttendance}
+                      className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-extrabold transition-colors flex items-center gap-1 cursor-pointer"
+                    >
+                      <Lock className="w-3 h-3" />
+                      <span>ပိတ်မည်</span>
+                    </button>
                   </div>
-                  <div>
-                    <h2 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white">
-                      Open Daily Attendance (အတန်းချိန် တက်ရောက်မှု ဖွင့်လှစ်ရန်)
-                    </h2>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      "Open Attendance" ဖွင့်ပေးထားပါက သင်တန်းသားများကိုယ်တိုင် "Present (တက်ရောက်သည်)" နှိပ်နိုင်ပြီး ကြိုတင်ခွင့်တိုင်၍ Approve ပေးထားသော ကျောင်းသားများကို အလိုအလျောက် "Excused (ခွင့်)" သတ်မှတ်ပေးပါသည်။
-                    </p>
-                  </div>
-                </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setShowCreateSessionForm((prev) => !prev)}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-extrabold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    showCreateSessionForm
+                      ? 'bg-slate-800 text-white dark:bg-slate-700'
+                      : 'neu-btn-emerald'
+                  }`}
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>
+                    {showCreateSessionForm
+                      ? '✕ ပိတ်မည်'
+                      : '+ Attendance အသစ်ဖွင့်ရန်'}
+                  </span>
+                </button>
               </div>
-
-              <form
-                onSubmit={handleCreateSession}
-                className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end neu-inset-sm p-4 rounded-2xl"
-              >
-                <div className="md:col-span-5">
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                    Session / Lecture Title (သင်ခန်းစာ / အတန်းချိန် အမည်)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="ဥပမာ - Lecture 04: Daily Class Check-in..."
-                    value={newTitle}
-                    onChange={(e) => setNewTitle(e.target.value)}
-                    className="w-full px-3.5 py-2.5 text-xs sm:text-sm neu-input rounded-xl text-slate-900 dark:text-slate-100"
-                  />
-                </div>
-
-                <div className="md:col-span-3">
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                    Date (နေ့စွဲ)
-                  </label>
-                  <input
-                    type="date"
-                    value={newDate}
-                    onChange={(e) => setNewDate(e.target.value)}
-                    className="w-full px-3.5 py-2.5 text-xs sm:text-sm neu-input rounded-xl text-slate-900 dark:text-slate-100 font-mono"
-                    required
-                  />
-                </div>
-
-                <div className="md:col-span-4 flex items-center justify-between md:justify-end gap-2.5">
-                  <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={openImmediately}
-                      onChange={(e) => setOpenImmediately(e.target.checked)}
-                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                    />
-                    <span>Open Self Check-in</span>
-                  </label>
-
-                  <button
-                    type="submit"
-                    className="px-4 py-2.5 neu-btn-emerald text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Open Attendance</span>
-                  </button>
-                </div>
-              </form>
             </div>
 
-            {/* 2. Daily Roll Call & Self Check-in Control Panel */}
-            <div className="neu-card rounded-3xl overflow-hidden">
-              <div className="p-4 sm:p-5 border-b border-slate-200/50 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
-                    <Calendar className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                    <span>Daily Roll Call Sheet (အမည်စာရင်းဖြင့် Attendance ခြစ်ရန်)</span>
-                  </h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    နေ့စွဲအလိုက် အတန်းချိန်ကို ရွေးချယ်ပြီး ကျောင်းသားတစ်ဦးချင်းစီအတွက် Present / Late / Excused / Absent သတ်မှတ်နိုင်ပါသည်။
-                  </p>
-                  {approvedLeavesForActive.length > 0 && (
-                    <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-indigo-50 dark:bg-indigo-950/70 border border-indigo-200 dark:border-indigo-800 text-[11px] font-bold text-indigo-800 dark:text-indigo-300">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
-                      <span>
-                        ✅ ဤနေ့ ({activeSession?.displayDate}) အတွက် ခွင့်ပြုထားပြီးသော ကျောင်းသား ({approvedLeavesForActive.length} ဦး):{' '}
-                        {approvedLeavesForActive.map((a) => a.studentName).join('၊ ')} — အလိုအလျောက် Excused (ခွင့်) သတ်မှတ်ပေးထားပြီးဖြစ်ပါသည်။
+            {/* Collapsible Open New Daily Attendance Form */}
+            {showCreateSessionForm && (
+              <div className="neu-card rounded-2xl p-4 animate-fade-in">
+                <form
+                  onSubmit={handleCreateSession}
+                  className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end"
+                >
+                  <div className="md:col-span-5">
+                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Session / Lecture Title (သင်ခန်းစာ / အတန်းချိန် အမည်)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="ဥပမာ - Lecture 04: Daily Class Check-in..."
+                      value={newTitle}
+                      onChange={(e) => setNewTitle(e.target.value)}
+                      className="w-full px-3 py-2 text-xs neu-input rounded-xl text-slate-900 dark:text-slate-100"
+                    />
+                  </div>
+
+                  <div className="md:col-span-3">
+                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Date (နေ့စွဲ)
+                    </label>
+                    <input
+                      type="date"
+                      value={newDate}
+                      onChange={(e) => setNewDate(e.target.value)}
+                      className="w-full px-3 py-2 text-xs neu-input rounded-xl text-slate-900 dark:text-slate-100 font-mono"
+                      required
+                    />
+                  </div>
+
+                  <div className="md:col-span-4 flex items-center justify-between md:justify-end gap-2.5">
+                    <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={openImmediately}
+                        onChange={(e) => setOpenImmediately(e.target.checked)}
+                        className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                      />
+                      <span>Open Self Check-in</span>
+                    </label>
+
+                    <button
+                      type="submit"
+                      className="px-4 py-2 neu-btn-emerald text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>ဖွင့်လှစ်မည်</span>
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* ================================================================= */}
+            {/* SUB-TAB 1: Daily Roll Call & Self Check-in Control Panel          */}
+            {/* ================================================================= */}
+            {instructorSubTab === 'roll_call' && (
+              <div className="neu-card rounded-3xl overflow-hidden">
+                {/* Compact Session Selector & Action Bar */}
+                <div className="p-3.5 sm:p-4 border-b border-slate-200/50 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Calendar className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                    <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white">
+                      Daily Roll Call Sheet
+                    </h3>
+                    {approvedLeavesForActive.length > 0 && (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/70 border border-indigo-200 dark:border-indigo-800 text-[10px] font-bold text-indigo-800 dark:text-indigo-300">
+                        <CheckCircle2 className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                        <span>ခွင့်ပြုပြီး ({approvedLeavesForActive.length} ဦး Auto Excused)</span>
                       </span>
+                    )}
+                  </div>
+
+                  {sessions.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <select
+                        value={activeSession?.id || ''}
+                        onChange={(e) => {
+                          setSelectedSessionId(e.target.value);
+                          setBlockedLeaveAlert(null);
+                        }}
+                        className="px-3 py-1.5 text-xs font-semibold neu-input rounded-xl text-slate-900 dark:text-slate-100"
+                      >
+                        {sessions.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.displayDate} — {s.title} {s.isOpen ? '(🟢 OPEN)' : '(🔒 Closed)'}
+                          </option>
+                        ))}
+                      </select>
+
+                      {activeSession && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleOpen(activeSession)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all flex items-center gap-1 cursor-pointer ${
+                              activeSession.isOpen
+                                ? 'bg-rose-600 hover:bg-rose-700 border-rose-600 text-white shadow-xs'
+                                : 'bg-emerald-600 hover:bg-emerald-700 border-emerald-600 text-white shadow-xs'
+                            }`}
+                          >
+                            {activeSession.isOpen ? (
+                              <>
+                                <Lock className="w-3.5 h-3.5" />
+                                <span>🔒 Attendance ပိတ်မည်</span>
+                              </>
+                            ) : (
+                              <>
+                                <Unlock className="w-3.5 h-3.5" />
+                                <span>🔓 Attendance ပြန်ဖွင့်မည်</span>
+                              </>
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleMarkAllPresent(activeSession.id)}
+                            className="px-2.5 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer"
+                          >
+                            <CheckCheck className="w-3.5 h-3.5" />
+                            <span>Mark All Present</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setCompactGridView((prev) => !prev)}
+                            className="px-2.5 py-1.5 rounded-xl bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 text-[11px] font-bold cursor-pointer hidden xl:inline-flex items-center gap-1"
+                            title="2-Column Grid / 1-Column List ပြောင်းကြည့်ရန်"
+                          >
+                            <span>{compactGridView ? '☷ 2-Col Grid' : '☰ 1-Col List'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteSession(activeSession)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                            title="Delete this attendance session"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
 
-                {/* Session Selector Dropdown */}
-                {sessions.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <select
-                      value={activeSession?.id || ''}
-                      onChange={(e) => {
-                        setSelectedSessionId(e.target.value);
-                        setBlockedLeaveAlert(null);
-                      }}
-                      className="px-3.5 py-2 text-xs font-semibold neu-input rounded-xl text-slate-900 dark:text-slate-100"
-                    >
-                      {sessions.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.displayDate} — {s.title} {s.isOpen ? '(🟢 OPEN)' : '(🔒 Closed)'}
-                        </option>
-                      ))}
-                    </select>
+                {!activeSession ? (
+                  <div className="p-8 text-center text-xs text-slate-500">
+                    Attendance session မရှိသေးပါ။ အပေါ်ရှိ "+ Attendance အသစ်ဖွင့်ရန်" ဖြင့် စတင်ဖွင့်လှစ်ပါ။
+                  </div>
+                ) : enrolledStudents.length === 0 ? (
+                  <div className="p-8 text-center text-xs text-slate-500">
+                    ဤအတန်းတွင် ကျောင်းသား စာရင်းသွင်းထားခြင်း မရှိသေးပါ။
+                  </div>
+                ) : (
+                  <div>
+                    {/* Compact Filter & Search Header */}
+                    <div className="p-3 sm:px-4 bg-slate-50/70 dark:bg-slate-800/40 border-b border-slate-200/70 dark:border-slate-800 space-y-2.5">
+                      {/* Row 1: Status Filter Pills + Search + Quick Copy/Mark */}
+                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setRollCallFilter('all')}
+                            className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
+                              rollCallFilter === 'all'
+                                ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-2xs'
+                                : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                            }`}
+                          >
+                            အားလုံး ({enrolledStudents.length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRollCallFilter('checked_in')}
+                            className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                              rollCallFilter === 'checked_in'
+                                ? 'bg-emerald-600 text-white shadow-2xs'
+                                : 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                            }`}
+                          >
+                            <UserCheck className="w-3 h-3" />
+                            <span>နှိပ်ပြီးသူ ({checkedInStudents.length})</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRollCallFilter('not_checked_in')}
+                            className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                              rollCallFilter === 'not_checked_in'
+                                ? 'bg-rose-600 text-white shadow-2xs'
+                                : 'bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                            }`}
+                          >
+                            <UserX className="w-3 h-3" />
+                            <span>မနှိပ်ရသေးသူ ({notCheckedInStudents.length})</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRollCallFilter('present')}
+                            className={`px-2 py-1 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
+                              rollCallFilter === 'present'
+                                ? 'bg-emerald-700 text-white'
+                                : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                            }`}
+                          >
+                            Present ({presentStudentsCount})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRollCallFilter('late')}
+                            className={`px-2 py-1 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
+                              rollCallFilter === 'late'
+                                ? 'bg-amber-500 text-white'
+                                : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                            }`}
+                          >
+                            Late ({lateStudentsCount})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRollCallFilter('excused')}
+                            className={`px-2 py-1 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
+                              rollCallFilter === 'excused'
+                                ? 'bg-indigo-600 text-white'
+                                : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                            }`}
+                          >
+                            Excused ({excusedStudentsCount})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRollCallFilter('absent')}
+                            className={`px-2 py-1 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
+                              rollCallFilter === 'absent'
+                                ? 'bg-rose-700 text-white'
+                                : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                            }`}
+                          >
+                            Absent ({absentMarkedStudentsCount})
+                          </button>
+                        </div>
 
-                    {activeSession && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => handleToggleOpen(activeSession)}
-                          className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer ${
-                            activeSession.isOpen
-                              ? 'bg-rose-600 hover:bg-rose-700 border-rose-600 text-white shadow-xs'
-                              : 'bg-emerald-600 hover:bg-emerald-700 border-emerald-600 text-white shadow-xs'
-                          }`}
-                          title="Toggle student self check-in"
-                        >
-                          {activeSession.isOpen ? (
-                            <>
-                              <Lock className="w-3.5 h-3.5" />
-                              <span>
-                                🔒 Attendance ပိတ်မည်{' '}
-                                {pendingLeavesForActive.length > 0
-                                  ? `(⚠️ ခွင့်စာ ${pendingLeavesForActive.length} စောင် ကျန်)`
-                                  : '(Close Attendance)'}
-                              </span>
-                            </>
-                          ) : (
-                            <>
-                              <Unlock className="w-3.5 h-3.5" />
-                              <span>
-                                🔓 Attendance ပြန်ဖွင့်မည်{' '}
-                                {pendingLeavesForActive.length > 0
-                                  ? `(⚠️ ခွင့်စာ ${pendingLeavesForActive.length} စောင် ကျန်)`
-                                  : '(Open Attendance)'}
-                              </span>
-                            </>
+                        {/* Search & Copy Action Buttons */}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <div className="relative flex-1 sm:w-48">
+                            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            <input
+                              type="text"
+                              value={rollCallSearch}
+                              onChange={(e) => setRollCallSearch(e.target.value)}
+                              placeholder="အမည် / @username ရှာရန်..."
+                              className="w-full pl-8 pr-2.5 py-1 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
+                            />
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleCopyAttendanceGroupList('not_checked_in')}
+                            disabled={notCheckedInStudents.length === 0}
+                            className="px-2.5 py-1 rounded-xl bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 text-[11px] font-bold transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                            title="Attendance မနှိပ်ရသေးသူများ စာရင်းကို Copy ကူးယူရန်"
+                          >
+                            <Copy className="w-3 h-3" />
+                            <span>မနှိပ်ရသေး ({notCheckedInStudents.length})</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleCopyAttendanceGroupList('checked_in')}
+                            disabled={checkedInStudents.length === 0}
+                            className="px-2.5 py-1 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[11px] font-bold transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                            title="Attendance နှိပ်ပြီးသူများ စာရင်းကို Copy ကူးယူရန်"
+                          >
+                            <Copy className="w-3 h-3" />
+                            <span>နှိပ်ပြီး ({checkedInStudents.length})</span>
+                          </button>
+
+                          {notCheckedInStudents.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => handleMarkRemainingAsAbsent(activeSession.id)}
+                              className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold transition-colors flex items-center gap-1 cursor-pointer"
+                            >
+                              <XCircle className="w-3 h-3" />
+                              <span>ကျန်သူ Absent ခြစ်မည်</span>
+                            </button>
                           )}
-                        </button>
+                        </div>
+                      </div>
 
+                      {/* Row 2: Roll Call Percentage (%) Filter Row */}
+                      <div className="pt-2 border-t border-slate-200/70 dark:border-slate-700/60 flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-[11px] font-extrabold text-slate-600 dark:text-slate-300 mr-1">
+                            📊 Roll Call % Filter:
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setPercentageFilter('all')}
+                            className={`px-2.5 py-0.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                              percentageFilter === 'all'
+                                ? 'bg-indigo-600 text-white shadow-2xs'
+                                : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-indigo-400'
+                            }`}
+                          >
+                            အားလုံး ({enrolledStudents.length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPercentageFilter('100')}
+                            className={`px-2.5 py-0.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                              percentageFilter === '100'
+                                ? 'bg-emerald-600 text-white shadow-2xs'
+                                : 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-50'
+                            }`}
+                          >
+                            💯 100% ({countPct100})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPercentageFilter('80_plus')}
+                            className={`px-2.5 py-0.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                              percentageFilter === '80_plus'
+                                ? 'bg-teal-600 text-white shadow-2xs'
+                                : 'bg-white dark:bg-slate-900 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800 hover:bg-teal-50'
+                            }`}
+                          >
+                            🟢 80% နှင့်အထက် ({countPct80Plus})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPercentageFilter('75_plus')}
+                            className={`px-2.5 py-0.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                              percentageFilter === '75_plus'
+                                ? 'bg-indigo-600 text-white shadow-2xs'
+                                : 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50'
+                            }`}
+                          >
+                            🎓 75% နှင့်အထက် ({countPct75Plus})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPercentageFilter('50_to_79')}
+                            className={`px-2.5 py-0.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                              percentageFilter === '50_to_79'
+                                ? 'bg-amber-500 text-white shadow-2xs'
+                                : 'bg-white dark:bg-slate-900 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-50'
+                            }`}
+                          >
+                            🟡 50% – 79% ({countPct50To79})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPercentageFilter('under_50')}
+                            className={`px-2.5 py-0.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                              percentageFilter === 'under_50'
+                                ? 'bg-rose-600 text-white shadow-2xs'
+                                : 'bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 hover:bg-rose-50'
+                            }`}
+                          >
+                            🔴 50% အောက် ({countPctUnder50})
+                          </button>
+                        </div>
+
+                        <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                          ပြသထားသည်: <strong>{filteredRollCallStudents.length}</strong> ဦး
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Self-Contained Scrollable Student Roll Call List / 2-Col Grid */}
+                    {filteredRollCallStudents.length === 0 ? (
+                      <div className="p-8 text-center text-xs text-slate-500 dark:text-slate-400">
+                        ရွေးချယ်ထားသော စစ်ထုတ်မှုအောက်တွင် ကျောင်းသားမရှိပါ။
+                      </div>
+                    ) : (
+                      <div
+                        className={`max-h-[480px] overflow-y-auto ${
+                          compactGridView
+                            ? 'grid grid-cols-1 xl:grid-cols-2 gap-2 p-3'
+                            : 'divide-y divide-slate-100 dark:divide-slate-800'
+                        }`}
+                      >
+                        {filteredRollCallStudents.slice(0, visibleRosterLimit).map((stu, idx) => {
+                          const rec = ClassroomDB.getStudentAttendanceRecord(activeSession, stu);
+                          const currentStatus: AttendanceStatus = rec?.status || 'absent';
+                          const isCheckedIn = Boolean(
+                            rec &&
+                              (rec.status === 'present' ||
+                                rec.status === 'late' ||
+                                rec.status === 'excused')
+                          );
+                          const stuPct = studentStatsMap.get(stu.id)?.percentage ?? 0;
+
+                          return (
+                            <div
+                              key={stu.id}
+                              className={`px-3.5 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 transition-colors ${
+                                compactGridView
+                                  ? 'rounded-xl border border-slate-200/80 dark:border-slate-800 bg-white/60 dark:bg-slate-900/50'
+                                  : ''
+                              } ${
+                                isCheckedIn
+                                  ? 'hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20'
+                                  : 'hover:bg-rose-50/30 dark:hover:bg-rose-950/20'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 flex-wrap min-w-0">
+                                <span className="text-[11px] font-mono font-bold text-slate-400 w-6 shrink-0">
+                                  #{idx + 1}
+                                </span>
+                                <span className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                                  {stu.name}
+                                </span>
+                                <span className="text-[11px] font-mono text-slate-400 truncate">
+                                  @{stu.username}
+                                </span>
+                                <span
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-extrabold border shrink-0 ${
+                                    stuPct === 100
+                                      ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700'
+                                      : stuPct >= 80
+                                      ? 'bg-teal-50 dark:bg-teal-950/80 text-teal-700 dark:text-teal-300 border-teal-200 dark:border-teal-800'
+                                      : stuPct >= 50
+                                      ? 'bg-amber-50 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800'
+                                      : 'bg-rose-50 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800'
+                                  }`}
+                                >
+                                  {stuPct}%
+                                </span>
+                              </div>
+
+                              {/* Compact 4-State Roll Call Buttons */}
+                              <div className="flex flex-wrap items-center gap-1 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleInstructorMark(activeSession.id, stu, 'present')
+                                  }
+                                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                                    currentStatus === 'present' && rec
+                                      ? 'bg-emerald-600 text-white shadow-2xs'
+                                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 hover:text-emerald-700'
+                                  }`}
+                                >
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  <span>Present</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleInstructorMark(activeSession.id, stu, 'late')
+                                  }
+                                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                                    currentStatus === 'late'
+                                      ? 'bg-amber-500 text-white shadow-2xs'
+                                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-amber-50 dark:hover:bg-amber-950/50 hover:text-amber-700'
+                                  }`}
+                                >
+                                  <Clock className="w-3 h-3" />
+                                  <span>Late</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleInstructorMark(activeSession.id, stu, 'excused')
+                                  }
+                                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                                    currentStatus === 'excused'
+                                      ? 'bg-indigo-600 text-white shadow-2xs'
+                                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 hover:text-indigo-700'
+                                  }`}
+                                >
+                                  <AlertCircle className="w-3 h-3" />
+                                  <span>Excused</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleInstructorMark(activeSession.id, stu, 'absent')
+                                  }
+                                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                                    !rec || currentStatus === 'absent'
+                                      ? 'bg-rose-600 text-white shadow-2xs'
+                                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-rose-50 dark:hover:bg-rose-950/50 hover:text-rose-700'
+                                  }`}
+                                >
+                                  <XCircle className="w-3 h-3" />
+                                  <span>Absent</span>
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {filteredRollCallStudents.length > visibleRosterLimit && (
+                      <div className="p-3 border-t border-slate-200/60 dark:border-slate-800 flex items-center justify-between gap-2 text-xs">
+                        <span className="text-slate-600 dark:text-slate-300">
+                          ပြသထားသည်: <strong>{visibleRosterLimit}</strong> / <strong>{filteredRollCallStudents.length}</strong> ဦး
+                        </span>
                         <button
                           type="button"
-                          onClick={() => handleMarkAllPresent(activeSession.id)}
-                          className="px-3 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
+                          onClick={() => setVisibleRosterLimit(enrolledStudents.length)}
+                          className="px-3 py-1 rounded-xl neu-btn-indigo text-xs font-bold cursor-pointer"
                         >
-                          <CheckCheck className="w-3.5 h-3.5" />
-                          <span>Mark All Present</span>
+                          အားလုံးပြမည် ({filteredRollCallStudents.length})
                         </button>
-
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteSession(activeSession)}
-                          className="p-2 text-slate-400 hover:text-rose-600 rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
-                          title="Delete this attendance session"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </>
+                      </div>
                     )}
                   </div>
                 )}
               </div>
+            )}
 
-            {/* Active Session Roll Call Roster */}
-            {!activeSession ? (
-              <div className="p-8 text-center text-xs text-slate-500">
-                Attendance session မရှိသေးပါ။ အပေါ်ရှိ "Open Attendance" ဖြင့် စတင်ဖွင့်လှစ်ပါ။
-              </div>
-            ) : enrolledStudents.length === 0 ? (
-              <div className="p-8 text-center text-xs text-slate-500">
-                ဤအတန်းတွင် ကျောင်းသား စာရင်းသွင်းထားခြင်း မရှိသေးပါ။
-              </div>
-            ) : (
-              <div>
-                {/* Checked-In vs Not Checked-In Summary & Filter Control Bar for Admin & Co-Admin */}
-                <div className="p-4 sm:p-5 bg-slate-50/70 dark:bg-slate-800/40 border-b border-slate-200/70 dark:border-slate-800 space-y-3.5">
-                  {/* Top Summary Stat Cards (Clickable to Filter Immediately) */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setRollCallFilter('all')}
-                      className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex items-center justify-between gap-3 ${
-                        rollCallFilter === 'all'
-                          ? 'bg-indigo-50 dark:bg-indigo-950/70 border-indigo-400 dark:border-indigo-600 ring-2 ring-indigo-400/20'
-                          : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-indigo-300'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <div className="p-2 rounded-xl bg-indigo-600 text-white">
-                          <Users className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
-                            စုစုပေါင်း ကျောင်းသား (All Students)
-                          </div>
-                          <div className="text-base sm:text-lg font-extrabold font-mono text-slate-900 dark:text-white">
-                            {enrolledStudents.length} ဦး
-                          </div>
-                        </div>
+            {/* ================================================================= */}
+            {/* SUB-TAB 2: Overall Student Attendance Percentage & Certificate    */}
+            {/* ================================================================= */}
+            {instructorSubTab === 'summary' && (
+              <div className="neu-card rounded-3xl overflow-hidden">
+                <div className="p-3.5 sm:p-4 border-b border-slate-200/50 dark:border-slate-800 space-y-2.5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                        <Users className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                        <span>
+                          Attendance Percentage & Certificate Eligibility (စုစုပေါင်း Roll Call % နှင့် Certificate စာရင်း)
+                        </span>
+                      </h3>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 self-start sm:self-center shrink-0">
+                      <div className="relative w-48">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={rollCallSearch}
+                          onChange={(e) => setRollCallSearch(e.target.value)}
+                          placeholder="အမည် / @username ရှာရန်..."
+                          className="w-full pl-8 pr-2.5 py-1 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
+                        />
                       </div>
-                      <span className="text-[10px] font-bold px-2 py-1 rounded-lg bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300">
-                        အားလုံးပြမည်
+                      <span className="text-xs font-mono font-semibold text-indigo-600 dark:text-indigo-400">
+                        Sessions: {sessions.length}
                       </span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setRollCallFilter('checked_in')}
-                      className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex items-center justify-between gap-3 ${
-                        rollCallFilter === 'checked_in'
-                          ? 'bg-emerald-50 dark:bg-emerald-950/70 border-emerald-500 dark:border-emerald-500 ring-2 ring-emerald-500/20'
-                          : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-emerald-400'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <div className="p-2 rounded-xl bg-emerald-600 text-white">
-                          <UserCheck className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <div className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300">
-                            ✅ Attendance နှိပ်ပြီးသူ (Checked-In)
-                          </div>
-                          <div className="text-base sm:text-lg font-extrabold font-mono text-emerald-800 dark:text-emerald-200">
-                            {checkedInStudents.length} ဦး{' '}
-                            <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
-                              (
-                              {enrolledStudents.length > 0
-                                ? Math.round(
-                                    (checkedInStudents.length / enrolledStudents.length) * 100
-                                  )
-                                : 0}
-                              %)
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                      <span className="text-[10px] font-bold px-2 py-1 rounded-lg bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200">
-                        နှိပ်ပြီးသူသာ ကြည့်မည်
-                      </span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setRollCallFilter('not_checked_in')}
-                      className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer flex items-center justify-between gap-3 ${
-                        rollCallFilter === 'not_checked_in'
-                          ? 'bg-rose-50 dark:bg-rose-950/70 border-rose-500 dark:border-rose-500 ring-2 ring-rose-500/20'
-                          : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-rose-400'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <div className="p-2 rounded-xl bg-rose-600 text-white">
-                          <UserX className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <div className="text-[11px] font-bold text-rose-700 dark:text-rose-300">
-                            ⏳ Attendance မနှိပ်ရသေးသူ (Not Checked-In)
-                          </div>
-                          <div className="text-base sm:text-lg font-extrabold font-mono text-rose-800 dark:text-rose-200">
-                            {notCheckedInStudents.length} ဦး{' '}
-                            <span className="text-xs font-semibold text-rose-600 dark:text-rose-400">
-                              (
-                              {enrolledStudents.length > 0
-                                ? Math.round(
-                                    (notCheckedInStudents.length / enrolledStudents.length) * 100
-                                  )
-                                : 0}
-                              %)
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                      <span className="text-[10px] font-bold px-2 py-1 rounded-lg bg-rose-100 dark:bg-rose-900/60 text-rose-800 dark:text-rose-200">
-                        မနှိပ်ရသေးသူသာ ကြည့်မည်
-                      </span>
-                    </button>
-                  </div>
-
-                  {/* Filter Tabs + Search + Quick Copy & Bulk Mark Actions */}
-                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
-                    <div className="flex flex-wrap items-center gap-1.5">
                       <button
                         type="button"
-                        onClick={() => setRollCallFilter('all')}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                          rollCallFilter === 'all'
-                            ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-2xs'
-                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                        onClick={() => {
+                          const res = ClassroomDB.downloadClassAttendanceCSV(course.id);
+                          if (res.success) {
+                            showToast(`📥 Attendance Report CSV (${res.filename}) ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ!`);
+                          }
+                        }}
+                        className="px-3 py-1.5 rounded-xl neu-btn-emerald text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Export CSV</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Roll Call Percentage Filter Pills in Summary Section */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[11px] font-extrabold text-slate-600 dark:text-slate-300 mr-1">
+                        📊 Roll Call % Filter:
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setPercentageFilter('all')}
+                        className={`px-2.5 py-0.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                          percentageFilter === 'all'
+                            ? 'bg-indigo-600 text-white shadow-2xs'
+                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-indigo-400'
                         }`}
                       >
                         အားလုံး ({enrolledStudents.length})
                       </button>
                       <button
                         type="button"
-                        onClick={() => setRollCallFilter('checked_in')}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                          rollCallFilter === 'checked_in'
+                        onClick={() => setPercentageFilter('100')}
+                        className={`px-2.5 py-0.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                          percentageFilter === '100'
                             ? 'bg-emerald-600 text-white shadow-2xs'
-                            : 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                            : 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 hover:bg-emerald-50'
                         }`}
                       >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>နှိပ်ပြီးသူများ ({checkedInStudents.length})</span>
+                        💯 100% ({countPct100})
                       </button>
                       <button
                         type="button"
-                        onClick={() => setRollCallFilter('not_checked_in')}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                          rollCallFilter === 'not_checked_in'
+                        onClick={() => setPercentageFilter('80_plus')}
+                        className={`px-2.5 py-0.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                          percentageFilter === '80_plus'
+                            ? 'bg-teal-600 text-white shadow-2xs'
+                            : 'bg-white dark:bg-slate-900 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800 hover:bg-teal-50'
+                        }`}
+                      >
+                        🟢 80% နှင့်အထက် ({countPct80Plus})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPercentageFilter('75_plus')}
+                        className={`px-2.5 py-0.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                          percentageFilter === '75_plus'
+                            ? 'bg-indigo-600 text-white shadow-2xs'
+                            : 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50'
+                        }`}
+                      >
+                        🎓 75% နှင့်အထက် ({countPct75Plus})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPercentageFilter('50_to_79')}
+                        className={`px-2.5 py-0.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                          percentageFilter === '50_to_79'
+                            ? 'bg-amber-500 text-white shadow-2xs'
+                            : 'bg-white dark:bg-slate-900 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-50'
+                        }`}
+                      >
+                        🟡 50% – 79% ({countPct50To79})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPercentageFilter('under_50')}
+                        className={`px-2.5 py-0.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                          percentageFilter === 'under_50'
                             ? 'bg-rose-600 text-white shadow-2xs'
-                            : 'bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                            : 'bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 hover:bg-rose-50'
                         }`}
                       >
-                        <Clock className="w-3.5 h-3.5" />
-                        <span>မနှိပ်ရသေးသူများ ({notCheckedInStudents.length})</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setRollCallFilter('present')}
-                        className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
-                          rollCallFilter === 'present'
-                            ? 'bg-emerald-700 text-white'
-                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
-                        }`}
-                      >
-                        Present ({presentStudentsCount})
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setRollCallFilter('late')}
-                        className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
-                          rollCallFilter === 'late'
-                            ? 'bg-amber-500 text-white'
-                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
-                        }`}
-                      >
-                        Late ({lateStudentsCount})
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setRollCallFilter('excused')}
-                        className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
-                          rollCallFilter === 'excused'
-                            ? 'bg-indigo-600 text-white'
-                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
-                        }`}
-                      >
-                        Excused ({excusedStudentsCount})
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setRollCallFilter('absent')}
-                        className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
-                          rollCallFilter === 'absent'
-                            ? 'bg-rose-700 text-white'
-                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
-                        }`}
-                      >
-                        Absent ({absentMarkedStudentsCount})
+                        🔴 50% အောက် ({countPctUnder50})
                       </button>
                     </div>
-
-                    {/* Search & Copy Action Buttons */}
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="relative flex-1 sm:w-56">
-                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                        <input
-                          type="text"
-                          value={rollCallSearch}
-                          onChange={(e) => setRollCallSearch(e.target.value)}
-                          placeholder="အမည် / @username ရှာရန်..."
-                          className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
-                        />
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleCopyAttendanceGroupList('not_checked_in')}
-                        disabled={notCheckedInStudents.length === 0}
-                        className="px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 text-[11px] font-bold transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                        title="Attendance မနှိပ်ရသေးသူများ စာရင်းကို Copy ကူးယူရန်"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>မနှိပ်ရသေးသူ ({notCheckedInStudents.length}) Copy</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleCopyAttendanceGroupList('checked_in')}
-                        disabled={checkedInStudents.length === 0}
-                        className="px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[11px] font-bold transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                        title="Attendance နှိပ်ပြီးသူများ စာရင်းကို Copy ကူးယူရန်"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>နှိပ်ပြီးသူ ({checkedInStudents.length}) Copy</span>
-                      </button>
-
-                      {notCheckedInStudents.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => handleMarkRemainingAsAbsent(activeSession.id)}
-                          className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 text-white text-[11px] font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
-                          title="Attendance မနှိပ်ရသေးသူအားလုံးကို Absent သတ်မှတ်ရန်"
-                        >
-                          <XCircle className="w-3.5 h-3.5" />
-                          <span>ကျန်သူအားလုံး Absent ခြစ်မည်</span>
-                        </button>
-                      )}
-                    </div>
+                    <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                      ပြသထားသည်: <strong>{filteredSummaryStudents.length}</strong> ဦး
+                    </span>
                   </div>
                 </div>
 
-                {filteredRollCallStudents.length === 0 ? (
-                  <div className="p-8 text-center text-xs text-slate-500 dark:text-slate-400">
-                    ရွေးချယ်ထားသော စစ်ထုတ်မှုအောက်တွင် ကျောင်းသားမရှိပါ။
-                  </div>
-                ) : (
-                  <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {filteredRollCallStudents.slice(0, visibleRosterLimit).map((stu, idx) => {
-                      const rec = ClassroomDB.getStudentAttendanceRecord(activeSession, stu);
-                      const currentStatus: AttendanceStatus = rec?.status || 'absent';
-                      const isCheckedIn = Boolean(
-                        rec &&
-                          (rec.status === 'present' ||
-                            rec.status === 'late' ||
-                            rec.status === 'excused')
-                      );
+                <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead className="sticky top-0 z-10 bg-slate-100 dark:bg-slate-800">
+                      <tr className="border-b border-slate-200 dark:border-slate-700 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase">
+                        <th className="py-2.5 px-4">Student</th>
+                        <th className="py-2.5 px-3 text-center">Present</th>
+                        <th className="py-2.5 px-3 text-center">Late</th>
+                        <th className="py-2.5 px-3 text-center">Excused</th>
+                        <th className="py-2.5 px-3 text-center">Absent</th>
+                        <th className="py-2.5 px-4">Attendance %</th>
+                        <th className="py-2.5 px-4 text-right">Certificate Evaluation</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
+                      {filteredSummaryStudents.slice(0, visibleRosterLimit).map((stu, idx) => {
+                        const st =
+                          studentStatsMap.get(stu.id) ||
+                          ClassroomDB.getStudentAttendanceStats(course.id, stu.id);
+                        const stuProg = ClassroomDB.getStudentProgress(stu.id, course.id);
+                        const isEligible = st.percentage >= 75;
 
-                      return (
-                        <div
-                          key={stu.id}
-                          className={`p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors ${
-                            isCheckedIn
-                              ? 'hover:bg-emerald-50/40 dark:hover:bg-emerald-950/20'
-                              : 'hover:bg-rose-50/30 dark:hover:bg-rose-950/20'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3">
-                            <div>
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-[11px] font-mono font-bold text-slate-400">
+                        return (
+                          <tr
+                            key={stu.id}
+                            className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30 transition-colors"
+                          >
+                            <td className="py-2.5 px-4">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[11px] font-mono text-slate-400 w-6">
                                   #{idx + 1}
                                 </span>
-                                <span className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
-                                  {stu.name}
-                                </span>
-                                <span className="text-[11px] font-mono text-slate-400">
-                                  @{stu.username}
-                                </span>
-                                {isCheckedIn ? (
-                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-[10px] font-extrabold">
-                                    <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                                    <span>✅ Attendance နှိပ်ပြီး</span>
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-100 dark:bg-rose-950/90 text-rose-800 dark:text-rose-300 border border-rose-300 dark:border-rose-700 text-[10px] font-extrabold">
-                                    <Clock className="w-3 h-3 text-rose-600 dark:text-rose-400 shrink-0" />
-                                    <span>⏳ Attendance မနှိပ်ရသေး</span>
-                                  </span>
-                                )}
-                                {stu.rulesAccepted && (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-[10px] font-semibold">
-                                    <span>သိရှိ လိုက်နာပါမည်</span>
-                                  </span>
-                                )}
+                                <div>
+                                  <div className="font-bold text-slate-900 dark:text-white">
+                                    {stu.name}
+                                  </div>
+                                  <div className="text-[11px] text-slate-400 font-mono">
+                                    @{stu.username}
+                                  </div>
+                                </div>
                               </div>
-                              <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 mt-1 flex-wrap">
-                                {rec?.checkedInAt ? (
-                                  <span
-                                    className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg font-mono font-semibold border ${
-                                      isCheckedIn
-                                        ? 'bg-emerald-50/80 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
-                                        : 'bg-rose-50/80 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800'
+                            </td>
+                            <td className="py-2.5 px-3 text-center font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                              {st.presentCount}
+                            </td>
+                            <td className="py-2.5 px-3 text-center font-mono font-bold text-amber-600 dark:text-amber-400">
+                              {st.lateCount}
+                            </td>
+                            <td className="py-2.5 px-3 text-center font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                              {st.excusedCount}
+                            </td>
+                            <td className="py-2.5 px-3 text-center font-mono font-bold text-rose-600 dark:text-rose-400">
+                              {st.absentCount}
+                            </td>
+                            <td className="py-2.5 px-4 min-w-[150px]">
+                              <div className="flex items-center gap-2">
+                                <div className="flex-1 h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                  <div
+                                    className={`h-full rounded-full ${
+                                      st.percentage >= 75
+                                        ? 'bg-emerald-500'
+                                        : st.percentage >= 50
+                                        ? 'bg-amber-500'
+                                        : 'bg-rose-500'
                                     }`}
+                                    style={{ width: `${st.percentage}%` }}
+                                  />
+                                </div>
+                                <span className="font-mono font-bold text-slate-900 dark:text-white w-10 text-right">
+                                  {st.percentage}%
+                                </span>
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-4 text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <span
+                                  className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                                    isEligible
+                                      ? 'bg-emerald-50 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                                      : 'bg-amber-50 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
+                                  }`}
+                                >
+                                  {isEligible ? '✓ Eligible (≥75%)' : '<75%'}
+                                </span>
+
+                                {stuProg.certificate ? (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      onOpenCertificate && onOpenCertificate(stuProg.certificate!)
+                                    }
+                                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1"
                                   >
-                                    <Clock className="w-3 h-3 shrink-0" />
-                                    <span>
-                                      နှိပ်သည့်အချိန်: <strong>{rec.checkedInAt}</strong> (
-                                      {rec.checkedInBy === 'student'
-                                        ? 'ကျောင်းသားကိုယ်တိုင် နှိပ်ထားသည်'
-                                        : 'Admin / Co-Admin မှ ခြစ်ပေးထားသည်'}
-                                      )
-                                    </span>
-                                  </span>
+                                    <Award className="w-3 h-3" />
+                                    <span>View Cert</span>
+                                  </button>
                                 ) : (
-                                  <span className="text-amber-600 dark:text-amber-400 font-medium">
-                                    ⚠️ ဤကျောင်းသားသည် Attendance မနှိပ်ရသေးပါ (Not checked in yet)
-                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const cert = ClassroomDB.issueCertificate(stu, course);
+                                      showToast(`${stu.name} အတွက် Certificate ထုတ်ပေးပြီးပါပြီ!`);
+                                      onRefresh();
+                                      if (onOpenCertificate) {
+                                        onOpenCertificate(cert);
+                                      }
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                                  >
+                                    <Award className="w-3 h-3" />
+                                    <span>Issue Cert</span>
+                                  </button>
                                 )}
                               </div>
-                            </div>
-                          </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
 
-                          {/* 4-State Roll Call Buttons */}
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleInstructorMark(activeSession.id, stu, 'present')
-                              }
-                              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 ${
-                                currentStatus === 'present' && rec
-                                  ? 'bg-emerald-600 text-white shadow-2xs'
-                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 hover:text-emerald-700'
-                              }`}
-                            >
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              <span>Present</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleInstructorMark(activeSession.id, stu, 'late')
-                              }
-                              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 ${
-                                currentStatus === 'late'
-                                  ? 'bg-amber-500 text-white shadow-2xs'
-                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-amber-50 dark:hover:bg-amber-950/50 hover:text-amber-700'
-                              }`}
-                            >
-                              <Clock className="w-3.5 h-3.5" />
-                              <span>Late</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleInstructorMark(activeSession.id, stu, 'excused')
-                              }
-                              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 ${
-                                currentStatus === 'excused'
-                                  ? 'bg-indigo-600 text-white shadow-2xs'
-                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 hover:text-indigo-700'
-                              }`}
-                            >
-                              <AlertCircle className="w-3.5 h-3.5" />
-                              <span>Excused</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleInstructorMark(activeSession.id, stu, 'absent')
-                              }
-                              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 ${
-                                !rec || currentStatus === 'absent'
-                                  ? 'bg-rose-600 text-white shadow-2xs'
-                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-rose-50 dark:hover:bg-rose-950/50 hover:text-rose-700'
-                              }`}
-                            >
-                              <XCircle className="w-3.5 h-3.5" />
-                              <span>Absent</span>
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
+                {filteredSummaryStudents.length > visibleRosterLimit && (
+                  <div className="p-3 border-t border-slate-200/60 dark:border-slate-800 flex items-center justify-between gap-2 text-xs">
+                    <span className="text-slate-600 dark:text-slate-300">
+                      ပြသထားသည်: <strong>{visibleRosterLimit}</strong> / <strong>{filteredSummaryStudents.length}</strong> ဦး
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setVisibleRosterLimit(enrolledStudents.length)}
+                      className="px-3 py-1 rounded-xl neu-btn-indigo text-xs font-bold cursor-pointer"
+                    >
+                      အားလုံးပြမည် ({filteredSummaryStudents.length})
+                    </button>
                   </div>
                 )}
               </div>
             )}
           </div>
-
-          {/* 3. Overall Student Attendance Percentage (%) & Certificate Assessment Matrix */}
-          <div className="neu-card rounded-3xl overflow-hidden">
-            <div className="p-4 sm:p-5 border-b border-slate-200/50 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div>
-                <h3 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
-                  <Users className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                  <span>
-                    Attendance Percentage & Certificate Eligibility (ကျောင်းသားတစ်ဦးချင်း တက်ရောက်မှု ရာခိုင်နှုန်းနှင့် Certificate သုံးသပ်ချက်)
-                  </span>
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  သင်တန်းသားတစ်ဦးချင်းစီ၏ စုစုပေါင်း တက်ရောက်မှု ရာခိုင်နှုန်း (%) ကို တွက်ချက်ပေးထားပြီး Certificate ပေးအပ်နိုင်မှုကို တိုက်ရိုက်စစ်ဆေးနိုင်ပါသည်။
-                </p>
-              </div>
-              <div className="flex items-center gap-3 self-start sm:self-center shrink-0">
-                <span className="text-xs font-mono font-semibold text-indigo-600 dark:text-indigo-400">
-                  Total Sessions: {sessions.length}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const res = ClassroomDB.downloadClassAttendanceCSV(course.id);
-                    if (res.success) {
-                      showToast(`📥 Attendance Report CSV (${res.filename}) ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ!`);
-                    }
-                  }}
-                  className="px-3.5 py-2 rounded-xl neu-btn-emerald text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Export CSV Report</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-800/50 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase">
-                    <th className="py-3 px-4">Student</th>
-                    <th className="py-3 px-3 text-center">Present</th>
-                    <th className="py-3 px-3 text-center">Late</th>
-                    <th className="py-3 px-3 text-center">Excused</th>
-                    <th className="py-3 px-3 text-center">Absent</th>
-                    <th className="py-3 px-4">Attendance %</th>
-                    <th className="py-3 px-4 text-right">Certificate Evaluation</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
-                  {enrolledStudents.slice(0, visibleRosterLimit).map((stu) => {
-                    const st = ClassroomDB.getStudentAttendanceStats(course.id, stu.id);
-                    const stuProg = ClassroomDB.getStudentProgress(stu.id, course.id);
-                    const isEligible = st.percentage >= 75;
-
-                    return (
-                      <tr
-                        key={stu.id}
-                        className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30 transition-colors"
-                      >
-                        <td className="py-3.5 px-4">
-                          <div className="flex items-center gap-2.5">
-                            <div>
-                              <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5 flex-wrap">
-                                <span>{stu.name}</span>
-                                {stu.rulesAccepted && (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/90 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-[10px] font-bold">
-                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                                    <span>သိရှိ လိုက်နာပါမည်</span>
-                                  </span>
-                                )}
-                              </div>
-                              <div className="text-[11px] text-slate-400 font-mono">
-                                @{stu.username}
-                              </div>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="py-3.5 px-3 text-center font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                          {st.presentCount}
-                        </td>
-                        <td className="py-3.5 px-3 text-center font-mono font-bold text-amber-600 dark:text-amber-400">
-                          {st.lateCount}
-                        </td>
-                        <td className="py-3.5 px-3 text-center font-mono font-bold text-indigo-600 dark:text-indigo-400">
-                          {st.excusedCount}
-                        </td>
-                        <td className="py-3.5 px-3 text-center font-mono font-bold text-rose-600 dark:text-rose-400">
-                          {st.absentCount}
-                        </td>
-                        <td className="py-3.5 px-4 min-w-[160px]">
-                          <div className="flex items-center gap-2">
-                            <div className="flex-1 h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                              <div
-                                className={`h-full rounded-full ${
-                                  st.percentage >= 75
-                                    ? 'bg-emerald-500'
-                                    : st.percentage >= 50
-                                    ? 'bg-amber-500'
-                                    : 'bg-rose-500'
-                                }`}
-                                style={{ width: `${st.percentage}%` }}
-                              />
-                            </div>
-                            <span className="font-mono font-bold text-slate-900 dark:text-white w-10 text-right">
-                              {st.percentage}%
-                            </span>
-                          </div>
-                        </td>
-                        <td className="py-3.5 px-4 text-right">
-                          <div className="flex items-center justify-end gap-2">
-                            <span
-                              className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ${
-                                isEligible
-                                  ? 'bg-emerald-50 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
-                                  : 'bg-amber-50 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
-                              }`}
-                            >
-                              {isEligible ? '✓ Eligible (≥75%)' : 'Low Attendance (<75%)'}
-                            </span>
-
-                            {stuProg.certificate ? (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onOpenCertificate && onOpenCertificate(stuProg.certificate!)
-                                }
-                                className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1"
-                              >
-                                <Award className="w-3 h-3" />
-                                <span>View Cert</span>
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const cert = ClassroomDB.issueCertificate(stu, course);
-                                  showToast(`${stu.name} အတွက် Certificate ထုတ်ပေးပြီးပါပြီ!`);
-                                  onRefresh();
-                                  if (onOpenCertificate) {
-                                    onOpenCertificate(cert);
-                                  }
-                                }}
-                                className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1"
-                              >
-                                <Award className="w-3 h-3" />
-                                <span>Issue Certificate</span>
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            {enrolledStudents.length > visibleRosterLimit && (
-              <div className="p-4 border-t border-slate-200/60 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-2.5 text-xs">
-                <span className="text-slate-600 dark:text-slate-300 font-medium">
-                  ပြသထားသည်: <strong>{visibleRosterLimit}</strong> / စုစုပေါင်း <strong>{enrolledStudents.length}</strong> ဦး
-                </span>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setVisibleRosterLimit((prev) => prev + 100)}
-                    className="px-3.5 py-1.5 rounded-xl neu-btn-indigo font-bold cursor-pointer"
-                  >
-                    + နောက်ထပ် ၁၀၀ ဦး ပြမည်
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setVisibleRosterLimit(enrolledStudents.length)}
-                    className="px-3 py-1.5 rounded-xl neu-btn text-slate-700 dark:text-slate-200 font-semibold cursor-pointer"
-                  >
-                    အားလုံးပြမည် ({enrolledStudents.length})
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
         );
       })()}
 
