@@ -38,6 +38,18 @@ import {
   ChevronRight,
   Play,
   Sliders,
+  Bold,
+  Italic,
+  Underline,
+  Highlighter,
+  Palette,
+  Heading1,
+  Heading2,
+  List,
+  ListOrdered,
+  AlignLeft,
+  AlignCenter,
+  Eraser,
 } from 'lucide-react';
 
 interface LibraryViewProps {
@@ -149,6 +161,226 @@ function isSafePdfEmbedUrl(rawUrl?: string): boolean {
     }
   }
   return false;
+}
+
+const ALLOWED_RICH_TAGS = new Set([
+  'b',
+  'strong',
+  'i',
+  'em',
+  'u',
+  'ins',
+  's',
+  'strike',
+  'del',
+  'mark',
+  'span',
+  'font',
+  'p',
+  'div',
+  'br',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'ul',
+  'ol',
+  'li',
+  'blockquote',
+  'hr',
+  'sub',
+  'sup',
+  'code',
+  'pre',
+  'table',
+  'thead',
+  'tbody',
+  'tr',
+  'th',
+  'td',
+]);
+
+const ALLOWED_STYLE_PROPS = new Set([
+  'color',
+  'background-color',
+  'background',
+  'font-weight',
+  'font-style',
+  'text-decoration',
+  'text-decoration-line',
+  'text-decoration-color',
+  'text-decoration-style',
+  'font-size',
+  'text-align',
+  'line-height',
+  'border-bottom',
+  'padding',
+  'margin-top',
+  'margin-bottom',
+]);
+
+function isRichHtmlContent(raw?: string): boolean {
+  if (!raw) return false;
+  return /<\/?(b|strong|i|em|u|ins|s|strike|del|mark|span|font|p|div|br|h1|h2|h3|h4|ul|ol|li|blockquote|table)\b[^>]*>/i.test(
+    raw
+  );
+}
+
+function escapeHtmlText(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Converts plain text (including markdown-style **bold**, __underline__, ==highlight==, # headings)
+ * into clean HTML so existing plain-text notes and newly pasted notes render with rich book typography.
+ */
+function convertPlainNoteToRichHtml(raw?: string): string {
+  if (!raw) return '';
+  if (isRichHtmlContent(raw)) {
+    return sanitizeRichNoteHtml(raw);
+  }
+  const lines = raw.split(/\r?\n/);
+  const htmlLines = lines.map((line) => {
+    let escaped = escapeHtmlText(line);
+    // Support **bold**
+    escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    // Support __underline__
+    escaped = escaped.replace(/__([^_]+)__/g, '<u>$1</u>');
+    // Support ==highlight==
+    escaped = escaped.replace(
+      /==([^=]+)==/g,
+      '<mark style="background-color:#fef08a;color:#1e293b;padding:0 3px;border-radius:3px;">$1</mark>'
+    );
+
+    if (/^###\s+(.+)/.test(escaped)) {
+      return `<h3>${escaped.replace(/^###\s+/, '')}</h3>`;
+    }
+    if (/^##\s+(.+)/.test(escaped)) {
+      return `<h2>${escaped.replace(/^##\s+/, '')}</h2>`;
+    }
+    if (/^#\s+(.+)/.test(escaped)) {
+      return `<h1>${escaped.replace(/^#\s+/, '')}</h1>`;
+    }
+    if (/^\s*[-•]\s+(.+)/.test(escaped)) {
+      return `<div style="padding-left:1.25rem;">• ${escaped.replace(/^\s*[-•]\s+/, '')}</div>`;
+    }
+    return escaped.trim().length === 0 ? '<br/>' : `<p>${escaped}</p>`;
+  });
+  return htmlLines.join('');
+}
+
+/**
+ * Safely sanitizes rich HTML from paste or editor while preserving bold, underline, colors,
+ * highlights, font sizes, headings, lists, and paragraph alignment.
+ */
+function sanitizeRichNoteHtml(dirtyHtml?: string): string {
+  if (!dirtyHtml) return '';
+  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') {
+    return dirtyHtml.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '');
+  }
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(dirtyHtml, 'text/html');
+
+    const sanitizeNode = (node: Node): Node | null => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        return document.createTextNode(node.textContent || '');
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) {
+        return null;
+      }
+      const el = node as HTMLElement;
+      const tag = el.tagName.toLowerCase();
+
+      if (
+        tag === 'script' ||
+        tag === 'style' ||
+        tag === 'iframe' ||
+        tag === 'object' ||
+        tag === 'embed' ||
+        tag === 'meta' ||
+        tag === 'link'
+      ) {
+        return null;
+      }
+
+      if (!ALLOWED_RICH_TAGS.has(tag)) {
+        const frag = document.createDocumentFragment();
+        Array.from(el.childNodes).forEach((child) => {
+          const cleanChild = sanitizeNode(child);
+          if (cleanChild) frag.appendChild(cleanChild);
+        });
+        return frag;
+      }
+
+      const cleanEl = document.createElement(tag === 'font' ? 'span' : tag);
+
+      // Preserve <font color="..." size="..."> from browser execCommand or Word paste
+      if (tag === 'font') {
+        const fontColor = el.getAttribute('color');
+        if (fontColor && /^[#a-zA-Z0-9(),.\s%-]{1,40}$/.test(fontColor)) {
+          cleanEl.style.color = fontColor;
+        }
+      }
+
+      // Preserve safe inline styles (bold, underline, text color, highlight background, alignment)
+      const rawStyle = el.getAttribute('style') || '';
+      if (rawStyle) {
+        const safeRules: string[] = [];
+        rawStyle.split(';').forEach((decl) => {
+          const colonIdx = decl.indexOf(':');
+          if (colonIdx === -1) return;
+          const prop = decl.slice(0, colonIdx).trim().toLowerCase();
+          const val = decl.slice(colonIdx + 1).trim();
+          if (
+            ALLOWED_STYLE_PROPS.has(prop) &&
+            val &&
+            !/url\s*\(|expression\s*\(|javascript:/i.test(val)
+          ) {
+            safeRules.push(`${prop}: ${val}`);
+          }
+        });
+        if (safeRules.length > 0) {
+          cleanEl.setAttribute('style', safeRules.join('; '));
+        }
+      }
+
+      Array.from(el.childNodes).forEach((child) => {
+        const cleanChild = sanitizeNode(child);
+        if (cleanChild) cleanEl.appendChild(cleanChild);
+      });
+
+      return cleanEl;
+    };
+
+    const container = document.createElement('div');
+    Array.from(doc.body.childNodes).forEach((child) => {
+      const cleaned = sanitizeNode(child);
+      if (cleaned) container.appendChild(cleaned);
+    });
+    return container.innerHTML;
+  } catch {
+    return dirtyHtml.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '');
+  }
+}
+
+function stripHtmlForPreview(raw?: string): string {
+  if (!raw) return '';
+  return raw
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<\/(p|div|h1|h2|h3|h4|li|tr)>/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/[#*`_>-]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 const OFFICIAL_SWANARH_YOUTUBE_CHANNEL_ID = 'UCk0VikA7fYKBuoJkI_cOxRg';
@@ -388,6 +620,40 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     hideWhenRestricted: true,
   });
   const [isFetchingOembed, setIsFetchingOembed] = useState(false);
+  const richEditorRef = React.useRef<HTMLDivElement | null>(null);
+
+  const execRichCommand = (command: string, value?: string) => {
+    const editor = richEditorRef.current;
+    if (!editor) return;
+    editor.focus();
+    try {
+      document.execCommand('styleWithCSS', false, 'true');
+    } catch {
+      // ignore
+    }
+    document.execCommand(command, false, value);
+    setFormContent(sanitizeRichNoteHtml(editor.innerHTML));
+  };
+
+  const handleRichEditorPaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    const htmlData = e.clipboardData.getData('text/html');
+    const textData = e.clipboardData.getData('text/plain');
+    if (htmlData && htmlData.trim()) {
+      e.preventDefault();
+      const cleanHtml = sanitizeRichNoteHtml(htmlData);
+      document.execCommand('insertHTML', false, cleanHtml);
+      if (richEditorRef.current) {
+        setFormContent(sanitizeRichNoteHtml(richEditorRef.current.innerHTML));
+      }
+    } else if (textData) {
+      e.preventDefault();
+      const formattedPlain = convertPlainNoteToRichHtml(textData);
+      document.execCommand('insertHTML', false, formattedPlain);
+      if (richEditorRef.current) {
+        setFormContent(sanitizeRichNoteHtml(richEditorRef.current.innerHTML));
+      }
+    }
+  };
 
   const channelConfig: LibraryChannelConfig = ClassroomDB.getLibraryChannelConfig(
     activeCourse.id
@@ -775,6 +1041,11 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           }
     );
     setShowEditorModal(true);
+    setTimeout(() => {
+      if (richEditorRef.current) {
+        richEditorRef.current.innerHTML = '';
+      }
+    }, 30);
   };
 
   const openEditModal = (item: LibraryItem) => {
@@ -797,6 +1068,11 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       blockedCourseIds: item.accessRules.blockedCourseIds || [],
     });
     setShowEditorModal(true);
+    setTimeout(() => {
+      if (richEditorRef.current) {
+        richEditorRef.current.innerHTML = convertPlainNoteToRichHtml(item.content || '');
+      }
+    }, 30);
   };
 
   const toggleAllowedCourse = (cid: string, isDefaultConfig: boolean = false) => {
@@ -1586,7 +1862,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         ) : (
                           item.content && (
                             <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2 italic">
-                              "{item.content.replace(/[#*`_>-]/g, '').slice(0, 140)}..."
+                              "{stripHtmlForPreview(item.content).slice(0, 140)}..."
                             </p>
                           )
                         )}
@@ -2049,14 +2325,15 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 </div>
               )}
 
-              {/* Formatted Long-Form Article / Note Body */}
+              {/* Formatted Long-Form Article / Note Body (Preserves Bold, Underline, Text Colors, Highlights & Copy-Paste Styling) */}
               {activeReaderItem.content && (
                 <article
-                  style={{ fontSize: `${readerFontSize}px`, lineHeight: 1.85 }}
-                  className="relative z-20 max-w-3xl mx-auto space-y-4 whitespace-pre-wrap font-sans"
-                >
-                  {activeReaderItem.content}
-                </article>
+                  style={{ fontSize: `${readerFontSize}px`, lineHeight: 1.9 }}
+                  className="relative z-20 max-w-3xl mx-auto rounded-2xl p-4 sm:p-8 border border-current/10 shadow-inner font-sans [&_h1]:text-2xl [&_h1]:font-serif [&_h1]:font-extrabold [&_h1]:mt-5 [&_h1]:mb-3 [&_h2]:text-xl [&_h2]:font-serif [&_h2]:font-extrabold [&_h2]:mt-4 [&_h2]:mb-2.5 [&_h3]:text-lg [&_h3]:font-extrabold [&_h3]:mt-3.5 [&_h3]:mb-2 [&_p]:mb-3.5 [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:my-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:my-3 [&_li]:mb-1.5 [&_u]:underline [&_u]:decoration-2 [&_u]:underline-offset-4 [&_strong]:font-extrabold [&_b]:font-extrabold [&_blockquote]:border-l-4 [&_blockquote]:border-amber-500 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:my-3.5 break-words"
+                  dangerouslySetInnerHTML={{
+                    __html: convertPlainNoteToRichHtml(activeReaderItem.content),
+                  }}
+                />
               )}
             </div>
           </div>
@@ -2103,6 +2380,15 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                           ...prev,
                           enabled: isGateType,
                         }));
+                      }
+                      if (nextType === 'long_note' || nextType === 'ebook') {
+                        setTimeout(() => {
+                          if (richEditorRef.current) {
+                            richEditorRef.current.innerHTML = convertPlainNoteToRichHtml(
+                              formContent
+                            );
+                          }
+                        }, 20);
                       }
                     }}
                     className={`py-2.5 px-3 rounded-xl font-extrabold cursor-pointer transition-all ${
@@ -2223,16 +2509,190 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               )}
 
               {(formType === 'long_note' || formType === 'ebook') && (
-                <div className="space-y-1.5">
-                  <label className="font-extrabold text-slate-700 dark:text-slate-200 block">
-                    သင်တန်း စာရှည်ကြီး / အထူးမှတ်စု အပြည့်အစုံ (Long-Form Content)
-                  </label>
-                  <textarea
-                    rows={8}
-                    value={formContent}
-                    onChange={(e) => setFormContent(e.target.value)}
-                    placeholder="သင်တန်းမှ စာရှည်ကြီးများ၊ သင်ခန်းစာ မှတ်စုရှည်များကို ဤနေရာတွင် ရိုက်ထည့်/Paste လုပ်နိုင်ပါသည်..."
-                    className="w-full px-3.5 py-3 rounded-2xl neu-inset text-slate-800 dark:text-slate-100 font-sans leading-relaxed"
+                <div className="space-y-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                    <label className="font-extrabold text-slate-700 dark:text-slate-200 block">
+                      သင်တန်း စာရှည်ကြီး / အထူးမှတ်စု အပြည့်အစုံ (Rich Text & Copy-Paste Formatting)
+                    </label>
+                    <span className="text-[11px] text-indigo-600 dark:text-indigo-400 font-semibold">
+                      ✨ Word / Google Docs / Website မှ Bold, အရောင်, မျဉ်းတား အတိုင်း Copy-Paste တိုက်ရိုက်ချနိုင်ပါသည်
+                    </span>
+                  </div>
+
+                  {/* Rich Text Formatting Toolbar */}
+                  <div className="neu-inset rounded-2xl p-2 flex flex-wrap items-center gap-1.5 border border-slate-300/70 dark:border-slate-700/80">
+                    {/* Bold / Italic / Underline / Strikethrough */}
+                    <button
+                      type="button"
+                      onClick={() => execRichCommand('bold')}
+                      className="px-2.5 py-1.5 rounded-xl neu-btn font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-1 cursor-pointer hover:text-indigo-600"
+                      title="စာလုံးအထူ (Bold - Ctrl+B)"
+                    >
+                      <Bold className="w-3.5 h-3.5" />
+                      <span>Bold</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => execRichCommand('underline')}
+                      className="px-2.5 py-1.5 rounded-xl neu-btn font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-1 cursor-pointer hover:text-indigo-600"
+                      title="စာသားအောက် မျဉ်းတားရန် (Underline - Ctrl+U)"
+                    >
+                      <Underline className="w-3.5 h-3.5" />
+                      <span className="underline">မျဉ်းတား</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => execRichCommand('italic')}
+                      className="px-2 py-1.5 rounded-xl neu-btn font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1 cursor-pointer hover:text-indigo-600"
+                      title="စာလုံးအစောင်း (Italic - Ctrl+I)"
+                    >
+                      <Italic className="w-3.5 h-3.5" />
+                    </button>
+
+                    <div className="h-5 w-[1px] bg-slate-300 dark:bg-slate-700 mx-0.5" />
+
+                    {/* Headings */}
+                    <button
+                      type="button"
+                      onClick={() => execRichCommand('formatBlock', 'H1')}
+                      className="px-2 py-1.5 rounded-xl neu-btn font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-0.5 cursor-pointer"
+                      title="ခေါင်းစဉ်ကြီး (Heading 1)"
+                    >
+                      <Heading1 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => execRichCommand('formatBlock', 'H2')}
+                      className="px-2 py-1.5 rounded-xl neu-btn font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-0.5 cursor-pointer"
+                      title="ခေါင်းစဉ်လတ် (Heading 2)"
+                    >
+                      <Heading2 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => execRichCommand('formatBlock', 'P')}
+                      className="px-2 py-1.5 rounded-xl neu-btn font-bold text-slate-700 dark:text-slate-200 cursor-pointer text-[11px]"
+                      title="ပုံမှန်စာပိုဒ် (Normal Text)"
+                    >
+                      စာပိုဒ်
+                    </button>
+
+                    <div className="h-5 w-[1px] bg-slate-300 dark:bg-slate-700 mx-0.5" />
+
+                    {/* Text Colors (စာလုံးအရောင်များ) */}
+                    <div className="flex items-center gap-1 px-1.5 py-1 rounded-xl bg-white/60 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                      <Palette className="w-3.5 h-3.5 text-slate-500 mr-0.5" />
+                      {[
+                        { color: '#0f172a', label: 'အနက် (Default)' },
+                        { color: '#dc2626', label: 'အနီရောင် (Red)' },
+                        { color: '#2563eb', label: 'အပြာရောင် (Blue)' },
+                        { color: '#059669', label: 'အစိမ်းရောင် (Green)' },
+                        { color: '#7c3aed', label: 'ခရမ်းရောင် (Purple)' },
+                        { color: '#d97706', label: 'ရွှေဝါ/လိမ္မော် (Amber)' },
+                      ].map((sw) => (
+                        <button
+                          key={sw.color}
+                          type="button"
+                          onClick={() => execRichCommand('foreColor', sw.color)}
+                          title={`စာလုံးအရောင်: ${sw.label}`}
+                          style={{ backgroundColor: sw.color }}
+                          className="w-4.5 h-4.5 rounded-full border border-white shadow-sm cursor-pointer hover:scale-110 transition-transform"
+                        />
+                      ))}
+                      <input
+                        type="color"
+                        onChange={(e) => execRichCommand('foreColor', e.target.value)}
+                        title="စိတ်ကြိုက် စာလုံးအရောင် ရွေးရန်"
+                        className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent p-0"
+                      />
+                    </div>
+
+                    {/* Highlight Colors (နောက်ခံ Highlight အရောင်များ) */}
+                    <div className="flex items-center gap-1 px-1.5 py-1 rounded-xl bg-white/60 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                      <Highlighter className="w-3.5 h-3.5 text-amber-600 mr-0.5" />
+                      {[
+                        { bg: '#fef08a', label: 'အဝါရောင် Highlight' },
+                        { bg: '#bbf7d0', label: 'အစိမ်းနု Highlight' },
+                        { bg: '#bfdbfe', label: 'အပြာနု Highlight' },
+                        { bg: '#fecdd3', label: 'ပန်းရောင် Highlight' },
+                        { bg: 'transparent', label: 'Highlight ဖြုတ်ရန်' },
+                      ].map((hl) => (
+                        <button
+                          key={hl.label}
+                          type="button"
+                          onClick={() => execRichCommand('hiliteColor', hl.bg)}
+                          title={hl.label}
+                          style={{
+                            backgroundColor: hl.bg === 'transparent' ? '#ffffff' : hl.bg,
+                          }}
+                          className="w-4.5 h-4.5 rounded-md border border-slate-300 shadow-sm cursor-pointer hover:scale-110 transition-transform flex items-center justify-center text-[9px] font-bold text-slate-700"
+                        >
+                          {hl.bg === 'transparent' ? '✕' : 'A'}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="h-5 w-[1px] bg-slate-300 dark:bg-slate-700 mx-0.5" />
+
+                    {/* Lists & Alignment */}
+                    <button
+                      type="button"
+                      onClick={() => execRichCommand('insertUnorderedList')}
+                      className="px-2 py-1.5 rounded-xl neu-btn text-slate-700 dark:text-slate-200 cursor-pointer"
+                      title="Bullet List"
+                    >
+                      <List className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => execRichCommand('insertOrderedList')}
+                      className="px-2 py-1.5 rounded-xl neu-btn text-slate-700 dark:text-slate-200 cursor-pointer"
+                      title="Numbered List"
+                    >
+                      <ListOrdered className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => execRichCommand('justifyLeft')}
+                      className="px-2 py-1.5 rounded-xl neu-btn text-slate-700 dark:text-slate-200 cursor-pointer"
+                      title="ဘယ်ဘက်ညှိရန်"
+                    >
+                      <AlignLeft className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => execRichCommand('justifyCenter')}
+                      className="px-2 py-1.5 rounded-xl neu-btn text-slate-700 dark:text-slate-200 cursor-pointer"
+                      title="အလယ်ညှိရန်"
+                    >
+                      <AlignCenter className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => execRichCommand('removeFormat')}
+                      className="px-2 py-1.5 rounded-xl neu-btn text-rose-600 dark:text-rose-400 cursor-pointer flex items-center gap-1"
+                      title="ရွေးထားသော စာသားမှ Formatting ပြန်ရှင်းရန်"
+                    >
+                      <Eraser className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* Rich Text ContentEditable Surface (Preserves Bold, Colors, Underlines on Copy-Paste) */}
+                  <div
+                    ref={richEditorRef}
+                    contentEditable
+                    suppressContentEditableWarning
+                    onInput={(e) => {
+                      setFormContent(sanitizeRichNoteHtml(e.currentTarget.innerHTML));
+                    }}
+                    onBlur={(e) => {
+                      setFormContent(sanitizeRichNoteHtml(e.currentTarget.innerHTML));
+                    }}
+                    onPaste={handleRichEditorPaste}
+                    data-placeholder="သင်တန်းမှ စာရှည်ကြီးများ၊ သင်ခန်းစာ မှတ်စုရှည်များကို ဤနေရာတွင် ရိုက်ထည့်ပါ သို့မဟုတ် Word / Google Docs / Telegram / Website မှ Bold, အရောင်, မျဉ်းတား ပုံစံအတိုင်း Copy-Paste တိုက်ရိုက်ချနိုင်ပါသည်..."
+                    className="w-full min-h-[260px] max-h-[440px] overflow-y-auto px-4 py-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 text-sm font-sans leading-relaxed focus:outline-none focus:ring-2 focus:ring-indigo-500 empty:before:content-[attr(data-placeholder)] empty:before:text-slate-400 [&_h1]:text-xl [&_h1]:font-extrabold [&_h1]:my-2 [&_h2]:text-lg [&_h2]:font-extrabold [&_h2]:my-1.5 [&_p]:mb-2.5 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_u]:underline [&_u]:decoration-2 [&_u]:underline-offset-4 [&_b]:font-extrabold [&_strong]:font-extrabold"
                   />
                 </div>
               )}

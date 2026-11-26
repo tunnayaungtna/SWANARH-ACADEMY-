@@ -254,8 +254,8 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
           </div>
         </div>
 
-        {/* Recessed Neumorphic 7-Tab Switcher (Stream · Attendance · Exam Room · Library · Book Delivery · Private Notes · People) */}
-        <div className="neu-inset p-1.5 rounded-2xl grid grid-cols-2 sm:grid-cols-4 lg:flex lg:flex-wrap items-center gap-1 sm:gap-1.5 text-xs font-bold self-stretch xl:self-auto">
+        {/* Recessed Neumorphic 6-Tab Switcher (Stream · Attendance · Exam Room · Book Delivery · Private Notes · People) */}
+        <div className="neu-inset p-1.5 rounded-2xl grid grid-cols-2 sm:grid-cols-3 lg:flex lg:flex-wrap items-center gap-1 sm:gap-1.5 text-xs font-bold self-stretch xl:self-auto">
           <button
             onClick={() => handleSwitchTab('stream')}
             className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
@@ -309,19 +309,6 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
           </button>
 
           <button
-            onClick={() => handleSwitchTab('library')}
-            className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === 'library'
-                ? 'neu-raised-sm text-indigo-700 dark:text-indigo-300'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-            }`}
-            title="စာကြည့်တိုက် (eBooks • စာရှည်မှတ်စု • YouTube • TikTok Live)"
-          >
-            <BookOpen className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
-            <span>စာကြည့်တိုက်</span>
-          </button>
-
-          <button
             onClick={() => handleSwitchTab('book_delivery')}
             className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'book_delivery'
@@ -364,7 +351,7 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
 
           <button
             onClick={() => handleSwitchTab('people')}
-            className={`col-span-2 sm:col-span-2 lg:col-span-1 flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
+            className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'people'
                 ? 'neu-raised-sm text-indigo-700 dark:text-indigo-300'
                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
