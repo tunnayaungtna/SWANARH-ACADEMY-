@@ -5,6 +5,8 @@ import {
   PrivateNote,
   PrivateNoteCategory,
   PrivateNoteStatus,
+  AttendanceSession,
+  AttendanceStatus,
 } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
 import {
@@ -23,6 +25,7 @@ import {
   ShieldCheck,
   UserCheck,
   Reply,
+  Zap,
 } from 'lucide-react';
 
 interface PrivateNotesViewProps {
@@ -57,7 +60,12 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
   const [livePeerNotice, setLivePeerNotice] = useState<string | null>(null);
   const [, setTypingTick] = useState(0);
 
+  // Per-note selected attendance session ID for 1-Click Quick Attendance Marking
+  const [selectedSessionByNote, setSelectedSessionByNote] = useState<Record<string, string>>({});
+  const [quickAttendanceToast, setQuickAttendanceToast] = useState<Record<string, string>>({});
+
   const notes = ClassroomDB.getPrivateNotes(course.id, currentUser);
+  const attendanceSessions = ClassroomDB.getAttendanceSessions(course.id);
 
   // Pull latest private notes from cloud FIRST before marking read so we never overwrite a colleague's reply
   useEffect(() => {
@@ -140,11 +148,115 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
     }
   };
 
+  // Auto-detect the best matching AttendanceSession for a student's Private Note
+  const resolveDefaultSessionForNote = (note: PrivateNote): AttendanceSession | undefined => {
+    if (attendanceSessions.length === 0) return undefined;
+
+    // 1. Exact match on note.leaveDate
+    if (note.leaveDate) {
+      const byLeaveDate = attendanceSessions.find((s) => s.date === note.leaveDate);
+      if (byLeaveDate) return byLeaveDate;
+    }
+
+    // 2. Check if note subject or content mentions an ISO date (YYYY-MM-DD) or DD/MM/YYYY or DD-MM-YYYY
+    const combinedText = `${note.subject} ${note.content}`;
+    const isoMatch = combinedText.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+    if (isoMatch) {
+      const byIso = attendanceSessions.find((s) => s.date === isoMatch[1]);
+      if (byIso) return byIso;
+    }
+    const dmyMatch = combinedText.match(/\b(\d{1,2})[/-](\d{1,2})[/-](20\d{2})\b/);
+    if (dmyMatch) {
+      const dd = dmyMatch[1].padStart(2, '0');
+      const mm = dmyMatch[2].padStart(2, '0');
+      const yyyy = dmyMatch[3];
+      const byDmy = attendanceSessions.find((s) => s.date === `${yyyy}-${mm}-${dd}`);
+      if (byDmy) return byDmy;
+    }
+
+    // 3. Match the date the note was created
+    if (note.createdAtMs) {
+      const d = new Date(note.createdAtMs);
+      const createdIso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+        d.getDate()
+      ).padStart(2, '0')}`;
+      const byCreated = attendanceSessions.find((s) => s.date === createdIso);
+      if (byCreated) return byCreated;
+    }
+
+    // 4. Most recent session where the student is not yet marked 'present'
+    const latestUnmarked = attendanceSessions.find(
+      (s) => s.records?.[note.studentId]?.status !== 'present'
+    );
+    return latestUnmarked || attendanceSessions[0];
+  };
+
+  // 1-Click Quick Attendance Mark + Auto-Reply right inside the Private Note card
+  const handleQuickMarkAttendanceAndReply = (
+    note: PrivateNote,
+    session: AttendanceSession,
+    targetAttendanceStatus: AttendanceStatus,
+    alsoReplyToNote: boolean
+  ) => {
+    const studentUser: User = ClassroomDB.getAllUsers().find((u) => u.id === note.studentId) || {
+      id: note.studentId,
+      name: note.studentName,
+      username: note.studentUsername,
+      email: '',
+      phone: '',
+      role: 'student',
+      avatar: '',
+    };
+
+    const statusMyanmarLabel =
+      targetAttendanceStatus === 'present'
+        ? 'Present (တက်ရောက်)'
+        : targetAttendanceStatus === 'late'
+        ? 'Late (နောက်ကျ)'
+        : targetAttendanceStatus === 'excused'
+        ? 'Excused (ခွင့်)'
+        : 'Absent (ပျက်ကွက်)';
+
+    ClassroomDB.instructorMarkAttendance(
+      session.id,
+      studentUser,
+      targetAttendanceStatus,
+      `သီးသန့်စာမှ 1-Click ဖြင့် ${statusMyanmarLabel} ပေးပြီး (${currentUser.name})`
+    );
+
+    if (alsoReplyToNote) {
+      const customDraft = (replyDrafts[note.id] ?? '').trim();
+      const autoReplyText =
+        customDraft ||
+        `သင်တင်ပြသော ${session.date} (${session.title}) အတွက် Attendance ကို "${statusMyanmarLabel}" အဖြစ် မှတ်တမ်းတင်ပေးပြီး ဖြစ်ပါသည်။ ✓`;
+      const noteStatus: Exclude<PrivateNoteStatus, 'pending'> =
+        note.category === 'leave_request' || note.category === 'attendance_request'
+          ? 'approved'
+          : 'replied';
+      ClassroomDB.replyToPrivateNote(note.id, autoReplyText, noteStatus, currentUser);
+      setEditingNoteId(null);
+    }
+
+    setQuickAttendanceToast((prev) => ({
+      ...prev,
+      [note.id]: `✅ ${note.studentName} (@${note.studentUsername}) ကို ${session.date} အတွက် "${statusMyanmarLabel}" အဖြစ် ချက်ချင်း မှတ်တမ်းတင်ပေးပြီးပါပြီ!`,
+    }));
+    setTimeout(() => {
+      setQuickAttendanceToast((prev) => {
+        const next = { ...prev };
+        delete next[note.id];
+        return next;
+      });
+    }, 5000);
+
+    onRefresh();
+  };
+
   const handleStudentSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError(null);
     if (!content.trim()) {
-      setSubmitError('ကျေးဇူးပြု၍ မေးမြန်းလိုသော အကြောင်းအရာ သို့မဟုတ် ခွင့်တိုင်လိုသော အကြောင်းပြချက်ကို ရေးသားပါ။');
+      setSubmitError('ကျေးဇူးပြု၍ မေးမြန်းလိုသော အကြောင်းအရာ သို့မဟုတ် တင်ပြလိုသော အကြောင်းပြချက်ကို ရေးသားပါ။');
       return;
     }
     try {
@@ -153,7 +265,10 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
           courseId: course.id,
           category,
           subject: subject.trim(),
-          leaveDate: category === 'leave_request' ? leaveDate : undefined,
+          leaveDate:
+            category === 'leave_request' || category === 'attendance_request'
+              ? leaveDate
+              : undefined,
           content: content.trim(),
         },
         currentUser
@@ -207,6 +322,14 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
   });
 
   const renderCategoryBadge = (cat: PrivateNoteCategory, noteLeaveDate?: string) => {
+    if (cat === 'attendance_request') {
+      return (
+        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-xl bg-cyan-100 dark:bg-cyan-950/70 text-cyan-800 dark:text-cyan-300 text-[11px] font-bold border border-cyan-300/60 dark:border-cyan-800/60">
+          <CheckCircle2 className="w-3 h-3 shrink-0" />
+          <span>Attendance မနှိပ်မိ၍ တင်ပြချက်{noteLeaveDate ? ` (${noteLeaveDate})` : ''}</span>
+        </span>
+      );
+    }
     if (cat === 'leave_request') {
       return (
         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-xl bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 text-[11px] font-bold border border-amber-300/60 dark:border-amber-800/60">
@@ -276,8 +399,8 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
             <div className="flex items-center gap-2 flex-wrap">
               <h3 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white">
                 {isInstructor
-                  ? 'ကျောင်းသား သီးသန့်မေးခွန်းများနှင့် ခွင့်တိုင်ကြားစာများ (Private Student Notes)'
-                  : 'ဆရာသို့ သီးသန့်မေးမြန်းရန်နှင့် ခွင့်တိုင်ကြားရန် (Private Note to Instructor)'}
+                  ? 'ကျောင်းသား သီးသန့်မေးခွန်းများ၊ ခွင့်တိုင်စာနှင့် Attendance တင်ပြချက်များ'
+                  : 'ဆရာသို့ သီးသန့်မေးမြန်းရန်၊ ခွင့်တိုင်ရန်နှင့် Attendance တင်ပြရန်'}
               </h3>
               <span className="px-2 py-0.5 rounded-lg bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold">
                 🔒 1-on-1 Private
@@ -285,8 +408,8 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
               {isInstructor
-                ? 'ကျောင်းသားများ ပေးပို့ထားသော သင်ခန်းစာ မေးခွန်းများနှင့် ခွင့်တိုင်စာများကို ဤနေရာတွင် လက်ခံဖြေကြားနိုင်ပါသည်။ ခွင့်တိုင်စာကို "ခွင့်ပြုသည်" နှိပ်ပါက ထိုရက်၏ Attendance တွင်လည်း "ခွင့် (Excused)" အဖြစ် အလိုအလျောက် မှတ်တမ်းတင်ပေးပါသည်။'
-                : 'အတန်းတွင်း လူသိရှင်ကြား မမေးလိုသော သင်ခန်းစာ မေးခွန်းများ၊ ခွင့်တိုင်ကြားစာများကို ဆရာ (Admin / Co-Admin) ထံသို့ သီးသန့် ပေးပို့နိုင်ပါသည်။ အခြားကျောင်းသားများ လုံးဝ မမြင်တွေ့နိုင်ပါ။'}
+                ? 'ကျောင်းသားစာကတ်တိုင်းတွင် ပါဝင်သော "⚡ 1-Click Quick Attendance" ဘားဖြင့် Attendance Tab သို့ လုံးဝသွားစရာမလိုဘဲ ရက်စွဲရွေး၍ "✅ Present ပေးပြီး စာပြန်မည်" ကို တစ်ချက်တည်း နှိပ်နိုင်ပါသည်။'
+                : 'သင်ခန်းစာ မေးခွန်းများ၊ ခွင့်တိုင်စာများနှင့် Attendance မနှိပ်မိလိုက်သည့် ရက်စွဲများကို ဆရာ (Admin / Co-Admin) ထံသို့ သီးသန့် ပေးပို့နိုင်ပါသည်။'}
             </p>
           </div>
         </div>
@@ -328,7 +451,7 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
           <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-200/60 dark:border-slate-800">
             <h4 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
               <Send className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-              <span>စာအသစ် ပေးပို့ရန် (Send New Private Note / Leave Request)</span>
+              <span>စာအသစ် ပေးပို့ရန် (Send New Private Note / Attendance or Leave Request)</span>
             </h4>
             <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
               {course.code}
@@ -340,7 +463,7 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
             <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
               ၁။ အမျိုးအစား ရွေးချယ်ပါ (Select Category)
             </label>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
               <button
                 type="button"
                 onClick={() => setCategory('question')}
@@ -354,6 +477,30 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
                 <div>
                   <div>သင်ခန်းစာ မေးခွန်း</div>
                   <div className="text-[10px] font-normal opacity-75">Lesson Question</div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setCategory('attendance_request');
+                  const latestMissed = attendanceSessions.find(
+                    (s) => s.records?.[currentUser.id]?.status !== 'present'
+                  );
+                  if (latestMissed) {
+                    setLeaveDate(latestMissed.date);
+                  }
+                }}
+                className={`p-3 rounded-2xl text-xs font-bold flex items-center gap-2.5 transition-all cursor-pointer text-left ${
+                  category === 'attendance_request'
+                    ? 'neu-inset ring-2 ring-cyan-500/40 text-cyan-800 dark:text-cyan-300'
+                    : 'neu-btn text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                <CheckCircle2 className="w-4 h-4 text-cyan-600 dark:text-cyan-400 shrink-0" />
+                <div>
+                  <div>Attendance မနှိပ်မိ၍ တင်ပြခြင်း</div>
+                  <div className="text-[10px] font-normal opacity-75">Missed Attendance</div>
                 </div>
               </button>
 
@@ -391,7 +538,7 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
             </div>
           </div>
 
-          {/* Subject & Optional Leave Date */}
+          {/* Subject & Optional Date / Session Selector */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
             <div>
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
@@ -402,7 +549,9 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
                 value={subject}
                 onChange={(e) => setSubject(e.target.value)}
                 placeholder={
-                  category === 'leave_request'
+                  category === 'attendance_request'
+                    ? 'ဥပမာ — အတန်းတက်ရောက်ခဲ့သော်လည်း Attendance မနှိပ်မိပါသဖြင့်'
+                    : category === 'leave_request'
                     ? 'ဥပမာ — ကျန်းမာရေးကြောင့် ၁ ရက် ခွင့်တိုင်ကြားခြင်း'
                     : category === 'question'
                     ? 'ဥပမာ — Lesson 2 မှ သင်ခန်းစာ မရှင်းလင်းချက် မေးမြန်းခြင်း'
@@ -411,6 +560,45 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
                 className="neu-input w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm text-slate-900 dark:text-slate-100"
               />
             </div>
+
+            {category === 'attendance_request' && (
+              <div>
+                <label className="block text-xs font-bold text-cyan-800 dark:text-cyan-300 mb-1.5">
+                  📅 Attendance မနှိပ်မိခဲ့သည့် ရက်စွဲရွေးပါ (Select Missed Session Date)
+                </label>
+                {attendanceSessions.length > 0 ? (
+                  <select
+                    value={leaveDate}
+                    onChange={(e) => setLeaveDate(e.target.value)}
+                    className="neu-input w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100 cursor-pointer"
+                  >
+                    {attendanceSessions.map((sess) => {
+                      const recStatus = sess.records?.[currentUser.id]?.status || 'absent';
+                      const statusTag =
+                        recStatus === 'present'
+                          ? '✅ Present (နှိပ်ပြီး)'
+                          : recStatus === 'late'
+                          ? '⏰ Late'
+                          : recStatus === 'excused'
+                          ? '📝 Excused'
+                          : '❌ မနှိပ်ရသေး (Absent)';
+                      return (
+                        <option key={sess.id} value={sess.date}>
+                          {sess.date} — {sess.title} [{statusTag}]
+                        </option>
+                      );
+                    })}
+                  </select>
+                ) : (
+                  <input
+                    type="date"
+                    value={leaveDate}
+                    onChange={(e) => setLeaveDate(e.target.value)}
+                    className="neu-input w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-mono text-slate-900 dark:text-slate-100"
+                  />
+                )}
+              </div>
+            )}
 
             {category === 'leave_request' && (
               <div>
@@ -437,7 +625,9 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
               value={content}
               onChange={(e) => setContent(e.target.value)}
               placeholder={
-                category === 'leave_request'
+                category === 'attendance_request'
+                  ? 'မည်သည့်ရက်က အတန်းတက်ရောက်ခဲ့သော်လည်း Attendance မနှိပ်မိလိုက်ကြောင်း ဆရာသိရှိစေရန် ရေးသားပေးပါ...'
+                  : category === 'leave_request'
                   ? 'အတန်းမတက်ရောက်နိုင်သည့် အကြောင်းပြချက်ကို ရေးသားပေးပါ...'
                   : 'ဆရာထံ သီးသန့်မေးမြန်းလိုသော အကြောင်းအရာကို ပြည့်စုံစွာ ရေးသားပေးပါ...'
               }
@@ -525,8 +715,9 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
                 className="neu-input px-3 py-2 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
               >
                 <option value="all">အမျိုးအစား အားလုံး (All Types)</option>
-                <option value="question">📘 သင်ခန်းစာ မေးခွန်းများ</option>
+                <option value="attendance_request">✅ Attendance မနှိပ်မိ၍ တင်ပြချက်များ</option>
                 <option value="leave_request">📅 ခွင့်တိုင်ကြားစာများ</option>
+                <option value="question">📘 သင်ခန်းစာ မေးခွန်းများ</option>
                 <option value="feedback">💬 အထွေထွေ တင်ပြချက်များ</option>
               </select>
 
@@ -579,6 +770,15 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
               replyDrafts[note.id] !== undefined
                 ? replyDrafts[note.id]
                 : note.replyContent || '';
+
+            const defaultMatchedSession = isInstructor
+              ? resolveDefaultSessionForNote(note)
+              : undefined;
+            const selectedSessionId =
+              selectedSessionByNote[note.id] || defaultMatchedSession?.id || '';
+            const activeSession = attendanceSessions.find((s) => s.id === selectedSessionId);
+            const studentCurrentAttStatus: AttendanceStatus =
+              activeSession?.records?.[note.studentId]?.status || 'absent';
 
             return (
               <div
@@ -654,6 +854,140 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
                   </p>
                 </div>
 
+                {/* ⚡ INSTRUCTOR 1-CLICK INLINE ATTENDANCE BAR (No Tab Switching Required!) */}
+                {isInstructor && attendanceSessions.length > 0 && (
+                  <div className="p-3 sm:p-3.5 rounded-2xl bg-cyan-50/70 dark:bg-cyan-950/30 border border-cyan-200/80 dark:border-cyan-800/60 space-y-2.5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 text-xs font-extrabold text-cyan-900 dark:text-cyan-200">
+                        <Zap className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" />
+                        <span>
+                          ⚡ 1-Click Quick Attendance (Tab ပြောင်းစရာမလိုဘဲ ဤနေရာမှ တိုက်ရိုက် Present ပေးရန်)
+                        </span>
+                      </div>
+
+                      {activeSession && (
+                        <span
+                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-[11px] font-extrabold self-start sm:self-auto ${
+                            studentCurrentAttStatus === 'present'
+                              ? 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-300/60'
+                              : studentCurrentAttStatus === 'late'
+                              ? 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-300/60'
+                              : studentCurrentAttStatus === 'excused'
+                              ? 'bg-indigo-100 dark:bg-indigo-950/80 text-indigo-800 dark:text-indigo-300 border border-indigo-300/60'
+                              : 'bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300 border border-rose-300/60'
+                          }`}
+                        >
+                          <span>
+                            လက်ရှိ ({activeSession.date}):{' '}
+                            {studentCurrentAttStatus === 'present'
+                              ? '✅ Present (တက်ရောက်)'
+                              : studentCurrentAttStatus === 'late'
+                              ? '⏰ Late (နောက်ကျ)'
+                              : studentCurrentAttStatus === 'excused'
+                              ? '📝 Excused (ခွင့်)'
+                              : '❌ Absent (မနှိပ်ရသေး)'}
+                          </span>
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex flex-col lg:flex-row items-stretch lg:items-center gap-2">
+                      {/* Session Date Dropdown */}
+                      <select
+                        value={selectedSessionId}
+                        onChange={(e) =>
+                          setSelectedSessionByNote((prev) => ({
+                            ...prev,
+                            [note.id]: e.target.value,
+                          }))
+                        }
+                        className="neu-input px-3 py-2 rounded-xl text-xs font-bold text-slate-800 dark:text-slate-100 cursor-pointer flex-1 min-w-0"
+                      >
+                        {attendanceSessions.map((sess) => {
+                          const st = sess.records?.[note.studentId]?.status || 'absent';
+                          const badge =
+                            st === 'present'
+                              ? '✅ Present'
+                              : st === 'late'
+                              ? '⏰ Late'
+                              : st === 'excused'
+                              ? '📝 Excused'
+                              : '❌ Absent';
+                          return (
+                            <option key={sess.id} value={sess.id}>
+                              📅 {sess.date} — {sess.title} ({badge})
+                            </option>
+                          );
+                        })}
+                      </select>
+
+                      {/* 1-Click Action Buttons */}
+                      {activeSession && (
+                        <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleQuickMarkAttendanceAndReply(
+                                note,
+                                activeSession,
+                                'present',
+                                note.status === 'pending' || editingNoteId === note.id
+                              )
+                            }
+                            className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            <span>
+                              {note.status === 'pending' || editingNoteId === note.id
+                                ? '✅ Present ပေးပြီး စာပြန်မည်'
+                                : '✅ Present ပေးမည်'}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleQuickMarkAttendanceAndReply(
+                                note,
+                                activeSession,
+                                'late',
+                                note.status === 'pending' || editingNoteId === note.id
+                              )
+                            }
+                            className="px-2.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold flex items-center gap-1 shadow-xs cursor-pointer transition-colors"
+                          >
+                            <Clock className="w-3.5 h-3.5 shrink-0" />
+                            <span>⏰ Late</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleQuickMarkAttendanceAndReply(
+                                note,
+                                activeSession,
+                                'excused',
+                                note.status === 'pending' || editingNoteId === note.id
+                              )
+                            }
+                            className="px-2.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1 shadow-xs cursor-pointer transition-colors"
+                          >
+                            <Calendar className="w-3.5 h-3.5 shrink-0" />
+                            <span>📝 ခွင့် (Excused)</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {quickAttendanceToast[note.id] && (
+                      <div className="p-2.5 rounded-xl bg-emerald-100/90 dark:bg-emerald-950/80 border border-emerald-300 dark:border-emerald-700 text-xs font-extrabold text-emerald-900 dark:text-emerald-200 flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span>{quickAttendanceToast[note.id]}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Existing Instructor Reply Display */}
                 {note.status !== 'pending' && note.replyContent && editingNoteId !== note.id && (
                   <div className="p-3.5 sm:p-4 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/35 border border-indigo-200/80 dark:border-indigo-800/60 space-y-2">
@@ -728,8 +1062,8 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
                           }
                         }}
                         placeholder={
-                          note.category === 'leave_request'
-                            ? 'မှတ်ချက်/အဖြေ ရေးရန် (မရေးဘဲ "ခွင့်ပြုသည်" တိုက်ရိုက်နှိပ်လျှင်လည်း စနစ်မှ အလိုအလျောက် စာသားထည့်ပေးပါမည်)...'
+                          note.category === 'leave_request' || note.category === 'attendance_request'
+                            ? 'မှတ်ချက်/အဖြေ ရေးရန် (မရေးဘဲ အပေါ်ရှိ "✅ Present ပေးပြီး စာပြန်မည်" သို့မဟုတ် "ခွင့်ပြုသည်" တိုက်ရိုက်နှိပ်လျှင်လည်း စနစ်မှ အလိုအလျောက် စာပြန်ပေးပါမည်)...'
                             : 'ကျောင်းသားထံ ပြန်လည်ဖြေကြားလိုသော အဖြေကို ရေးသားပါ...'
                         }
                         className="neu-input w-full px-3.5 py-2.5 rounded-2xl text-xs sm:text-sm text-slate-900 dark:text-slate-100"
@@ -746,7 +1080,8 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
                           </button>
                         )}
 
-                        {note.category === 'leave_request' && (
+                        {(note.category === 'leave_request' ||
+                          note.category === 'attendance_request') && (
                           <>
                             <button
                               type="button"
@@ -754,7 +1089,11 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
                               className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-xs cursor-pointer"
                             >
                               <CheckCircle2 className="w-3.5 h-3.5" />
-                              <span>✓ ခွင့်ပြုသည် (Approve Leave)</span>
+                              <span>
+                                {note.category === 'attendance_request'
+                                  ? '✓ Present ပေးမည် (Approve Present)'
+                                  : '✓ ခွင့်ပြုသည် (Approve Leave)'}
+                              </span>
                             </button>
 
                             <button

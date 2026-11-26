@@ -275,7 +275,7 @@ export interface StudentProgress {
   certificate?: CertificateData;
 }
 
-export type PrivateNoteCategory = 'question' | 'leave_request' | 'feedback';
+export type PrivateNoteCategory = 'question' | 'leave_request' | 'attendance_request' | 'feedback';
 
 export type PrivateNoteStatus = 'pending' | 'replied' | 'approved' | 'rejected';
 

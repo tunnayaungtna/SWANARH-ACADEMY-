@@ -9819,6 +9819,8 @@ export class ClassroomDB {
             const catLabel =
               note.category === 'leave_request'
                 ? '📅 ခွင့်တိုင်ကြားစာ (Leave Request)'
+                : note.category === 'attendance_request'
+                ? '✅ Attendance မနှိပ်မိ၍ တင်ပြခြင်း (Missed Attendance)'
                 : note.category === 'question'
                 ? '📘 သင်ခန်းစာ မေးခွန်း (Question)'
                 : '💬 သီးသန့် တင်ပြချက် (Feedback)';
@@ -10073,6 +10075,8 @@ export class ClassroomDB {
     const defaultSubject =
       data.category === 'leave_request'
         ? `ခွင့်တိုင်ကြားစာ (${data.leaveDate || 'Leave Request'})`
+        : data.category === 'attendance_request'
+        ? `Attendance မနှိပ်မိ၍ တင်ပြခြင်း (${data.leaveDate || 'Attendance Request'})`
         : data.category === 'question'
         ? 'သင်ခန်းစာ မေးခွန်း (Lesson Question)'
         : 'သီးသန့် တင်ပြချက် (General Feedback)';
@@ -10087,7 +10091,10 @@ export class ClassroomDB {
       studentUsername: student.username,
       category: data.category,
       subject: data.subject.trim() || defaultSubject,
-      leaveDate: data.category === 'leave_request' && data.leaveDate ? data.leaveDate.trim() : undefined,
+      leaveDate:
+        (data.category === 'leave_request' || data.category === 'attendance_request') && data.leaveDate
+          ? data.leaveDate.trim()
+          : undefined,
       content: data.content.trim(),
       status: 'pending',
       isReadByInstructor: false,
@@ -10139,11 +10146,16 @@ export class ClassroomDB {
 
     const nowMs = Date.now();
     const timeLabel = this.formatPostTimestamp(nowMs);
+    const isAttendanceReq = target.category === 'attendance_request';
     const defaultReply =
       newStatus === 'approved'
-        ? 'သင်တင်ပြသော ခွင့်တိုင်ကြားစာကို သိရှိခွင့်ပြုပေးလိုက်ပါသည်။ ✓'
+        ? isAttendanceReq
+          ? `သင်တင်ပြသော (${target.leaveDate || 'သက်ဆိုင်ရာရက်'}) အတွက် Attendance ကို Present (တက်ရောက်) အဖြစ် မှတ်တမ်းတင်ပေးပြီး ဖြစ်ပါသည်။ ✓`
+          : 'သင်တင်ပြသော ခွင့်တိုင်ကြားစာကို သိရှိခွင့်ပြုပေးလိုက်ပါသည်။ ✓'
         : newStatus === 'rejected'
-        ? 'သင်တင်ပြသော ခွင့်တိုင်ကြားစာကို ခွင့်မပြုနိုင်ပါ။'
+        ? isAttendanceReq
+          ? 'သင်တင်ပြသော Attendance တောင်းဆိုချက်ကို ခွင့်မပြုနိုင်ပါ။'
+          : 'သင်တင်ပြသော ခွင့်တိုင်ကြားစာကို ခွင့်မပြုနိုင်ပါ။'
         : 'သင်၏ တင်ပြချက်ကို သိရှိဖြေကြားပေးလိုက်ပါသည်။';
 
     const updatedNote: PrivateNote = {
@@ -10165,10 +10177,10 @@ export class ClassroomDB {
     this.markLocalWrite(noteId);
     this.setItem(STORAGE_KEYS.PRIVATE_NOTES, updatedList);
 
-    // If this is a Leave Request and an Attendance Session exists for that course & date:
-    // - When APPROVED: automatically mark the student as 'excused' (ခွင့်ဖြင့်ပျက်ကွက်) in all sessions for that date!
-    // - When REJECTED (if previously approved): revert the auto-excused record to 'absent'
-    if (target.category === 'leave_request') {
+    // If this is a Leave Request or Attendance Request and an Attendance Session exists for that course & date:
+    // - When APPROVED: automatically mark the student as 'excused' (for leave_request) or 'present' (for attendance_request) in all sessions for that date!
+    // - When REJECTED (if previously approved): revert the auto-marked record to 'absent'
+    if (target.category === 'leave_request' || target.category === 'attendance_request') {
       const targetLeaveDate =
         (target.leaveDate || '').trim() || this.getLocalIsoDateFromMs(target.createdAtMs);
       if (targetLeaveDate) {
@@ -10184,24 +10196,30 @@ export class ClassroomDB {
           role: 'student',
           avatar: '',
         };
+        const targetStatus: AttendanceStatus =
+          target.category === 'attendance_request' ? 'present' : 'excused';
+        const approveNote =
+          target.category === 'attendance_request'
+            ? `သီးသန့်စာမှတစ်ဆင့် Present ပေးပြီး (${instructor.name})`
+            : `ခွင့်တိုင်ကြားစာ ခွင့်ပြုပြီး (${instructor.name})`;
         if (newStatus === 'approved') {
           matchingSessions.forEach((matchingSession) => {
             this.instructorMarkAttendance(
               matchingSession.id,
               studentUser,
-              'excused',
-              `ခွင့်တိုင်ကြားစာ ခွင့်ပြုပြီး (${instructor.name})`
+              targetStatus,
+              approveNote
             );
           });
         } else if (newStatus === 'rejected' && target.status === 'approved') {
           matchingSessions.forEach((matchingSession) => {
             const existingRec = matchingSession.records?.[target.studentId];
-            if (existingRec?.status === 'excused' && existingRec?.checkedInBy === 'instructor') {
+            if (existingRec?.status === targetStatus && existingRec?.checkedInBy === 'instructor') {
               this.instructorMarkAttendance(
                 matchingSession.id,
                 studentUser,
                 'absent',
-                `ခွင့်တိုင်ကြားစာ ငြင်းပယ်ထားသည် (${instructor.name})`
+                `တောင်းဆိုချက် ငြင်းပယ်ထားသည် (${instructor.name})`
               );
             }
           });
