@@ -63,18 +63,56 @@ function isAllowedSupabaseSubPath(subPath: string): boolean {
   );
 }
 
+function isTrustedCorsOrigin(origin?: string): boolean {
+  if (!origin) return false;
+  try {
+    const parsed = new URL(origin);
+    const host = parsed.hostname.toLowerCase();
+    return (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === 'swanarhclassroom.online' ||
+      host.endsWith('.swanarhclassroom.online') ||
+      host === 'swanarhacademy.com' ||
+      host.endsWith('.swanarhacademy.com') ||
+      host.endsWith('.run.app') ||
+      host.endsWith('.github.io')
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs: number = 8_000
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function startServer() {
   const app = express();
   app.disable('x-powered-by');
   const PORT = Number(process.env.PORT) || 3000;
 
-  // Security & Global CORS headers so students in Myanmar and worldwide can access seamlessly
+  // Security & Origin-Validated CORS headers
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    const reqOrigin = typeof req.headers.origin === 'string' ? req.headers.origin : '';
+    if (reqOrigin && isTrustedCorsOrigin(reqOrigin)) {
+      res.setHeader('Access-Control-Allow-Origin', reqOrigin);
+      res.setHeader('Vary', 'Origin');
+    }
     res.setHeader(
       'Access-Control-Allow-Methods',
       'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD'
@@ -101,6 +139,284 @@ async function startServer() {
       region: 'global-vpn-free-relay',
       timestamp: Date.now(),
     });
+  });
+
+  // Live YouTube Channel Feed Resolver & RSS Parser (resolves @swanarhacademy or any YouTube channel URL to latest videos automatically)
+  const ytFeedCache = new Map<
+    string,
+    {
+      channelId: string;
+      channelTitle: string;
+      videos: Array<{
+        videoId: string;
+        title: string;
+        publishedAt: string;
+        thumbnailUrl: string;
+        videoUrl: string;
+      }>;
+      fetchedAt: number;
+    }
+  >();
+
+  app.get('/api/youtube-feed', async (req, res) => {
+    try {
+      const clientIp =
+        (typeof req.headers['x-forwarded-for'] === 'string'
+          ? req.headers['x-forwarded-for'].split(',')[0].trim()
+          : req.socket.remoteAddress) || 'unknown';
+      if (!checkProxyRateLimit(clientIp)) {
+        res.status(429).json({ ok: false, videos: [], message: 'Too many requests.' });
+        return;
+      }
+
+      const rawHandle = String(req.query.handle || '@swanarhacademy').trim();
+      const rawChannelId = String(req.query.channelId || '').trim();
+      const force = req.query.force === '1';
+
+      // Strict validation to prevent SSRF: only allow valid YouTube handles (@...) or UC... channel IDs
+      const cleanHandle = rawHandle.replace(/^https?:\/\/(www\.)?youtube\.com\//i, '').split(/[/?#]/)[0].trim();
+      const validChannelId = /^UC[a-zA-Z0-9_-]{20,28}$/.test(rawChannelId) ? rawChannelId : '';
+      const cacheKey = validChannelId || cleanHandle || '@swanarhacademy';
+
+      const cached = ytFeedCache.get(cacheKey);
+      if (!force && cached && Date.now() - cached.fetchedAt < 60 * 1000) {
+        res.status(200).json({ ok: true, ...cached });
+        return;
+      }
+
+      let resolvedChannelId = validChannelId;
+      if (!resolvedChannelId) {
+        const handlePath = cleanHandle.startsWith('@') ? cleanHandle : `@${cleanHandle.replace(/^@+/, '')}`;
+        if (!/^@[a-zA-Z0-9._-]{2,60}$/.test(handlePath)) {
+          res.status(400).json({ ok: false, message: 'Invalid YouTube handle format.' });
+          return;
+        }
+        const pageRes = await fetchWithTimeout(`https://www.youtube.com/${handlePath}`, {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+          },
+        });
+        if (pageRes.ok) {
+          const html = await pageRes.text();
+          const cidMatch =
+            html.match(/"externalId"\s*:\s*"(UC[a-zA-Z0-9_-]{20,28})"/) ||
+            html.match(/channel_id=(UC[a-zA-Z0-9_-]{20,28})/) ||
+            html.match(/"channelId"\s*:\s*"(UC[a-zA-Z0-9_-]{20,28})"/);
+          if (cidMatch && cidMatch[1]) {
+            resolvedChannelId = cidMatch[1];
+          }
+        }
+      }
+
+      if (!resolvedChannelId) {
+        res.status(200).json({
+          ok: false,
+          channelId: '',
+          channelTitle: cleanHandle,
+          videos: [],
+          message: 'Could not resolve YouTube channel ID automatically.',
+        });
+        return;
+      }
+
+      const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(resolvedChannelId)}`;
+      const rssRes = await fetchWithTimeout(rssUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; ClassroomLibraryBot/1.0)',
+        },
+      });
+      if (!rssRes.ok) {
+        res.status(200).json({
+          ok: false,
+          channelId: resolvedChannelId,
+          channelTitle: cleanHandle,
+          videos: [],
+        });
+        return;
+      }
+
+      const xml = await rssRes.text();
+      const channelTitleMatch = xml.match(/<title>([^<]+)<\/title>/);
+      const channelTitle = channelTitleMatch ? channelTitleMatch[1] : cleanHandle;
+
+      const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
+      const videos: Array<{
+        videoId: string;
+        title: string;
+        publishedAt: string;
+        thumbnailUrl: string;
+        videoUrl: string;
+      }> = [];
+
+      let match: RegExpExecArray | null;
+      while ((match = entryRegex.exec(xml)) !== null && videos.length < 50) {
+        const block = match[1];
+        const vidMatch = block.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
+        const titleMatch = block.match(/<title>([\s\S]*?)<\/title>/);
+        const pubMatch = block.match(/<published>([^<]+)<\/published>/);
+        if (vidMatch && vidMatch[1]) {
+          const videoId = vidMatch[1].trim();
+          const rawTitle = (titleMatch ? titleMatch[1] : 'YouTube Video')
+            .replace(/&amp;/g, '&')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .trim();
+          const publishedAt = pubMatch ? pubMatch[1].trim() : new Date().toISOString();
+          videos.push({
+            videoId,
+            title: rawTitle,
+            publishedAt,
+            thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+            videoUrl: `https://www.youtube.com/watch?v=${videoId}`,
+          });
+        }
+      }
+
+      const payload = {
+        channelId: resolvedChannelId,
+        channelTitle,
+        videos,
+        fetchedAt: Date.now(),
+      };
+      ytFeedCache.set(cacheKey, payload);
+      res.status(200).json({ ok: true, ...payload });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(200).json({ ok: false, videos: [], message: msg });
+    }
+  });
+
+  // Live TikTok Creator Feed Resolver (discovers video IDs & metadata from @dr..si.thu.aung.s automatically)
+  const ttFeedCache = new Map<
+    string,
+    {
+      handle: string;
+      videos: Array<{
+        videoId: string;
+        title: string;
+        thumbnailUrl?: string;
+        videoUrl: string;
+      }>;
+      fetchedAt: number;
+    }
+  >();
+
+  app.get('/api/tiktok-feed', async (req, res) => {
+    try {
+      const clientIp =
+        (typeof req.headers['x-forwarded-for'] === 'string'
+          ? req.headers['x-forwarded-for'].split(',')[0].trim()
+          : req.socket.remoteAddress) || 'unknown';
+      if (!checkProxyRateLimit(clientIp)) {
+        res.status(429).json({ ok: false, videos: [], message: 'Too many requests.' });
+        return;
+      }
+
+      const rawHandle = String(req.query.handle || 'dr..si.thu.aung.s').trim();
+      const force = req.query.force === '1';
+      const cleanHandle = rawHandle
+        .replace(/^https?:\/\/(www\.)?tiktok\.com\/@?/i, '')
+        .split(/[/?#]/)[0]
+        .replace(/^@+/, '')
+        .trim();
+
+      if (!/^[a-zA-Z0-9._-]{2,60}$/.test(cleanHandle)) {
+        res.status(400).json({ ok: false, videos: [], message: 'Invalid TikTok handle.' });
+        return;
+      }
+
+      const cached = ttFeedCache.get(cleanHandle);
+      if (!force && cached && Date.now() - cached.fetchedAt < 60 * 1000) {
+        res.status(200).json({ ok: true, ...cached });
+        return;
+      }
+
+      const videos: Array<{
+        videoId: string;
+        title: string;
+        thumbnailUrl?: string;
+        videoUrl: string;
+      }> = [];
+      const seenIds = new Set<string>();
+
+      const endpoints = [
+        `https://www.tiktok.com/embed/@${cleanHandle}`,
+        `https://www.tiktok.com/@${cleanHandle}`,
+      ];
+
+      for (const ep of endpoints) {
+        try {
+          const resp = await fetchWithTimeout(ep, {
+            headers: {
+              'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+              'Accept-Language': 'en-US,en;q=0.9',
+            },
+          });
+          if (!resp.ok) continue;
+          const html = await resp.text();
+          const idMatches =
+            html.match(/\/video\/(\d{17,21})/g) ||
+            html.match(/"id"\s*:\s*"(\d{17,21})"/g) ||
+            [];
+          for (const raw of idMatches) {
+            const digits = raw.replace(/\D/g, '');
+            if (digits.length >= 17 && digits.length <= 21 && !seenIds.has(digits)) {
+              seenIds.add(digits);
+            }
+          }
+        } catch {
+          // ignore endpoint error
+        }
+      }
+
+      const discoveredIds = Array.from(seenIds).slice(0, 18);
+      await Promise.all(
+        discoveredIds.map(async (vid) => {
+          const vUrl = `https://www.tiktok.com/@${cleanHandle}/video/${vid}`;
+          try {
+            const oeRes = await fetchWithTimeout(
+              `https://www.tiktok.com/oembed?url=${encodeURIComponent(vUrl)}`
+            );
+            if (oeRes.ok) {
+              const oe = (await oeRes.json()) as {
+                title?: string;
+                thumbnail_url?: string;
+              };
+              videos.push({
+                videoId: vid,
+                title: oe.title || `Dr. Si Thu Aung (@${cleanHandle}) TikTok Video`,
+                thumbnailUrl: oe.thumbnail_url,
+                videoUrl: vUrl,
+              });
+              return;
+            }
+          } catch {
+            // fallback
+          }
+          videos.push({
+            videoId: vid,
+            title: `Dr. Si Thu Aung (@${cleanHandle}) TikTok Video`,
+            videoUrl: vUrl,
+          });
+        })
+      );
+
+      const payload = {
+        handle: cleanHandle,
+        videos,
+        fetchedAt: Date.now(),
+      };
+      ttFeedCache.set(cleanHandle, payload);
+      res.status(200).json({ ok: true, ...payload });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(200).json({ ok: false, videos: [], message: msg });
+    }
   });
 
   // Hardened /api/sb-proxy reverse proxy with strict SSRF & path validation

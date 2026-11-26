@@ -3,7 +3,7 @@ export interface DeviceAlertPayload {
   title: string;
   body: string;
   courseId?: string;
-  targetTab?: 'stream' | 'attendance' | 'quizzes' | 'book_delivery' | 'private_notes' | 'people';
+  targetTab?: 'stream' | 'attendance' | 'quizzes' | 'book_delivery' | 'library' | 'private_notes' | 'people';
   variant?: 'post' | 'attendance_open' | 'attendance_close' | 'private_note' | 'quiz';
   createdAtLabel?: string;
 }

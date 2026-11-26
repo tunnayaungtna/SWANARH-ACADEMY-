@@ -17,6 +17,8 @@ import {
   AuditLogEntry,
   PrivateNote,
   BookDeliveryRecord,
+  LibraryItem,
+  LibraryChannelConfig,
 } from '../types/classroom';
 import { encryptPassword } from '../utils/passwordCrypto';
 import {
@@ -34,9 +36,12 @@ export const AUDIT_LOG_TTL_MS = 2 * 24 * 60 * 60 * 1000; // 2 days (48 hours) se
 export const COMMENT_TTL_MS = 2 * 24 * 60 * 60 * 1000; // 2 days (48 hours) silent post comment auto-delete window
 export const PRIVATE_NOTE_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days (6 months) retention for Private Notes
 export const BOOK_DELIVERY_TTL_MS = 365 * 24 * 60 * 60 * 1000; // 365 days retention for Book Delivery records
+export const LIBRARY_ITEM_TTL_MS = 3650 * 24 * 60 * 60 * 1000; // 10 years retention for Library items & config
 const AUDIT_LOG_SYSTEM_USER_ID = 'SYSTEM_AUDIT_LOG';
 const PRIVATE_NOTE_SYSTEM_USER_ID = 'SYSTEM_PRIVATE_NOTE';
 const BOOK_DELIVERY_SYSTEM_USER_ID = 'SYSTEM_BOOK_DELIVERY';
+const LIBRARY_ITEM_SYSTEM_USER_ID = 'SYSTEM_LIBRARY_ITEM';
+const LIBRARY_CONFIG_SYSTEM_USER_ID = 'SYSTEM_LIBRARY_CONFIG';
 
 export function resolveCommentTimestampMs(
   comment: { id?: unknown; createdAt?: unknown; createdAtMs?: unknown },
@@ -3376,7 +3381,9 @@ export class SupabaseService {
           query = query
             .neq('user_id', AUDIT_LOG_SYSTEM_USER_ID)
             .neq('user_id', PRIVATE_NOTE_SYSTEM_USER_ID)
-            .neq('user_id', BOOK_DELIVERY_SYSTEM_USER_ID);
+            .neq('user_id', BOOK_DELIVERY_SYSTEM_USER_ID)
+            .neq('user_id', LIBRARY_ITEM_SYSTEM_USER_ID)
+            .neq('user_id', LIBRARY_CONFIG_SYSTEM_USER_ID);
         }
 
         const { data, error } = await query;
@@ -3513,6 +3520,8 @@ export class SupabaseService {
           .neq('user_id', AUDIT_LOG_SYSTEM_USER_ID)
           .neq('user_id', PRIVATE_NOTE_SYSTEM_USER_ID)
           .neq('user_id', BOOK_DELIVERY_SYSTEM_USER_ID)
+          .neq('user_id', LIBRARY_ITEM_SYSTEM_USER_ID)
+          .neq('user_id', LIBRARY_CONFIG_SYSTEM_USER_ID)
           .or(`created_at.lt.${cutoffIso},expires_at.lte.${nowIso}`);
 
         if (error) {
@@ -3596,6 +3605,8 @@ export class SupabaseService {
         .neq('user_id', AUDIT_LOG_SYSTEM_USER_ID)
         .neq('user_id', PRIVATE_NOTE_SYSTEM_USER_ID)
         .neq('user_id', BOOK_DELIVERY_SYSTEM_USER_ID)
+        .neq('user_id', LIBRARY_ITEM_SYSTEM_USER_ID)
+        .neq('user_id', LIBRARY_CONFIG_SYSTEM_USER_ID)
         .eq('post_id', postId);
       if (error && (error.code === '42P01' || error.message?.includes('notifications'))) {
         this.notificationsTableStatus = 'missing';
@@ -4113,6 +4124,168 @@ export class SupabaseService {
       if (!error) {
         this.notifyRealtimePeers('delete', {
           deletedIds: [recordId],
+        });
+      }
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Fetch Digital Library items & channel configurations from Supabase
+   */
+  static async getRemoteLibraryData(options?: {
+    courseId?: string;
+    forceRefresh?: boolean;
+  }): Promise<{ items: LibraryItem[]; configs: LibraryChannelConfig[] } | null> {
+    if (this.notificationsTableStatus === 'missing') {
+      return null;
+    }
+    const courseKey = options?.courseId || 'all';
+    const cacheKey = `library_data:${courseKey}`;
+
+    if (!options?.forceRefresh) {
+      const cached = this.getCachedQuery<{ items: LibraryItem[]; configs: LibraryChannelConfig[] }>(cacheKey);
+      if (cached) return cached;
+    }
+
+    return this.dedupeGet(cacheKey, async () => {
+      try {
+        let query = supabase
+          .from('notifications')
+          .select('id,user_id,course_id,message,created_at')
+          .in('user_id', [LIBRARY_ITEM_SYSTEM_USER_ID, LIBRARY_CONFIG_SYSTEM_USER_ID])
+          .order('created_at', { ascending: false })
+          .limit(600);
+
+        if (options?.courseId) {
+          query = query.eq('course_id', options.courseId);
+        }
+
+        const { data, error } = await query;
+        if (error) {
+          if (error.code === '42P01' || error.message?.includes('notifications')) {
+            this.notificationsTableStatus = 'missing';
+          }
+          return null;
+        }
+        this.notificationsTableStatus = 'available';
+        if (!data) return { items: [], configs: [] };
+
+        const items: LibraryItem[] = [];
+        const configs: LibraryChannelConfig[] = [];
+        for (const row of data) {
+          try {
+            if (row.message && String(row.message).trim().startsWith('{')) {
+              const parsed = JSON.parse(String(row.message));
+              if (row.user_id === LIBRARY_ITEM_SYSTEM_USER_ID && parsed && parsed.id && parsed.courseId) {
+                items.push(parsed as LibraryItem);
+              } else if (row.user_id === LIBRARY_CONFIG_SYSTEM_USER_ID && parsed && parsed.courseId) {
+                configs.push(parsed as LibraryChannelConfig);
+              }
+            }
+          } catch {
+            // ignore malformed JSON
+          }
+        }
+        const res = { items, configs };
+        this.setCachedQuery(cacheKey, res, 5_000);
+        return res;
+      } catch {
+        return null;
+      }
+    });
+  }
+
+  /**
+   * Upsert a Digital Library item to Supabase
+   */
+  static async upsertLibraryItem(item: LibraryItem, silent: boolean = false): Promise<boolean> {
+    if (this.notificationsTableStatus === 'missing') return false;
+    try {
+      this.invalidateClientCache('library_data');
+      const createdMs = item.createdAtMs || Date.now();
+      const expiresMs = createdMs + LIBRARY_ITEM_TTL_MS;
+      const row = {
+        id: item.id,
+        user_id: LIBRARY_ITEM_SYSTEM_USER_ID,
+        course_id: item.courseId,
+        course_code: item.courseCode || null,
+        course_title: item.courseTitle || '',
+        post_id: item.itemType,
+        author_name: item.authorName,
+        author_role: item.authorRole || 'admin',
+        title: `[${item.itemType.toUpperCase()}] ${item.title}`,
+        message: JSON.stringify(item),
+        type: 'post',
+        is_read: false,
+        created_at: new Date(createdMs).toISOString(),
+        expires_at: new Date(expiresMs).toISOString(),
+      };
+      const { error } = await supabase.from('notifications').upsert([row], { onConflict: 'id' });
+      if (error) return false;
+      if (!silent) {
+        this.notifyRealtimePeers('notifs');
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Upsert Digital Library Channel Config for a course to Supabase
+   */
+  static async upsertLibraryChannelConfig(config: LibraryChannelConfig): Promise<boolean> {
+    if (this.notificationsTableStatus === 'missing') return false;
+    try {
+      this.invalidateClientCache('library_data');
+      const nowMs = config.updatedAtMs || Date.now();
+      const expiresMs = nowMs + LIBRARY_ITEM_TTL_MS;
+      const rowId = `libcfg-${config.courseId}`;
+      const row = {
+        id: rowId,
+        user_id: LIBRARY_CONFIG_SYSTEM_USER_ID,
+        course_id: config.courseId,
+        course_code: null,
+        course_title: 'Library Channel Config',
+        post_id: config.courseId,
+        author_name: 'Admin',
+        author_role: 'admin',
+        title: `Library Config (${config.courseId})`,
+        message: JSON.stringify(config),
+        type: 'post',
+        is_read: true,
+        created_at: new Date(nowMs).toISOString(),
+        expires_at: new Date(expiresMs).toISOString(),
+      };
+      const { error } = await supabase.from('notifications').upsert([row], { onConflict: 'id' });
+      if (!error) {
+        this.notifyRealtimePeers('notifs');
+      }
+      return !error;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Delete a Digital Library item from Supabase
+   */
+  static async deleteRemoteLibraryItem(itemId: string): Promise<boolean> {
+    if (this.notificationsTableStatus === 'missing') return false;
+    try {
+      this.invalidateClientCache('library_data');
+      this.ignoredRealtimeDeleteIds.add(itemId);
+      const { error } = await supabase
+        .from('notifications')
+        .delete()
+        .eq('id', itemId)
+        .eq('user_id', LIBRARY_ITEM_SYSTEM_USER_ID);
+      if (!error) {
+        this.notifyRealtimePeers('delete', {
+          deletedIds: [itemId],
         });
       }
       return !error;
@@ -5599,9 +5772,19 @@ export class SupabaseService {
           const cId = String(r.course_id || '');
           const uId = String(r.user_id || '');
           const pId = r.post_id ? String(r.post_id) : '';
-          // Never delete SYSTEM_AUDIT_LOG or SYSTEM_BOOK_DELIVERY rows during orphan notification sweeps
-          if (uId === AUDIT_LOG_SYSTEM_USER_ID || uId === BOOK_DELIVERY_SYSTEM_USER_ID) {
-            if (uId === BOOK_DELIVERY_SYSTEM_USER_ID && (deletedSet.has(id) || (cId && !courseIdSet.has(cId)))) {
+          // Never delete SYSTEM_AUDIT_LOG, SYSTEM_BOOK_DELIVERY, or SYSTEM_LIBRARY_* rows during orphan notification sweeps
+          if (
+            uId === AUDIT_LOG_SYSTEM_USER_ID ||
+            uId === BOOK_DELIVERY_SYSTEM_USER_ID ||
+            uId === LIBRARY_ITEM_SYSTEM_USER_ID ||
+            uId === LIBRARY_CONFIG_SYSTEM_USER_ID
+          ) {
+            if (
+              (uId === BOOK_DELIVERY_SYSTEM_USER_ID ||
+                uId === LIBRARY_ITEM_SYSTEM_USER_ID ||
+                uId === LIBRARY_CONFIG_SYSTEM_USER_ID) &&
+              (deletedSet.has(id) || (cId && !courseIdSet.has(cId)))
+            ) {
               orphanNotifIds.push(id);
             }
             return;

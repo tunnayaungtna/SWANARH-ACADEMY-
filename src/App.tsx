@@ -15,7 +15,9 @@ import { AdminStudentDirectoryModal } from './components/AdminStudentDirectoryMo
 import { SupabaseModal } from './components/SupabaseModal';
 import { AcademyRulesModal } from './components/AcademyRulesModal';
 import { AdminAuditLogModal } from './components/AdminAuditLogModal';
-import { OfficialWebsiteModal, OFFICIAL_ACADEMY_WEBSITE_URL } from './components/OfficialWebsiteModal';
+import { OfficialWebsiteModal } from './components/OfficialWebsiteModal';
+import { LibraryView } from './components/LibraryView';
+import { ClassroomGuideModal } from './components/ClassroomGuideModal';
 import { DictionaryModal } from './components/DictionaryModal';
 import { SelectionDictionaryTrigger } from './components/SelectionDictionaryTrigger';
 import {
@@ -44,8 +46,8 @@ import {
   Check,
   History,
   Globe,
-  ExternalLink,
   BookA,
+  HelpCircle,
   X,
 } from 'lucide-react';
 
@@ -87,6 +89,8 @@ export default function App() {
   const [showRulesModal, setShowRulesModal] = useState(false);
   const [showAuditLogModal, setShowAuditLogModal] = useState(false);
   const [showWebsiteModal, setShowWebsiteModal] = useState(false);
+  const [showLibraryModal, setShowLibraryModal] = useState(false);
+  const [showGuideModal, setShowGuideModal] = useState(false);
   const [showDictionaryModal, setShowDictionaryModal] = useState(false);
   const [dictionaryInitialQuery, setDictionaryInitialQuery] = useState('');
   const [showReorderPanel, setShowReorderPanel] = useState(false);
@@ -95,7 +99,7 @@ export default function App() {
   const [livePushBanner, setLivePushBanner] = useState<DeviceAlertPayload | null>(null);
   const livePushTimerRef = useRef<number | null>(null);
   const [selectedCourseInitialTab, setSelectedCourseInitialTab] = useState<
-    'stream' | 'attendance' | 'quizzes' | 'book_delivery' | 'private_notes' | 'people'
+    'stream' | 'attendance' | 'quizzes' | 'book_delivery' | 'library' | 'private_notes' | 'people'
   >('stream');
 
   // Mobile Back Key step-by-step navigation handlers (outer to inner)
@@ -109,6 +113,8 @@ export default function App() {
   useBackHandler(showRulesModal, () => setShowRulesModal(false));
   useBackHandler(showAuditLogModal, () => setShowAuditLogModal(false));
   useBackHandler(showWebsiteModal, () => setShowWebsiteModal(false));
+  useBackHandler(showLibraryModal, () => setShowLibraryModal(false));
+  useBackHandler(showGuideModal, () => setShowGuideModal(false));
   useBackHandler(showDictionaryModal, () => setShowDictionaryModal(false));
 
   const handleOpenDictionary = (initialWord?: string) => {
@@ -672,6 +678,7 @@ export default function App() {
       | 'attendance'
       | 'quizzes'
       | 'book_delivery'
+      | 'library'
       | 'private_notes'
       | 'people' = 'stream'
   ) => {
@@ -707,6 +714,7 @@ export default function App() {
       | 'attendance'
       | 'quizzes'
       | 'book_delivery'
+      | 'library'
       | 'private_notes'
       | 'people' = 'stream'
   ) => {
@@ -783,6 +791,8 @@ export default function App() {
           onOpenAuditLog={() => setShowAuditLogModal(true)}
           onOpenRules={() => setShowRulesModal(true)}
           onOpenWebsite={() => setShowWebsiteModal(true)}
+          onOpenLibrary={() => setShowLibraryModal(true)}
+          onOpenGuide={() => setShowGuideModal(true)}
           onResetData={handleResetData}
           onNavigateHome={() => setSelectedCourse(null)}
           notifications={notifications}
@@ -996,6 +1006,15 @@ export default function App() {
                     <span className="truncate">စည်းကမ်းချက်များ</span>
                   </button>
 
+                  <button
+                    onClick={() => setShowGuideModal(true)}
+                    className="neu-btn flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2.5 text-amber-800 dark:text-amber-200 text-xs font-extrabold rounded-xl cursor-pointer border border-amber-500/25 sm:flex-1 lg:flex-initial"
+                    title="Classroom အသုံးပြုနည်း (User Guide)"
+                  >
+                    <HelpCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <span className="truncate">📖 Classroom အသုံးပြုနည်း (User Guide)</span>
+                  </button>
+
                   {currentUser.role === 'student' && currentUser.rulesAccepted && (
                     <button
                       type="button"
@@ -1055,40 +1074,68 @@ export default function App() {
               </div>
             </div>
 
-            {/* Official Academy Website Bar — Positioned Directly Above All Managed Classes */}
-            <div className="neu-raised rounded-2xl px-4 sm:px-5 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-emerald-500/20">
-              <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm text-slate-700 dark:text-slate-200 font-semibold min-w-0">
-                <div className="w-7 h-7 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shrink-0">
-                  <Globe className="w-4 h-4" />
+            {/* Side-by-Side Premium Hub: စွမ်းအား Website & Library စာကြည့်တိုက် (No New Tab Button) */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+              {/* 1. စွမ်းအားသင်တန်း တရားဝင် ဝက်ဘ်ဆိုဒ် (Official Website) */}
+              <div
+                onClick={() => setShowWebsiteModal(true)}
+                className="neu-raised rounded-2xl p-4 sm:px-5 sm:py-4 flex items-center justify-between gap-3.5 border border-emerald-500/25 hover:border-emerald-500/50 transition-all cursor-pointer group"
+              >
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform">
+                    <Globe className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-slate-100 truncate">
+                      စွမ်းအား Website (Official Website)
+                    </h3>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                      www.swanarhacademy.com · သင်တန်းအချက်အလက်များ တိုက်ရိုက်ကြည့်ရန်
+                    </p>
+                  </div>
                 </div>
-                <span>စွမ်းအားသင်တန်း တရားဝင် ဝက်ဘ်ဆိုဒ် (Official Website):</span>
-                <a
-                  href={OFFICIAL_ACADEMY_WEBSITE_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-bold text-emerald-700 dark:text-emerald-400 hover:underline font-mono truncate"
-                >
-                  www.swanarhacademy.com
-                </a>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
-                  onClick={() => setShowWebsiteModal(true)}
-                  className="flex-1 sm:flex-initial justify-center px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowWebsiteModal(true);
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-xs"
                 >
                   <Globe className="w-3.5 h-3.5 shrink-0" />
-                  <span>App ထဲတွင် ကြည့်ရန်</span>
+                  <span>Website ဖွင့်ရန်</span>
                 </button>
-                <a
-                  href={OFFICIAL_ACADEMY_WEBSITE_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex-1 sm:flex-initial justify-center neu-btn px-3.5 py-2 rounded-xl text-slate-700 dark:text-slate-200 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+              </div>
+
+              {/* 2. စွမ်းအား ဒစ်ဂျစ်တယ် စာကြည့်တိုက် (Grand Digital Library) */}
+              <div
+                onClick={() => setShowLibraryModal(true)}
+                className="neu-raised rounded-2xl p-4 sm:px-5 sm:py-4 flex items-center justify-between gap-3.5 border border-amber-500/30 hover:border-amber-500/60 transition-all cursor-pointer group"
+              >
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-amber-500 to-indigo-700 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform">
+                    <BookOpen className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-slate-100 truncate">
+                      Library စာကြည့်တိုက် (Digital Library)
+                    </h3>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                      eBooks · စာရှည်မှတ်စုများ · YouTube & TikTok ဗီဒီယိုစာကြည့်တိုက်
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowLibraryModal(true);
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-xs"
                 >
-                  <span>Tab အသစ်ဖြင့် ဖွင့်ရန်</span>
-                  <ExternalLink className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                </a>
+                  <BookOpen className="w-3.5 h-3.5 shrink-0" />
+                  <span>စာကြည့်တိုက် ဖွင့်ရန်</span>
+                </button>
               </div>
             </div>
 
@@ -1419,6 +1466,36 @@ export default function App() {
           onClose={() => setShowWebsiteModal(false)}
         />
 
+        {/* Standalone Academy-Wide Digital Library Modal (Opened alongside Official Website) */}
+        {showLibraryModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/75 backdrop-blur-sm animate-fade-in">
+            <div className="relative w-full max-w-6xl h-[92dvh] neu-canvas rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col">
+              <div className="px-4 sm:px-6 py-3 border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-3 shrink-0">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <BookOpen className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                  <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white truncate">
+                    Swanarh Academy — Library စာကြည့်တိုက် (eBooks · Notes · YouTube · TikTok)
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowLibraryModal(false)}
+                  className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-extrabold cursor-pointer shrink-0"
+                >
+                  ✕ ပိတ်မည်
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-3 sm:p-6">
+                <LibraryView
+                  course={selectedCourse || courses[0]}
+                  currentUser={currentUser}
+                  onRefresh={refreshData}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Cross-Device Live Push Notification Banner (Phone, Tablet & Computer Browser) */}
         {livePushBanner && (
           <div className="fixed top-3 right-3 left-3 sm:left-auto sm:w-96 z-[80] animate-in fade-in slide-in-from-top-3 duration-200">
@@ -1519,6 +1596,15 @@ export default function App() {
             isOpen={showDictionaryModal}
             onClose={() => setShowDictionaryModal(false)}
             initialQuery={dictionaryInitialQuery}
+          />
+        )}
+
+        {/* Classroom User Guide Modal (for Both Students & Teachers) */}
+        {showGuideModal && (
+          <ClassroomGuideModal
+            isOpen={showGuideModal}
+            onClose={() => setShowGuideModal(false)}
+            currentUser={currentUser}
           />
         )}
 

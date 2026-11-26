@@ -689,6 +689,9 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
     lines.push(
       `၃။ သင်တန်းမှ ပထမဆုံးပေးသော Password ကို Classroom ထဲရောက်ပါက မိမိအသုံးပြုမည့် Password ကို ပြန်ချိန်းပြီးမှ သုံးပါ။`
     );
+    lines.push(
+      `၄။ 📖 Classroom အသုံးပြုနည်း (User Guide) ဖတ်ရှုရန် - အကောင့်ဝင်ပြီးနောက် အပေါ်ထောင့်ရှိ Menu (သို့မဟုတ် ပင်မစာမျက်နှာ အပေါ်တန်း) မှ "📖 Classroom အသုံးပြုနည်း (User Guide)" ကိုနှိပ်၍ Attendance နှိပ်နည်း၊ သီးသန့်စာပို့နည်း၊ Exam ဖြေနည်း နှင့် Library စာကြည့်တိုက် အသုံးပြုနည်းများကို အသေးစိတ် ဝင်ရောက်ဖတ်ရှုနိုင်ပါသည်။`
+    );
     lines.push(`━━━━━━━━━━━━━━━━━━━━`);
     return lines.join('\n');
   }
@@ -2245,11 +2248,14 @@ export const AdminStudentDirectoryModal: React.FC<AdminStudentDirectoryModalProp
                   <div>
                     ၃။ သင်တန်းမှ ပထမဆုံးပေးသော Password ကို Classroom ထဲရောက်ပါက မိမိအသုံးပြုမည့် Password ကို ပြန်ချိန်းပြီးမှ သုံးပါ။
                   </div>
+                  <div className="pt-0.5 font-semibold text-indigo-800 dark:text-indigo-300">
+                    ၄။ 📖 Classroom အသုံးပြုနည်း (User Guide) ဖတ်ရှုရန် - အကောင့်ဝင်ပြီးနောက် အပေါ်ထောင့်ရှိ Menu (သို့မဟုတ် ပင်မစာမျက်နှာ အပေါ်တန်း) မှ &quot;📖 Classroom အသုံးပြုနည်း (User Guide)&quot; ကိုနှိပ်၍ Attendance နှိပ်နည်း၊ သီးသန့်စာပို့နည်း၊ Exam ဖြေနည်း နှင့် Library စာကြည့်တိုက် အသုံးပြုနည်းများကို အသေးစိတ် ဝင်ရောက်ဖတ်ရှုနိုင်ပါသည်။
+                  </div>
                 </div>
 
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-0.5">
                   <span className="text-[11px] text-slate-600 dark:text-slate-300">
-                    📋 Copy နှိပ်ပါက <strong>Login Link, အမည်, Username, Password နှင့် အထက်ပါ လမ်းညွှန်ချက် (၃) ချက်</strong> အားလုံး တစ်ခါတည်း ကူးယူပေးပါမည်။
+                    📋 Copy နှိပ်ပါက <strong>Login Link, အမည်, Username, Password နှင့် အသုံးပြုနည်း လမ်းညွှန်ဖတ်ရှုပုံ အပါအဝင် အချက် (၄) ချက်</strong> အားလုံး တစ်ခါတည်း ကူးယူပေးပါမည်။
                   </span>
                   <button
                     type="button"

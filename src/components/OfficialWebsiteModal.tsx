@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { AcademyLogo } from './AcademyLogo';
-import { Globe, ExternalLink, RotateCw, Copy, Check, X } from 'lucide-react';
+import { Globe, RotateCw, Copy, Check, X } from 'lucide-react';
 
 export const OFFICIAL_ACADEMY_WEBSITE_URL = 'https://www.swanarhacademy.com/';
 const OFFICIAL_ORIGIN = 'https://www.swanarhacademy.com';
@@ -88,8 +88,9 @@ function buildPlayableSrcDoc(rawHtml: string, patchedBundleJs?: string): string 
             return ORIGIN + cur.pathname + cur.search + cur.hash;
           },
           set href(val) {
-            if (typeof val === "string" && (val.indexOf("tel:") === 0 || val.indexOf("mailto:") === 0 || val.indexOf("http") === 0)) {
-              window.open(val, "_blank", "noopener,noreferrer");
+            if (typeof val === "string" && val.indexOf(ORIGIN) === 0) {
+              virtualHistory.pushState({ idx: currentIndex + 1 }, "", val);
+              window.dispatchEvent(new PopStateEvent("popstate", { state: virtualHistory.state }));
             }
           },
           origin: ORIGIN,
@@ -107,10 +108,6 @@ function buildPlayableSrcDoc(rawHtml: string, patchedBundleJs?: string): string 
             return historyStack[currentIndex].hash;
           },
           assign: function(url) {
-            if (typeof url === "string" && (url.indexOf("http") === 0 && url.indexOf(ORIGIN) !== 0)) {
-              window.open(url, "_blank", "noopener,noreferrer");
-              return;
-            }
             virtualHistory.pushState({ idx: currentIndex + 1 }, "", url);
             window.dispatchEvent(new PopStateEvent("popstate", { state: virtualHistory.state }));
           },
@@ -374,17 +371,6 @@ export const OfficialWebsiteModal: React.FC<OfficialWebsiteModalProps> = ({
               )}
             </button>
 
-            <a
-              href={OFFICIAL_ACADEMY_WEBSITE_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] sm:text-xs font-bold shadow-xs transition-colors cursor-pointer"
-              title="Browser Tab အသစ်ဖြင့် ဖွင့်ကြည့်ရန်"
-            >
-              <span>Tab အသစ်ဖြင့် ဖွင့်ရန်</span>
-              <ExternalLink className="w-3.5 h-3.5 shrink-0" />
-            </a>
-
             <button
               type="button"
               onClick={onClose}
@@ -425,20 +411,11 @@ export const OfficialWebsiteModal: React.FC<OfficialWebsiteModalProps> = ({
                 <button
                   type="button"
                   onClick={handleReload}
-                  className="px-4 py-2 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer"
                 >
                   <RotateCw className="w-3.5 h-3.5" />
                   <span>ပြန်လည်ဖွင့်ရန် (Retry)</span>
                 </button>
-                <a
-                  href={OFFICIAL_ACADEMY_WEBSITE_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs inline-flex items-center gap-1.5 shadow-sm cursor-pointer"
-                >
-                  <span>Browser Tab အသစ်ဖြင့် ဖွင့်ရန်</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </a>
               </div>
             </div>
           ) : (
@@ -448,6 +425,7 @@ export const OfficialWebsiteModal: React.FC<OfficialWebsiteModalProps> = ({
                 srcDoc={srcDoc}
                 title="SwanArh Academy Official Website"
                 onLoad={() => setIsLoading(false)}
+                sandbox="allow-scripts allow-same-origin"
                 className="w-full h-full border-0 bg-white"
                 allow="fullscreen; clipboard-write"
               />
@@ -456,19 +434,10 @@ export const OfficialWebsiteModal: React.FC<OfficialWebsiteModalProps> = ({
         </div>
 
         {/* Bottom Helper Bar */}
-        <div className="px-4 py-2 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-slate-400 shrink-0">
+        <div className="px-4 py-2 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 flex items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-slate-400 shrink-0">
           <span>
-            💡 Classroom App ထဲမှ ထွက်စရာမလိုဘဲ သင်တန်း Website ရှိ Courses, Gallery, About, Contact စာမျက်နှာအားလုံးကို တိုက်ရိုက် ကြည့်ရှုနိုင်ပါသည်။
+            Classroom App ထဲမှ ထွက်စရာမလိုဘဲ သင်တန်း Website ရှိ Courses, Gallery, About, Contact စာမျက်နှာအားလုံးကို တိုက်ရိုက် ကြည့်ရှုနိုင်ပါသည်။
           </span>
-          <a
-            href={OFFICIAL_ACADEMY_WEBSITE_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-bold text-emerald-700 dark:text-emerald-400 hover:underline inline-flex items-center gap-1"
-          >
-            <span>မျက်နှာပြင်အပြည့် Browser ဖြင့်ဖွင့်ရန် (www.swanarhacademy.com)</span>
-            <ExternalLink className="w-3 h-3" />
-          </a>
         </div>
       </div>
     </div>

@@ -365,7 +365,7 @@ export interface NotificationItem {
   title: string;
   message: string;
   type: 'post' | 'grade' | 'quiz' | 'certificate' | 'private_note';
-  targetTab?: 'stream' | 'attendance' | 'quizzes' | 'people' | 'private_notes' | 'book_delivery';
+  targetTab?: 'stream' | 'attendance' | 'quizzes' | 'people' | 'private_notes' | 'book_delivery' | 'library';
   privateNoteId?: string;
   isRead: boolean;
   createdAt: string;
@@ -400,6 +400,61 @@ export interface AuditLogEntry {
   createdAt: string;
   createdAtMs: number;
 }
+
+export type LibraryItemType = 'ebook' | 'long_note' | 'youtube' | 'tiktok';
+
+export interface LibraryAccessRules {
+  enabled: boolean;
+  allowedCourseIds?: string[]; // If non-empty, ONLY students enrolled in at least one of these classes can see this item
+  blockedCourseIds?: string[]; // If non-empty, students enrolled in any of these classes are blocked from seeing this item
+  minAttendancePercentage?: number; // e.g., 80 means students with <= 79% Roll Call are restricted
+  requireAllExamsSubmitted?: boolean; // Must submit all course exams (itemType !== 'data_form')
+  requireAllExamsPassed?: boolean; // Must pass all course exams
+  requireAllDataFormsSubmitted?: boolean; // Must submit all course Student Data Forms (itemType === 'data_form')
+  requiredQuizIds?: string[]; // Optional specific exam or data form IDs required
+  hideWhenRestricted?: boolean; // true = completely hidden from ineligible students ("မမြင်ရအောင် လုံးဝဖျောက်ထားမည်"), false = show locked preview with unlock checklist
+}
+
+export interface LibraryItem {
+  id: string;
+  courseId: string;
+  courseCode?: string;
+  courseTitle?: string;
+  itemType: LibraryItemType;
+  title: string;
+  subtitle?: string;
+  category?: string;
+  description?: string;
+  content?: string; // Full text/markdown for long_note, or summary for ebook/video
+  fileUrl?: string; // PDF / eBook URL or Data URL or Google Drive / Direct link
+  fileName?: string;
+  fileSize?: string;
+  coverImage?: string;
+  videoUrl?: string; // Original YouTube or TikTok URL
+  embedId?: string; // Extracted YouTube Video ID or TikTok Video ID
+  channelHandle?: string; // e.g. @swanarhacademy or @dr..si.thu.aung.s
+  authorName: string;
+  authorRole: UserRole;
+  isPinned?: boolean;
+  watermarkProtected?: boolean; // Overlays student name & username to prevent leaks
+  accessRules: LibraryAccessRules;
+  createdAt: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface LibraryChannelConfig {
+  courseId: string;
+  youtubeChannelUrl: string;
+  youtubeHandle: string;
+  youtubeChannelId?: string; // Optional UC... ID for direct RSS & uploads playlist
+  tiktokProfileUrl: string;
+  tiktokHandle: string;
+  autoEmbedLiveFeeds: boolean; // Automatically show live TikTok creator feed & YouTube channel feed at top of video tabs
+  defaultEbookNoteAccessRules: LibraryAccessRules; // Default gating rules applied to new eBooks & Long Notes
+  updatedAtMs: number;
+}
+
 
 
 

@@ -26,6 +26,10 @@ import {
   BookDeliveryRecord,
   BookDeliveryStatus,
   BookDeliverySenderConfig,
+  LibraryItem,
+  LibraryItemType,
+  LibraryAccessRules,
+  LibraryChannelConfig,
 } from '../types/classroom';
 import {
   SupabaseService,
@@ -100,6 +104,8 @@ const STORAGE_KEYS = {
   STUDENT_EXAM_SESSIONS: 'classroom_student_exam_sessions_v1',
   BOOK_DELIVERIES: 'classroom_book_deliveries_v1',
   BOOK_DELIVERY_SENDER: 'classroom_book_delivery_sender_v1',
+  LIBRARY_ITEMS: 'classroom_library_items_v1',
+  LIBRARY_CHANNEL_CONFIGS: 'classroom_library_channel_configs_v1',
 };
 
 // Rate limiting in-memory / storage tracker
@@ -10751,6 +10757,709 @@ export class ClassroomDB {
       if (changed) {
         this.setItem(STORAGE_KEYS.BOOK_DELIVERIES, Array.from(mergedMap.values()));
       }
+      return changed;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Default Library Channel Config for a course (pre-configured with @swanarhacademy YouTube & @dr..si.thu.aung.s TikTok)
+   */
+  static getDefaultLibraryChannelConfig(courseId: string): LibraryChannelConfig {
+    return {
+      courseId,
+      youtubeChannelUrl: 'https://youtube.com/@swanarhacademy?si=KsKCGtp9Y-enjKnA',
+      youtubeHandle: '@swanarhacademy',
+      youtubeChannelId: '',
+      tiktokProfileUrl: 'https://www.tiktok.com/@dr..si.thu.aung.s?_r=1&_t=ZS-9BidC4ArLuv',
+      tiktokHandle: '@dr..si.thu.aung.s',
+      autoEmbedLiveFeeds: true,
+      defaultEbookNoteAccessRules: {
+        enabled: true,
+        minAttendancePercentage: 80, // 79% အောက် ကျောင်းသားများအား ကန့်သတ်မည်
+        requireAllExamsSubmitted: true,
+        requireAllExamsPassed: false,
+        requireAllDataFormsSubmitted: true,
+        hideWhenRestricted: true, // မကိုက်ညီသူများအား မမြင်ရအောင် ဖျောက်ထားမည်
+      },
+      updatedAtMs: 0,
+    };
+  }
+
+  static getLibraryChannelConfig(courseId: string): LibraryChannelConfig {
+    const all = this.getItem<Record<string, LibraryChannelConfig>>(
+      STORAGE_KEYS.LIBRARY_CHANNEL_CONFIGS,
+      {}
+    );
+    const saved = all[courseId];
+    const def = this.getDefaultLibraryChannelConfig(courseId);
+    if (!saved) return def;
+    return {
+      ...def,
+      ...saved,
+      courseId,
+      defaultEbookNoteAccessRules: {
+        ...def.defaultEbookNoteAccessRules,
+        ...(saved.defaultEbookNoteAccessRules || {}),
+      },
+    };
+  }
+
+  static saveLibraryChannelConfig(
+    courseId: string,
+    patch: Partial<LibraryChannelConfig>,
+    actor: User
+  ): LibraryChannelConfig {
+    if (actor.role !== 'admin' && actor.role !== 'co_admin') {
+      return this.getLibraryChannelConfig(courseId);
+    }
+    const all = {
+      ...this.getItem<Record<string, LibraryChannelConfig>>(
+        STORAGE_KEYS.LIBRARY_CHANNEL_CONFIGS,
+        {}
+      ),
+    };
+    const current = this.getLibraryChannelConfig(courseId);
+    const nextConfig: LibraryChannelConfig = {
+      ...current,
+      ...patch,
+      courseId,
+      defaultEbookNoteAccessRules: {
+        ...current.defaultEbookNoteAccessRules,
+        ...(patch.defaultEbookNoteAccessRules || {}),
+      },
+      updatedAtMs: Date.now(),
+    };
+    all[courseId] = nextConfig;
+    this.setItem(STORAGE_KEYS.LIBRARY_CHANNEL_CONFIGS, all);
+    this.markLocalWrite(`libcfg-${courseId}`);
+
+    try {
+      SupabaseService.upsertLibraryChannelConfig(nextConfig).catch(() => {});
+    } catch {
+      // ignore
+    }
+    return nextConfig;
+  }
+
+  private static buildDefaultSeedLibraryItems(courseId: string): LibraryItem[] {
+    const defRules: LibraryAccessRules = {
+      enabled: true,
+      allowedCourseIds: [],
+      blockedCourseIds: [],
+      minAttendancePercentage: 80,
+      requireAllExamsSubmitted: true,
+      requireAllExamsPassed: false,
+      requireAllDataFormsSubmitted: true,
+      hideWhenRestricted: true,
+    };
+    const baseMs = 1732500000000;
+    return [
+      {
+        id: `lib-seed-note-${courseId}`,
+        courseId,
+        itemType: 'long_note',
+        title: 'သင်တန်း အထူးမှတ်စုနှင့် လေ့လာရန် အနှစ်ချုပ် (Master Study Note)',
+        subtitle: 'Swanarh Academy • Special Long-Form Lecture Note',
+        category: 'အထူးမှတ်စု (Long Note)',
+        description:
+          'Roll Call 80% နှင့်အထက် ပြည့်မီပြီး Exam နှင့် အချက်အလက် Form ဖြည့်သွင်းပြီးသော ကျောင်းသားများအတွက် အထူးသင်ခန်းစာ စာရှည်မှတ်စု ဖြစ်ပါသည်။',
+        content: `# Swanarh Academy — အထူးသင်ခန်းစာ စာရှည်မှတ်စု (Long-Form Study Note)
+
+ဤအထူးမှတ်စုသည် သင်တန်းတွင် ပုံမှန်တက်ရောက်ပြီး (**Roll Call 80% နှင့်အထက်** ရှိသူများ)၊ **Exam** နှင့် **ကျောင်းသားအချက်အလက် Form** အပြည့်အစုံ ဖြည့်သွင်းထားသော ကျောင်းသား/သူများအတွက်သာ သီးသန့်ဖတ်ရှုနိုင်ရန် စီစဉ်ထားခြင်း ဖြစ်ပါသည်။
+
+---
+
+## ၁။ သင်ခန်းစာ အဓိက အနှစ်ချုပ် (Core Takeaways)
+သင်တန်းကာလအတွင်း လေ့လာခဲ့သမျှ သဘောတရားများကို လက်တွေ့အသုံးချနိုင်ရန် အောက်ပါ အချက် (၃) ချက်ကို အဓိက မှတ်သားထားရန် လိုအပ်ပါသည် —
+
+1. **အခြေခံ သဘောတရားများကို စနစ်တကျ နားလည်ခြင်း (Foundation Mastery)**
+   သင်ခန်းစာတစ်ခုချင်းစီ၏ အဓိက သော့ချက်များကို အလွတ်ကျက်မှတ်ခြင်းထက် သဘောတရားကို နားလည်အောင် လေ့ကျင့်ပါ။
+2. **နေ့စဉ် လက်တွေ့လေ့ကျင့်ခြင်း (Daily Practice & Application)**
+   သင်တန်းမှ ပေးအပ်သော လေ့ကျင့်ခန်းများနှင့် စာမေးပွဲမေးခွန်းများကို အချိန်မှန် ပြန်လည်လေ့ကျင့်ပါ။
+3. **သံသယရှိသည့် အချက်များကို ချက်ချင်းမေးမြန်းခြင်း (Active Feedback Loop)**
+   နားမလည်သည့် အပိုင်းများရှိပါက Classroom ၏ သီးသန့်စာ (Private Notes) မှတစ်ဆင့် ဆရာများထံ တိုက်ရိုက်မေးမြန်းနိုင်ပါသည်။
+
+---
+
+## ၂။ စာဖတ်ရှုရာတွင် အသုံးပြုနိုင်သော စနစ်များ (Smart Reader Features)
+* **Font Size ချိန်ညှိခြင်း (A- / A+)**: မိမိဖုန်း သို့မဟုတ် ကွန်ပျူတာနှင့် အဆင်ပြေဆုံး စာလုံးအရွယ်အစားကို ချိန်ညှိဖတ်ရှုနိုင်ပါသည်။
+* **Reading Theme ပြောင်းလဲခြင်း**: မျက်စိမညောင်းစေရန် Light, Sepia (စာအုပ်ဝါရောင်), Dark Mode တို့ကို ရွေးချယ်နိုင်ပါသည်။
+* **Official Classroom Logo Watermark**: စာဖတ်နေစဉ် Swanarh Academy ၏ တရားဝင် Classroom Logo နှင့် ကျောင်းသားအမည် Watermark ပါဝင်ပါသည်။`,
+        authorName: 'Dr. Si Thu Aung (Swanarh Academy)',
+        authorRole: 'admin',
+        isPinned: true,
+        watermarkProtected: true,
+        accessRules: defRules,
+        createdAt: 'Nov 25, 2026',
+        createdAtMs: baseMs + 3000,
+        updatedAtMs: baseMs + 3000,
+      },
+      {
+        id: `lib-seed-ebook-${courseId}`,
+        courseId,
+        itemType: 'ebook',
+        title: 'Swanarh Academy — သင်တန်းလက်စွဲ eBook (Official Course eBook)',
+        subtitle: 'Dr. Si Thu Aung • Swanarh Academy Digital Library',
+        category: 'သင်တန်းစာအုပ် (eBook)',
+        description:
+          'သင်တန်းသားများ အချိန်မရွေး ပြန်လည်ဖတ်ရှုလေ့လာနိုင်သော တရားဝင် eBook နှင့် အထူးရည်ညွှန်းစာအုပ် ဖြစ်ပါသည်။ (သတ်မှတ်ထားသော အတန်း၊ Roll Call 80% နှင့် Exam/Form ပြည့်မီသူများသာ မြင်တွေ့ဖတ်ရှုနိုင်ပါသည်)',
+        content: `# Swanarh Academy — သင်တန်းလက်စွဲ eBook
+
+ဤ eBook တွင် သင်တန်းတစ်ခုလုံး၏ အခန်းအလိုက် သင်ခန်းစာများ၊ ပုံစံများနှင့် အထူးမှတ်သားဖွယ်ရာ လမ်းညွှန်ချက်များကို စုစည်းဖော်ပြထားပါသည်။
+
+## အခန်း (၁) — မိတ်ဆက်နှင့် အခြေခံလမ်းညွှန်
+သင်တန်း၏ ရည်ရွယ်ချက်နှင့် လေ့လာမှုပုံစံများကို စနစ်တကျ ဖတ်ရှုနိုင်ပါသည်။ ဆရာများမှ PDF ဖိုင် သို့မဟုတ် Google Drive eBook Link များကိုလည်း ဤနေရာတွင် တိုက်ရိုက်ထည့်သွင်းပေးထားနိုင်ပြီး ကျောင်းသားများမှ App အတွင်း၌ပင် တိုက်ရိုက်ဖတ်ရှုနိုင်ပါသည်။`,
+        fileName: 'Swanarh_Academy_Course_Handbook.pdf',
+        fileSize: 'Digital Edition',
+        authorName: 'Dr. Si Thu Aung (Swanarh Academy)',
+        authorRole: 'admin',
+        isPinned: true,
+        watermarkProtected: true,
+        accessRules: defRules,
+        createdAt: 'Nov 25, 2026',
+        createdAtMs: baseMs + 2000,
+        updatedAtMs: baseMs + 2000,
+      },
+    ];
+  }
+
+  static getLibraryItems(courseId?: string): LibraryItem[] {
+    const deletedSet = new Set(this.getDeletedIds());
+    // Also filter out legacy seed YouTube/TikTok channel placeholder cards so they never show
+    const stored = this.getItem<LibraryItem[]>(STORAGE_KEYS.LIBRARY_ITEMS, []).filter(
+      (item) =>
+        item &&
+        item.id &&
+        !deletedSet.has(item.id) &&
+        !item.id.startsWith('lib-seed-yt-') &&
+        !item.id.startsWith('lib-seed-tt-')
+    );
+
+    const targetKey = courseId || 'GLOBAL_LIBRARY';
+    const courseItems = courseId
+      ? stored.filter((item) => item.courseId === courseId || item.courseId === 'GLOBAL_LIBRARY')
+      : stored;
+
+    const hasAnyOrDeletedSeed =
+      courseItems.length > 0 ||
+      deletedSet.has(`lib-seed-note-${targetKey}`) ||
+      deletedSet.has(`lib-seed-ebook-${targetKey}`);
+
+    if (!hasAnyOrDeletedSeed) {
+      const seeds = this.buildDefaultSeedLibraryItems(targetKey).filter(
+        (s) => !deletedSet.has(s.id)
+      );
+      const combined = [...seeds, ...stored];
+      this.setItem(STORAGE_KEYS.LIBRARY_ITEMS, combined);
+      return seeds;
+    }
+
+    return [...courseItems].sort((a, b) => {
+      if (Boolean(a.isPinned) !== Boolean(b.isPinned)) {
+        return a.isPinned ? -1 : 1;
+      }
+      return (b.createdAtMs || 0) - (a.createdAtMs || 0);
+    });
+  }
+
+  /**
+   * Evaluates whether a student meets the access rules for a given LibraryItem (or custom LibraryAccessRules).
+   * Checks:
+   * 1. Allowed Classes (allowedCourseIds) & Blocked Classes (blockedCourseIds)
+   * 2. Roll Call / Attendance percentage across the relevant class(es) (e.g. >= 80%, blocking <= 79%)
+   * 3. Course Exam completion / passing (quizzes where itemType !== 'data_form')
+   * 4. Student Data Form submission (quizzes where itemType === 'data_form')
+   */
+  static evaluateLibraryItemAccess(
+    courseId: string,
+    student: User,
+    rules?: LibraryAccessRules,
+    itemType?: LibraryItemType
+  ): {
+    allowed: boolean;
+    hideCompletely: boolean;
+    classMet: boolean;
+    attendancePct: number;
+    requiredAttendancePct: number;
+    attendanceMet: boolean;
+    totalExams: number;
+    submittedExams: number;
+    passedExams: number;
+    examsMet: boolean;
+    totalDataForms: number;
+    submittedDataForms: number;
+    dataFormsMet: boolean;
+    missingReasons: string[];
+  } {
+    const allCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, INITIAL_COURSES);
+    const studentCourses = allCourses.filter((c) =>
+      Array.isArray(c.enrolledStudentIds) && c.enrolledStudentIds.includes(student.id)
+    );
+    const studentCourseIdSet = new Set(studentCourses.map((c) => c.id));
+
+    // Determine which course(s) to evaluate Roll Call, Exam, and Data Form against
+    let evaluationCourseIds: string[] = [];
+    if (rules?.allowedCourseIds && rules.allowedCourseIds.length > 0) {
+      const matchingAllowed = rules.allowedCourseIds.filter((id) => studentCourseIdSet.has(id));
+      evaluationCourseIds =
+        matchingAllowed.length > 0 ? matchingAllowed : rules.allowedCourseIds;
+    } else if (courseId && courseId !== 'GLOBAL_LIBRARY') {
+      evaluationCourseIds = [courseId];
+    } else if (studentCourses.length > 0) {
+      evaluationCourseIds = studentCourses.map((c) => c.id);
+    } else if (allCourses.length > 0) {
+      evaluationCourseIds = [allCourses[0].id];
+    }
+
+    // Aggregate Attendance %, Exams, and Data Forms across the evaluation courses
+    let maxAttendancePct = 0;
+    let totalExams = 0;
+    let submittedExams = 0;
+    let passedExams = 0;
+    let totalDataForms = 0;
+    let submittedDataForms = 0;
+
+    if (evaluationCourseIds.length === 0) {
+      maxAttendancePct = 0;
+    } else {
+      for (const cid of evaluationCourseIds) {
+        const attStats = this.getStudentAttendanceStats(cid, student.id);
+        if (attStats.percentage > maxAttendancePct) {
+          maxAttendancePct = attStats.percentage;
+        }
+        const quizzes = this.getQuizzes(cid);
+        const cExams = quizzes.filter((q) => q.itemType !== 'data_form');
+        const cForms = quizzes.filter((q) => q.itemType === 'data_form');
+
+        totalExams += cExams.length;
+        for (const exam of cExams) {
+          const subs = this.getQuizSubmissions(exam.id, student.id);
+          if (subs.length > 0) {
+            submittedExams++;
+            if (subs.some((s) => s.passed)) {
+              passedExams++;
+            }
+          }
+        }
+
+        totalDataForms += cForms.length;
+        for (const form of cForms) {
+          const subs = this.getQuizSubmissions(form.id, student.id);
+          if (subs.length > 0) {
+            submittedDataForms++;
+          }
+        }
+      }
+    }
+
+    // Staff (Admin / Co-Admin) or YouTube/TikTok videos always have full unrestricted access for every student
+    if (
+      student.role === 'admin' ||
+      student.role === 'co_admin' ||
+      itemType === 'youtube' ||
+      itemType === 'tiktok'
+    ) {
+      return {
+        allowed: true,
+        hideCompletely: false,
+        classMet: true,
+        attendancePct: student.role === 'admin' || student.role === 'co_admin' ? 100 : maxAttendancePct,
+        requiredAttendancePct: itemType === 'youtube' || itemType === 'tiktok' ? 0 : rules?.minAttendancePercentage || 0,
+        attendanceMet: true,
+        totalExams,
+        submittedExams,
+        passedExams,
+        examsMet: true,
+        totalDataForms,
+        submittedDataForms,
+        dataFormsMet: true,
+        missingReasons: [],
+      };
+    }
+
+    const missingReasons: string[] = [];
+    let classMet = true;
+
+    // Check Blocked Classes first (regardless of whether rules.enabled is true if blockedCourseIds is set)
+    if (rules?.blockedCourseIds && rules.blockedCourseIds.length > 0) {
+      const isEnrolledInBlocked = rules.blockedCourseIds.some((id) => studentCourseIdSet.has(id));
+      if (isEnrolledInBlocked) {
+        classMet = false;
+        missingReasons.push('သင်၏ အတန်းအတွက် ဤစာအုပ်/မှတ်စုကို ကန့်သတ်ဖျောက်ထားပါသည်');
+      }
+    }
+
+    // Check Allowed Classes
+    if (rules?.allowedCourseIds && rules.allowedCourseIds.length > 0) {
+      const isEnrolledInAllowed = rules.allowedCourseIds.some((id) => studentCourseIdSet.has(id));
+      if (!isEnrolledInAllowed) {
+        classMet = false;
+        const allowedNames = allCourses
+          .filter((c) => rules.allowedCourseIds?.includes(c.id))
+          .map((c) => c.code || c.title)
+          .join(', ');
+        missingReasons.push(
+          `သတ်မှတ်ထားသော အတန်း (${allowedNames || 'Selected Class'}) မှ ကျောင်းသားများသာ မြင်တွေ့ဖတ်ရှုခွင့်ရှိပါသည်`
+        );
+      }
+    }
+
+    if (!rules || !rules.enabled) {
+      const allowedIfOnlyClassCheck = classMet;
+      return {
+        allowed: allowedIfOnlyClassCheck,
+        hideCompletely: !allowedIfOnlyClassCheck,
+        classMet,
+        attendancePct: maxAttendancePct,
+        requiredAttendancePct: 0,
+        attendanceMet: true,
+        totalExams,
+        submittedExams,
+        passedExams,
+        examsMet: true,
+        totalDataForms,
+        submittedDataForms,
+        dataFormsMet: true,
+        missingReasons,
+      };
+    }
+
+    // 1. Check Roll Call % requirement
+    const reqAtt = Number(rules.minAttendancePercentage || 0);
+    const attendanceMet = reqAtt <= 0 || maxAttendancePct >= reqAtt;
+    if (!attendanceMet) {
+      missingReasons.push(
+        `Roll Call အနည်းဆုံး ${reqAtt}% ပြည့်မီရန် လိုအပ်ပါသည် (လက်ရှိ Roll Call: ${maxAttendancePct}%)`
+      );
+    }
+
+    // 2. Check Exam completion / passing
+    let examsMet = true;
+    if (rules.requireAllExamsPassed && totalExams > 0) {
+      if (passedExams < totalExams) {
+        examsMet = false;
+        missingReasons.push(
+          `Exam စာမေးပွဲ အောင်မြင်ပြီးသူ ဖြစ်ရပါမည် (${passedExams}/${totalExams} ခု အောင်မြင်ထားသည်)`
+        );
+      }
+    } else if (rules.requireAllExamsSubmitted && totalExams > 0) {
+      if (submittedExams < totalExams) {
+        examsMet = false;
+        missingReasons.push(
+          `Exam စာမေးပွဲ ဖြေဆိုပြီးသူ ဖြစ်ရပါမည် (${submittedExams}/${totalExams} ခု ဖြေဆိုထားသည်)`
+        );
+      }
+    }
+
+    // 3. Check Student Data Form completion
+    let dataFormsMet = true;
+    if (rules.requireAllDataFormsSubmitted && totalDataForms > 0) {
+      if (submittedDataForms < totalDataForms) {
+        dataFormsMet = false;
+        missingReasons.push(
+          `ကျောင်းသားအချက်အလက် Form ဖြည့်သွင်းပြီးသူ ဖြစ်ရပါမည် (${submittedDataForms}/${totalDataForms} ခု ဖြည့်ထားသည်)`
+        );
+      }
+    }
+
+    // 4. Optional specific quiz/form IDs check
+    if (Array.isArray(rules.requiredQuizIds) && rules.requiredQuizIds.length > 0) {
+      const allQuizzes = this.getItem<Quiz[]>(STORAGE_KEYS.QUIZZES, INITIAL_QUIZZES);
+      for (const qId of rules.requiredQuizIds) {
+        const targetQuiz = allQuizzes.find((q) => q.id === qId);
+        if (!targetQuiz) continue;
+        const subs = this.getQuizSubmissions(targetQuiz.id, student.id);
+        if (subs.length === 0) {
+          if (targetQuiz.itemType === 'data_form') {
+            dataFormsMet = false;
+          } else {
+            examsMet = false;
+          }
+          missingReasons.push(`"${targetQuiz.title}" ဖြည့်သွင်း/ဖြေဆိုရန် လိုအပ်ပါသည်`);
+        }
+      }
+    }
+
+    const allowed =
+      classMet && attendanceMet && examsMet && dataFormsMet && missingReasons.length === 0;
+    return {
+      allowed,
+      hideCompletely: !allowed && (Boolean(rules.hideWhenRestricted) || !classMet),
+      classMet,
+      attendancePct: maxAttendancePct,
+      requiredAttendancePct: reqAtt,
+      attendanceMet,
+      totalExams,
+      submittedExams,
+      passedExams,
+      examsMet,
+      totalDataForms,
+      submittedDataForms,
+      dataFormsMet,
+      missingReasons,
+    };
+  }
+
+  static saveLibraryItem(
+    input: {
+      id?: string;
+      course: Course;
+      itemType: LibraryItemType;
+      title: string;
+      subtitle?: string;
+      category?: string;
+      description?: string;
+      content?: string;
+      fileUrl?: string;
+      fileName?: string;
+      fileSize?: string;
+      coverImage?: string;
+      videoUrl?: string;
+      embedId?: string;
+      channelHandle?: string;
+      isPinned?: boolean;
+      watermarkProtected?: boolean;
+      accessRules: LibraryAccessRules;
+    },
+    actor: User
+  ): LibraryItem {
+    if (actor.role !== 'admin' && actor.role !== 'co_admin') {
+      throw new Error('ဆရာ (Admin / Co-Admin) များသာ စာကြည့်တိုက်တွင် ထည့်သွင်း/ပြင်ဆင်နိုင်ပါသည်။');
+    }
+    // Ensure seed items exist before modifying
+    this.getLibraryItems(input.course.id);
+    const existing = this.getItem<LibraryItem[]>(STORAGE_KEYS.LIBRARY_ITEMS, []);
+    const nowMs = Date.now();
+    const timeLabel = this.formatMyanmarDateTime(nowMs);
+
+    const matchIdx = input.id ? existing.findIndex((i) => i.id === input.id) : -1;
+    const prev = matchIdx >= 0 ? existing[matchIdx] : undefined;
+    const itemId =
+      prev?.id ||
+      input.id ||
+      `lib-${input.course.id}-${nowMs}-${Math.random().toString(36).slice(2, 6)}`;
+
+    this.unmarkDeletedId(itemId);
+
+    const safeFileUrl =
+      input.fileUrl &&
+      /^(https?:\/\/|data:application\/pdf;base64,|data:application\/epub\+zip;base64,)/i.test(
+        input.fileUrl.trim()
+      )
+        ? input.fileUrl.trim()
+        : undefined;
+    const safeVideoUrl =
+      input.videoUrl && /^https?:\/\//i.test(input.videoUrl.trim())
+        ? input.videoUrl.trim()
+        : undefined;
+
+    const record: LibraryItem = {
+      id: itemId,
+      courseId: input.course.id,
+      courseCode: input.course.code,
+      courseTitle: input.course.title,
+      itemType: input.itemType,
+      title: input.title.trim(),
+      subtitle: input.subtitle?.trim() || undefined,
+      category: input.category?.trim() || undefined,
+      description: input.description?.trim() || undefined,
+      content: input.content || undefined,
+      fileUrl: safeFileUrl,
+      fileName: input.fileName?.trim() || undefined,
+      fileSize: input.fileSize?.trim() || undefined,
+      coverImage: input.coverImage?.trim() || undefined,
+      videoUrl: safeVideoUrl,
+      embedId: input.embedId?.trim() || undefined,
+      channelHandle: input.channelHandle?.trim() || undefined,
+      authorName: prev?.authorName || actor.name,
+      authorRole: prev?.authorRole || actor.role,
+      isPinned: Boolean(input.isPinned),
+      watermarkProtected:
+        input.watermarkProtected !== undefined
+          ? Boolean(input.watermarkProtected)
+          : input.itemType === 'ebook' || input.itemType === 'long_note',
+      accessRules:
+        input.itemType === 'youtube' || input.itemType === 'tiktok'
+          ? {
+              enabled: false,
+              allowedCourseIds: [],
+              blockedCourseIds: [],
+              minAttendancePercentage: 0,
+              requireAllExamsSubmitted: false,
+              requireAllExamsPassed: false,
+              requireAllDataFormsSubmitted: false,
+              requiredQuizIds: [],
+              hideWhenRestricted: false,
+            }
+          : {
+              enabled: Boolean(input.accessRules.enabled),
+              allowedCourseIds: Array.isArray(input.accessRules.allowedCourseIds)
+                ? input.accessRules.allowedCourseIds
+                : [],
+              blockedCourseIds: Array.isArray(input.accessRules.blockedCourseIds)
+                ? input.accessRules.blockedCourseIds
+                : [],
+              minAttendancePercentage: Number(input.accessRules.minAttendancePercentage ?? 80),
+              requireAllExamsSubmitted: Boolean(input.accessRules.requireAllExamsSubmitted),
+              requireAllExamsPassed: Boolean(input.accessRules.requireAllExamsPassed),
+              requireAllDataFormsSubmitted: Boolean(input.accessRules.requireAllDataFormsSubmitted),
+              requiredQuizIds: input.accessRules.requiredQuizIds || [],
+              hideWhenRestricted:
+                input.accessRules.hideWhenRestricted !== undefined
+                  ? Boolean(input.accessRules.hideWhenRestricted)
+                  : true,
+            },
+      createdAt: prev?.createdAt || timeLabel,
+      createdAtMs: prev?.createdAtMs || nowMs,
+      updatedAtMs: nowMs,
+    };
+
+    const nextList =
+      matchIdx >= 0
+        ? existing.map((item, idx) => (idx === matchIdx ? record : item))
+        : [record, ...existing];
+
+    this.setItem(STORAGE_KEYS.LIBRARY_ITEMS, nextList);
+    this.markLocalWrite(record.id);
+
+    // Sync to cloud (strip huge >180KB data URLs from cloud notification payload if needed to stay within row limits)
+    try {
+      const cloudRecord: LibraryItem =
+        record.fileUrl && record.fileUrl.startsWith('data:') && record.fileUrl.length > 180_000
+          ? { ...record, fileUrl: undefined }
+          : record;
+      SupabaseService.upsertLibraryItem(cloudRecord).catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    return record;
+  }
+
+  static bulkUpdateLibraryAccessRules(
+    courseId: string,
+    targetTypes: LibraryItemType[],
+    accessRules: LibraryAccessRules,
+    actor: User
+  ): number {
+    if (actor.role !== 'admin' && actor.role !== 'co_admin') return 0;
+    this.getLibraryItems(courseId);
+    const existing = this.getItem<LibraryItem[]>(STORAGE_KEYS.LIBRARY_ITEMS, []);
+    const typeSet = new Set(targetTypes);
+    const nowMs = Date.now();
+    const updatedItems: LibraryItem[] = [];
+
+    const nextList = existing.map((item) => {
+      if (item.courseId !== courseId || !typeSet.has(item.itemType)) return item;
+      const updated: LibraryItem = {
+        ...item,
+        accessRules: { ...accessRules },
+        updatedAtMs: nowMs,
+      };
+      updatedItems.push(updated);
+      this.markLocalWrite(updated.id);
+      return updated;
+    });
+
+    if (updatedItems.length > 0) {
+      this.setItem(STORAGE_KEYS.LIBRARY_ITEMS, nextList);
+      updatedItems.forEach((item, idx) => {
+        const cloudRecord: LibraryItem =
+          item.fileUrl && item.fileUrl.startsWith('data:') && item.fileUrl.length > 180_000
+            ? { ...item, fileUrl: undefined }
+            : item;
+        SupabaseService.upsertLibraryItem(cloudRecord, idx > 0).catch(() => {});
+      });
+    }
+    return updatedItems.length;
+  }
+
+  static deleteLibraryItem(itemId: string, actor: User): boolean {
+    if (actor.role !== 'admin' && actor.role !== 'co_admin') return false;
+    const existing = this.getItem<LibraryItem[]>(STORAGE_KEYS.LIBRARY_ITEMS, []);
+    this.recordDeletedIds([itemId]);
+    this.setItem(
+      STORAGE_KEYS.LIBRARY_ITEMS,
+      existing.filter((item) => item.id !== itemId)
+    );
+    try {
+      SupabaseService.deleteRemoteLibraryItem(itemId).catch(() => {});
+    } catch {
+      // ignore
+    }
+    return true;
+  }
+
+  static async syncLibraryFromCloud(
+    courseId?: string,
+    forceRefresh: boolean = false
+  ): Promise<boolean> {
+    try {
+      const remote = await SupabaseService.getRemoteLibraryData({
+        courseId,
+        forceRefresh,
+      });
+      if (!remote) return false;
+
+      const deletedSet = new Set(this.getDeletedIds());
+      const localItems = this.getItem<LibraryItem[]>(STORAGE_KEYS.LIBRARY_ITEMS, []).filter(
+        (i) => i && i.id && !deletedSet.has(i.id)
+      );
+      const itemMap = new Map<string, LibraryItem>();
+      localItems.forEach((i) => itemMap.set(i.id, i));
+
+      let changed = false;
+      for (const rem of remote.items) {
+        if (!rem || !rem.id || deletedSet.has(rem.id)) continue;
+        const loc = itemMap.get(rem.id);
+        if (!loc) {
+          itemMap.set(rem.id, rem);
+          changed = true;
+        } else if (
+          (rem.updatedAtMs || 0) > (loc.updatedAtMs || 0) &&
+          !this.isRecentLocalWrite(loc.id, 15_000)
+        ) {
+          // Preserve local data-url fileUrl if cloud payload omitted it for size
+          itemMap.set(rem.id, {
+            ...rem,
+            fileUrl: rem.fileUrl || loc.fileUrl,
+          });
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        this.setItem(STORAGE_KEYS.LIBRARY_ITEMS, Array.from(itemMap.values()));
+      }
+
+      if (remote.configs && remote.configs.length > 0) {
+        const localConfigs = {
+          ...this.getItem<Record<string, LibraryChannelConfig>>(
+            STORAGE_KEYS.LIBRARY_CHANNEL_CONFIGS,
+            {}
+          ),
+        };
+        let cfgChanged = false;
+        for (const remCfg of remote.configs) {
+          if (!remCfg || !remCfg.courseId) continue;
+          const locCfg = localConfigs[remCfg.courseId];
+          if (
+            !locCfg ||
+            ((remCfg.updatedAtMs || 0) > (locCfg.updatedAtMs || 0) &&
+              !this.isRecentLocalWrite(`libcfg-${remCfg.courseId}`, 15_000))
+          ) {
+            localConfigs[remCfg.courseId] = remCfg;
+            cfgChanged = true;
+          }
+        }
+        if (cfgChanged) {
+          this.setItem(STORAGE_KEYS.LIBRARY_CHANNEL_CONFIGS, localConfigs);
+          changed = true;
+        }
+      }
+
       return changed;
     } catch {
       return false;

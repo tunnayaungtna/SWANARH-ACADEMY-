@@ -6,6 +6,7 @@ import { AttendanceView } from './AttendanceView';
 import { PrivateNotesView } from './PrivateNotesView';
 import { QuizzesView } from './QuizzesView';
 import { BookDeliveryView } from './BookDeliveryView';
+import { LibraryView } from './LibraryView';
 import { ClassroomDB } from '../services/storage';
 import { useBackHandler } from '../utils/backNavigation';
 import {
@@ -19,12 +20,14 @@ import {
   CheckCircle2,
   FileQuestion,
   Package,
+  BookOpen,
 } from 'lucide-react';
 
 export type ClassroomTab =
   | 'stream'
   | 'attendance'
   | 'quizzes'
+  | 'library'
   | 'book_delivery'
   | 'private_notes'
   | 'people';
@@ -177,6 +180,10 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
         ClassroomDB.syncBookDeliveriesFromCloud(true).then((updated) => {
           if (updated) onRefresh();
         });
+      } else if (nextTab === 'library') {
+        ClassroomDB.syncLibraryFromCloud(course.id, true).then((updated) => {
+          if (updated) onRefresh();
+        });
       } else {
         ClassroomDB.syncAttendanceFromCloud(true).then((attUpdated) => {
           if (attUpdated) onRefresh();
@@ -299,6 +306,19 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
                 {courseQuizzesCount}
               </span>
             )}
+          </button>
+
+          <button
+            onClick={() => handleSwitchTab('library')}
+            className={`flex items-center justify-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
+              activeTab === 'library'
+                ? 'neu-raised-sm text-indigo-700 dark:text-indigo-300'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+            }`}
+            title="စာကြည့်တိုက် (eBooks • စာရှည်မှတ်စု • YouTube • TikTok Live)"
+          >
+            <BookOpen className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
+            <span>စာကြည့်တိုက်</span>
           </button>
 
           <button
@@ -477,6 +497,15 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
             course={course}
             currentUser={currentUser}
             onRefresh={onRefresh}
+          />
+        )}
+
+        {activeTab === 'library' && (
+          <LibraryView
+            course={course}
+            currentUser={currentUser}
+            onRefresh={onRefresh}
+            onNavigateTab={(t) => handleSwitchTab(t)}
           />
         )}
 
