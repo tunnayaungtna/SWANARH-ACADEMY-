@@ -1074,23 +1074,28 @@ export default function App() {
               </div>
             </div>
 
-            {/* Side-by-Side Premium Hub: စွမ်းအား Website & Library စာကြည့်တိုက် (Responsive on Mobile, Tablet & Desktop) */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
+            {/* Side-by-Side Premium Hub: စွမ်းအား Website & Library စာကြည့်တိုက် (Always Side-by-Side on Mobile, Tablet & Desktop) */}
+            <div className="grid grid-cols-2 gap-2.5 sm:gap-4 items-stretch">
               {/* 1. စွမ်းအားသင်တန်း တရားဝင် ဝက်ဘ်ဆိုဒ် (Official Website) */}
               <div
                 onClick={() => setShowWebsiteModal(true)}
-                className="neu-raised rounded-2xl p-4 sm:px-5 sm:py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-emerald-500/25 hover:border-emerald-500/50 transition-all cursor-pointer group min-w-0"
+                className="neu-raised rounded-2xl p-3 sm:px-5 sm:py-4 flex flex-col md:flex-row md:items-center justify-between gap-2.5 sm:gap-3.5 border border-emerald-500/30 hover:border-emerald-500/60 transition-all cursor-pointer group min-w-0 h-full"
               >
-                <div className="flex items-center gap-3.5 min-w-0">
-                  <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform">
-                    <Globe className="w-5 h-5" />
+                <div className="flex items-start sm:items-center gap-2.5 sm:gap-3.5 min-w-0">
+                  <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl sm:rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-700 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform">
+                    <Globe className="w-4 h-4 sm:w-5 sm:h-5" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-slate-100 leading-snug">
-                      စွမ်းအား Website (Official Website)
-                    </h3>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                      www.swanarhacademy.com · သင်တန်းအချက်အလက်များ တိုက်ရိုက်ကြည့်ရန်
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-slate-100 leading-snug truncate">
+                        စွမ်းအား Website
+                      </h3>
+                      <span className="hidden sm:inline-block text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/25">
+                        Official Web
+                      </span>
+                    </div>
+                    <p className="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1 mt-0.5">
+                      www.swanarhacademy.com · သင်တန်းအချက်အလက်များ
                     </p>
                   </div>
                 </div>
@@ -1100,28 +1105,33 @@ export default function App() {
                     e.stopPropagation();
                     setShowWebsiteModal(true);
                   }}
-                  className="w-full sm:w-auto px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-xs"
+                  className="mt-auto md:mt-0 w-full md:w-auto px-2.5 sm:px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-[11px] sm:text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-xs"
                 >
                   <Globe className="w-3.5 h-3.5 shrink-0" />
-                  <span>Website ဖွင့်ရန်</span>
+                  <span className="truncate">Website ဖွင့်ရန်</span>
                 </button>
               </div>
 
               {/* 2. စွမ်းအား ဒစ်ဂျစ်တယ် စာကြည့်တိုက် (Grand Digital Library) */}
               <div
                 onClick={() => setShowLibraryModal(true)}
-                className="neu-raised rounded-2xl p-4 sm:px-5 sm:py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-amber-500/30 hover:border-amber-500/60 transition-all cursor-pointer group min-w-0"
+                className="neu-raised rounded-2xl p-3 sm:px-5 sm:py-4 flex flex-col md:flex-row md:items-center justify-between gap-2.5 sm:gap-3.5 border border-amber-500/35 hover:border-amber-500/65 transition-all cursor-pointer group min-w-0 h-full"
               >
-                <div className="flex items-center gap-3.5 min-w-0">
-                  <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-amber-500 to-indigo-700 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform">
-                    <BookOpen className="w-5 h-5" />
+                <div className="flex items-start sm:items-center gap-2.5 sm:gap-3.5 min-w-0">
+                  <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl sm:rounded-2xl bg-gradient-to-br from-amber-500 to-indigo-700 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform">
+                    <BookOpen className="w-4 h-4 sm:w-5 sm:h-5" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-slate-100 leading-snug">
-                      Library စာကြည့်တိုက် (Digital Library)
-                    </h3>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                      eBooks · စာရှည်မှတ်စုများ · YouTube & TikTok ဗီဒီယိုစာကြည့်တိုက်
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-slate-100 leading-snug truncate">
+                        Library စာကြည့်တိုက်
+                      </h3>
+                      <span className="hidden sm:inline-block text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25">
+                        Digital Hub
+                      </span>
+                    </div>
+                    <p className="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1 mt-0.5">
+                      eBooks · စာရှည်မှတ်စု · YouTube & TikTok ဗီဒီယိုများ
                     </p>
                   </div>
                 </div>
@@ -1131,10 +1141,10 @@ export default function App() {
                     e.stopPropagation();
                     setShowLibraryModal(true);
                   }}
-                  className="w-full sm:w-auto px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-xs"
+                  className="mt-auto md:mt-0 w-full md:w-auto px-2.5 sm:px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-[11px] sm:text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-xs"
                 >
                   <BookOpen className="w-3.5 h-3.5 shrink-0" />
-                  <span>စာကြည့်တိုက် ဖွင့်ရန်</span>
+                  <span className="truncate">စာကြည့်တိုက် ဖွင့်ရန်</span>
                 </button>
               </div>
             </div>

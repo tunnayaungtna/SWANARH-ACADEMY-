@@ -252,35 +252,39 @@ export const Navbar: React.FC<NavbarProps> = ({
               <span>စည်းကမ်းချက်များ</span>
             </button>
           )}
-          {onOpenWebsite && (
-            <button
-              type="button"
-              onClick={() => {
-                setShowUserDropdown(false);
-                setShowNotifications(false);
-                onOpenWebsite();
-              }}
-              className="px-2 py-1.5 rounded-xl hover:bg-white/50 dark:hover:bg-slate-800/50 text-sky-700 dark:text-sky-400 hover:text-sky-800 dark:hover:text-sky-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1"
-              title="စွမ်းအားသင်တန်း Official Website (www.swanarhacademy.com)"
-            >
-              <Globe className="w-3.5 h-3.5 shrink-0" />
-              <span>စွမ်းအား Website</span>
-            </button>
-          )}
-          {onOpenLibrary && (
-            <button
-              type="button"
-              onClick={() => {
-                setShowUserDropdown(false);
-                setShowNotifications(false);
-                onOpenLibrary();
-              }}
-              className="px-2 py-1.5 rounded-xl hover:bg-white/50 dark:hover:bg-slate-800/50 text-amber-700 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1"
-              title="စွမ်းအား ဒစ်ဂျစ်တယ် စာကြည့်တိုက် (Library)"
-            >
-              <BookOpen className="w-3.5 h-3.5 shrink-0" />
-              <span>Library စာကြည့်တိုက်</span>
-            </button>
+          {(onOpenWebsite || onOpenLibrary) && (
+            <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-slate-200/55 dark:bg-slate-800/60 border border-slate-300/50 dark:border-slate-700/60 shrink-0">
+              {onOpenWebsite && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowUserDropdown(false);
+                    setShowNotifications(false);
+                    onOpenWebsite();
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-white/80 dark:bg-slate-900/70 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 font-extrabold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1 shadow-2xs"
+                  title="စွမ်းအားသင်တန်း Official Website (www.swanarhacademy.com)"
+                >
+                  <Globe className="w-3.5 h-3.5 shrink-0" />
+                  <span>စွမ်းအား Website</span>
+                </button>
+              )}
+              {onOpenLibrary && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowUserDropdown(false);
+                    setShowNotifications(false);
+                    onOpenLibrary();
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-white/80 dark:bg-slate-900/70 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 text-indigo-700 dark:text-amber-400 font-extrabold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1 shadow-2xs"
+                  title="စွမ်းအား ဒစ်ဂျစ်တယ် စာကြည့်တိုက် (Library)"
+                >
+                  <BookOpen className="w-3.5 h-3.5 shrink-0" />
+                  <span>Library စာကြည့်တိုက်</span>
+                </button>
+              )}
+            </div>
           )}
           {onOpenGuide && (
             <button
