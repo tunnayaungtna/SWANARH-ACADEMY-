@@ -191,12 +191,11 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
     return latestUnmarked || attendanceSessions[0];
   };
 
-  // 1-Click Quick Attendance Mark + Auto-Reply right inside the Private Note card
-  const handleQuickMarkAttendanceAndReply = (
+  // 1-Click Quick Attendance Mark right inside the Private Note card (without auto-replying so instructor/co-admin replies manually)
+  const handleQuickMarkAttendance = (
     note: PrivateNote,
     session: AttendanceSession,
-    targetAttendanceStatus: AttendanceStatus,
-    alsoReplyToNote: boolean
+    targetAttendanceStatus: AttendanceStatus
   ) => {
     const studentUser: User = ClassroomDB.getAllUsers().find((u) => u.id === note.studentId) || {
       id: note.studentId,
@@ -224,22 +223,9 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
       `သီးသန့်စာမှ 1-Click ဖြင့် ${statusMyanmarLabel} ပေးပြီး (${currentUser.name})`
     );
 
-    if (alsoReplyToNote) {
-      const customDraft = (replyDrafts[note.id] ?? '').trim();
-      const autoReplyText =
-        customDraft ||
-        `သင်တင်ပြသော ${session.date} (${session.title}) အတွက် Attendance ကို "${statusMyanmarLabel}" အဖြစ် မှတ်တမ်းတင်ပေးပြီး ဖြစ်ပါသည်။ ✓`;
-      const noteStatus: Exclude<PrivateNoteStatus, 'pending'> =
-        note.category === 'leave_request' || note.category === 'attendance_request'
-          ? 'approved'
-          : 'replied';
-      ClassroomDB.replyToPrivateNote(note.id, autoReplyText, noteStatus, currentUser);
-      setEditingNoteId(null);
-    }
-
     setQuickAttendanceToast((prev) => ({
       ...prev,
-      [note.id]: `✅ ${note.studentName} (@${note.studentUsername}) ကို ${session.date} အတွက် "${statusMyanmarLabel}" အဖြစ် ချက်ချင်း မှတ်တမ်းတင်ပေးပြီးပါပြီ!`,
+      [note.id]: `✅ ${note.studentName} (@${note.studentUsername}) ကို ${session.date} အတွက် "${statusMyanmarLabel}" အဖြစ် မှတ်တမ်းတင်ပေးပြီးပါပြီ! (အောက်ရှိ စာပြန်သည့်အကွက်တွင် ဆရာကိုယ်တိုင် စာပြန်နိုင်ပါသည်)`,
     }));
     setTimeout(() => {
       setQuickAttendanceToast((prev) => {
@@ -408,7 +394,7 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
               {isInstructor
-                ? 'ကျောင်းသားစာကတ်တိုင်းတွင် ပါဝင်သော "⚡ 1-Click Quick Attendance" ဘားဖြင့် Attendance Tab သို့ လုံးဝသွားစရာမလိုဘဲ ရက်စွဲရွေး၍ "✅ Present ပေးပြီး စာပြန်မည်" ကို တစ်ချက်တည်း နှိပ်နိုင်ပါသည်။'
+                ? 'ကျောင်းသားစာကတ်တိုင်းတွင် ပါဝင်သော "⚡ 1-Click Quick Attendance" ဘားဖြင့် Attendance Tab သို့ လုံးဝသွားစရာမလိုဘဲ ရက်စွဲရွေး၍ "✅ Present ပေးမည်" ကို တစ်ချက်တည်း နှိပ်နိုင်ပြီး အောက်ရှိ အကွက်မှ ဆရာကိုယ်တိုင် စာပြန်နိုင်ပါသည်။'
                 : 'သင်ခန်းစာ မေးခွန်းများ၊ ခွင့်တိုင်စာများနှင့် Attendance မနှိပ်မိလိုက်သည့် ရက်စွဲများကို ဆရာ (Admin / Co-Admin) ထံသို့ သီးသန့် ပေးပို့နိုင်ပါသည်။'}
             </p>
           </div>
@@ -927,31 +913,25 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
                           <button
                             type="button"
                             onClick={() =>
-                              handleQuickMarkAttendanceAndReply(
+                              handleQuickMarkAttendance(
                                 note,
                                 activeSession,
-                                'present',
-                                note.status === 'pending' || editingNoteId === note.id
+                                'present'
                               )
                             }
                             className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
                           >
                             <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                            <span>
-                              {note.status === 'pending' || editingNoteId === note.id
-                                ? '✅ Present ပေးပြီး စာပြန်မည်'
-                                : '✅ Present ပေးမည်'}
-                            </span>
+                            <span>✅ Present ပေးမည်</span>
                           </button>
 
                           <button
                             type="button"
                             onClick={() =>
-                              handleQuickMarkAttendanceAndReply(
+                              handleQuickMarkAttendance(
                                 note,
                                 activeSession,
-                                'late',
-                                note.status === 'pending' || editingNoteId === note.id
+                                'late'
                               )
                             }
                             className="px-2.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold flex items-center gap-1 shadow-xs cursor-pointer transition-colors"
@@ -963,11 +943,10 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
                           <button
                             type="button"
                             onClick={() =>
-                              handleQuickMarkAttendanceAndReply(
+                              handleQuickMarkAttendance(
                                 note,
                                 activeSession,
-                                'excused',
-                                note.status === 'pending' || editingNoteId === note.id
+                                'excused'
                               )
                             }
                             className="px-2.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1 shadow-xs cursor-pointer transition-colors"
@@ -1063,7 +1042,7 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
                         }}
                         placeholder={
                           note.category === 'leave_request' || note.category === 'attendance_request'
-                            ? 'မှတ်ချက်/အဖြေ ရေးရန် (မရေးဘဲ အပေါ်ရှိ "✅ Present ပေးပြီး စာပြန်မည်" သို့မဟုတ် "ခွင့်ပြုသည်" တိုက်ရိုက်နှိပ်လျှင်လည်း စနစ်မှ အလိုအလျောက် စာပြန်ပေးပါမည်)...'
+                            ? 'ဆရာ / လက်ထောက်ဆရာ ကိုယ်တိုင် ပြန်လည်ဖြေကြားလိုသော မှတ်ချက် သို့မဟုတ် အဖြေကို ဤနေရာတွင် ရေးသားပါ...'
                             : 'ကျောင်းသားထံ ပြန်လည်ဖြေကြားလိုသော အဖြေကို ရေးသားပါ...'
                         }
                         className="neu-input w-full px-3.5 py-2.5 rounded-2xl text-xs sm:text-sm text-slate-900 dark:text-slate-100"
