@@ -1,8 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Course, User } from '../types/classroom';
+import { Course, User, CertificateData } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
 import { AddStudentModal } from './AddStudentModal';
 import { EditUserAccountModal } from './EditUserAccountModal';
+import {
+  StudentReportCardModal,
+  computeStudentCoursePerformance,
+  exportClassPerformanceCsv,
+} from './StudentReportCardModal';
 import { useBackHandler } from '../utils/backNavigation';
 import { resolveAvatarUrl, DEFAULT_AVATAR_SVG } from '../data/presetAvatars';
 import {
@@ -14,21 +19,29 @@ import {
   Mail,
   Search,
   AlertTriangle,
-  Sparkles,
   Edit3,
+  BarChart3,
+  Download,
 } from 'lucide-react';
 
 interface PeopleViewProps {
   course: Course;
   currentUser: User;
   onRefresh: () => void;
+  onOpenCertificate?: (cert: CertificateData) => void;
 }
 
-export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onRefresh }) => {
+export const PeopleView: React.FC<PeopleViewProps> = ({
+  course,
+  currentUser,
+  onRefresh,
+  onOpenCertificate,
+}) => {
   const allUsers = ClassroomDB.getAllUsers();
   const [showAddModal, setShowAddModal] = useState(false);
   const [studentToUnenroll, setStudentToUnenroll] = useState<User | null>(null);
   const [editingAccountUser, setEditingAccountUser] = useState<User | null>(null);
+  const [inspectReportStudent, setInspectReportStudent] = useState<User | null>(null);
   const [enrollmentStatusMessage, setEnrollmentStatusMessage] = useState<string | null>(null);
   const [searchFilter, setSearchFilter] = useState('');
   const [visibleStudentLimit, setVisibleStudentLimit] = useState<number>(60);
@@ -61,6 +74,7 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
   useBackHandler(showAddModal, () => setShowAddModal(false));
   useBackHandler(!!studentToUnenroll, () => setStudentToUnenroll(null));
   useBackHandler(!!editingAccountUser, () => setEditingAccountUser(null));
+  useBackHandler(!!inspectReportStudent, () => setInspectReportStudent(null));
 
   // Fast O(1) lookup Map so 2,000 enrolled students resolve in <1ms instead of O(N^2)
   const isStaff = currentUser.role === 'admin' || currentUser.role === 'co_admin';
@@ -100,6 +114,51 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
           <div className="leading-snug">{enrollmentStatusMessage}</div>
         </div>
       )}
+
+      {/* Student Personal Progress & Report Card Summary Banner */}
+      {!isStaff && (() => {
+        const myPerf = computeStudentCoursePerformance(course, currentUser);
+        return (
+          <section className="neu-card rounded-3xl p-4 sm:p-5 border border-indigo-200/80 dark:border-indigo-800/70 bg-gradient-to-br from-indigo-50/60 via-white/80 to-sky-50/50 dark:from-indigo-950/40 dark:via-slate-900/90 dark:to-sky-950/30">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-indigo-600 text-white shadow-2xs">
+                    <BarChart3 className="w-3.5 h-3.5" />
+                    <span>STUDENT REPORT CARD</span>
+                  </span>
+                  <span className="text-xs font-extrabold text-indigo-700 dark:text-indigo-300">
+                    Grade: {myPerf.gradeLabel}
+                  </span>
+                </div>
+                <h2 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-slate-100">
+                  📊 မိမိ၏ သင်ယူတိုးတက်မှု မှတ်တမ်းချုပ် ({currentUser.name})
+                </h2>
+                <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] font-bold">
+                  <span className="px-2.5 py-1 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                    📅 Attendance: {myPerf.attendanceRate}% ({myPerf.presentCount + myPerf.lateCount + myPerf.excusedCount}/{myPerf.totalSessions})
+                  </span>
+                  <span className="px-2.5 py-1 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                    📝 Exam Room: {myPerf.totalExams > 0 ? `${myPerf.passedExams}/${myPerf.totalExams} အောင်မြင် (${myPerf.examAverageScore}%)` : 'စာမေးပွဲ မရှိသေးပါ'}
+                  </span>
+                  <span className="px-2.5 py-1 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                    📋 Data Forms: {myPerf.completedForms}/{myPerf.totalForms} ခု ဖြည့်သွင်းပြီး
+                  </span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setInspectReportStudent(currentUser)}
+                className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-2xl neu-btn-indigo text-white text-xs font-extrabold shadow-sm cursor-pointer shrink-0"
+              >
+                <BarChart3 className="w-4 h-4" />
+                <span>📊 မိမိ Report Card နှင့် PDF ထုတ်ယူရန်</span>
+              </button>
+            </div>
+          </section>
+        );
+      })()}
 
       {/* Instructors & Faculty Section */}
       <section className="neu-card rounded-3xl p-5 sm:p-6 transition-colors">
@@ -202,15 +261,28 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
             </p>
           </div>
 
-          {/* Admin / Co-Admin Add Student Button */}
+          {/* Admin / Co-Admin Add Student & Export Class Report Card Buttons */}
           {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="flex items-center justify-center gap-1.5 px-4 py-2.5 neu-btn-indigo text-xs font-bold rounded-xl transition-all cursor-pointer shrink-0"
-            >
-              <UserPlus className="w-4 h-4" />
-              <span>+ Add Student (ကျောင်းသား ထည့်မည်)</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {enrolledStudents.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => exportClassPerformanceCsv(course, enrolledStudents)}
+                  className="flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shadow-xs transition-all cursor-pointer"
+                  title="အတန်းတွင်း ကျောင်းသားအားလုံး၏ Attendance, Exam အမှတ်များ၊ Form နှင့် စာအုပ်ပို့ဆောင်မှု စာရင်းချုပ်ကို Excel (CSV) ဖြင့် ထုတ်ယူမည်"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>📊 တစ်တန်းလုံး Report Card (Excel/CSV)</span>
+                </button>
+              )}
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="flex items-center justify-center gap-1.5 px-4 py-2.5 neu-btn-indigo text-xs font-bold rounded-xl transition-all cursor-pointer shrink-0"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>+ Add Student (ကျောင်းသား ထည့်မည်)</span>
+              </button>
+            </div>
           )}
         </div>
 
@@ -324,7 +396,7 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 dark:border-slate-800">
+                  <div className="flex flex-wrap items-center justify-between sm:justify-end gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 dark:border-slate-800">
                     {isStaff && attPct !== null && (
                       <span
                         className={`text-[11px] font-mono font-bold px-2.5 py-0.5 rounded-full border ${
@@ -341,6 +413,19 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
                       <span className="text-[11px] text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200/60 dark:border-emerald-800/60 px-2.5 py-0.5 rounded-full font-medium">
                         {isSelf ? 'Enrolled (သင်တက်ရောက်ဆဲ)' : 'Classmate (အတန်းဖော်)'}
                       </span>
+                    )}
+
+                    {/* Report Card Button (Visible to Staff for every student, or to Student for their own row) */}
+                    {(isStaff || isSelf) && (
+                      <button
+                        type="button"
+                        onClick={() => setInspectReportStudent(student)}
+                        className="flex items-center gap-1 px-2.5 py-1 text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/60 hover:bg-sky-100 dark:hover:bg-sky-900/60 border border-sky-200 dark:border-sky-800/70 rounded-xl text-xs font-extrabold transition-colors cursor-pointer"
+                        title="ကျောင်းသား၏ Attendance, Exam Room အမှတ်များ၊ Data Form နှင့် စာအုပ်ပို့ဆောင်မှု Report Card အပြည့်အစုံကြည့်ရန်"
+                      >
+                        <BarChart3 className="w-3.5 h-3.5" />
+                        <span>{isSelf && !isStaff ? 'My Report Card' : 'Report Card'}</span>
+                      </button>
                     )}
 
                     {/* Admin / Co-Admin Edit Student Info & Remove Actions */}
@@ -467,6 +552,17 @@ export const PeopleView: React.FC<PeopleViewProps> = ({ course, currentUser, onR
             );
             setTimeout(() => setEnrollmentStatusMessage(null), 5000);
           }}
+        />
+      )}
+
+      {/* Student Performance Report Card Modal */}
+      {inspectReportStudent && (
+        <StudentReportCardModal
+          course={course}
+          student={inspectReportStudent}
+          currentUser={currentUser}
+          onClose={() => setInspectReportStudent(null)}
+          onOpenCertificate={onOpenCertificate}
         />
       )}
     </div>

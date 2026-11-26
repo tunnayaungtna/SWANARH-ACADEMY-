@@ -497,7 +497,12 @@ export const CourseDetail: React.FC<CourseDetailProps> = ({
         )}
 
         {activeTab === 'people' && (
-          <PeopleView course={course} currentUser={currentUser} onRefresh={onRefresh} />
+          <PeopleView
+            course={course}
+            currentUser={currentUser}
+            onRefresh={onRefresh}
+            onOpenCertificate={onOpenCertificate}
+          />
         )}
       </div>
     </div>

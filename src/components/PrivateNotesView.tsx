@@ -26,7 +26,56 @@ import {
   UserCheck,
   Reply,
   Zap,
+  Plus,
+  X,
 } from 'lucide-react';
+
+interface QuickReplyTemplate {
+  id: string;
+  label: string;
+  text: string;
+  isCustom?: boolean;
+}
+
+const CUSTOM_QUICK_REPLIES_STORAGE_KEY = 'swanarh_quick_reply_templates_v1';
+
+const DEFAULT_QUICK_REPLY_TEMPLATES: QuickReplyTemplate[] = [
+  {
+    id: 'qr_present',
+    label: '✓ Present ပေးပြီး',
+    text: 'ကျောင်းတက်ချိန် (Present) အမှန်ခြစ်ပေးပြီးဖြစ်ပါသည်ခင်ဗျာ။',
+  },
+  {
+    id: 'qr_late',
+    label: '⏰ Late ပေးပြီး',
+    text: 'ကျောင်းတက်ချိန် (Late - နောက်ကျ) မှတ်တမ်းတင်ပေးပြီးဖြစ်ပါသည်ခင်ဗျာ။',
+  },
+  {
+    id: 'qr_leave_ok',
+    label: '🗓️ ခွင့်လက်ခံပြီး',
+    text: 'ခွင့်တိုင်ကြားစာကို လက်ခံမှတ်သားပေးပြီးဖြစ်ပါသည်။ သင်ခန်းစာ Video နှင့် Post များကို အချိန်မီ ပြန်လည်လေ့လာပေးပါခင်ဗျာ။',
+  },
+  {
+    id: 'qr_check_stream',
+    label: '📚 သင်ခန်းစာ ပြန်ကြည့်ရန်',
+    text: 'သင်ခန်းစာအသေးစိတ်ကို Stream Tab ရှိ သက်ဆိုင်ရာ Post နှင့် Video များတွင် ပြန်လည်ကြည့်ရှုလေ့လာနိုင်ပါသည်ခင်ဗျာ။',
+  },
+  {
+    id: 'qr_exam_form',
+    label: '📝 Exam / Form လမ်းညွှန်',
+    text: 'Exam Room & Data Forms ကို Stream သို့မဟုတ် Exam Room ခလုတ်မှတစ်ဆင့် ဝင်ရောက်ဖြေဆိုနိုင်ပါသည်ခင်ဗျာ။',
+  },
+  {
+    id: 'qr_book_delivery',
+    label: '📦 စာအုပ်ပို့ဆောင်ရေး',
+    text: 'စာအုပ်ပို့ဆောင်မှု အခြေအနေနှင့် Tracking အချက်အလက်ကို စာအုပ်ပို့ဆောင်မှု (Book Delivery) Tab တွင် ဝင်ရောက်ကြည့်ရှုနိုင်ပါသည်ခင်ဗျာ။',
+  },
+  {
+    id: 'qr_noted',
+    label: '🙏 မှတ်သားထားပါပြီ',
+    text: 'ဟုတ်ကဲ့ သေချာမှတ်သားထားပေးပါပြီခင်ဗျာ။ ကျေးဇူးတင်ပါသည်။',
+  },
+];
 
 interface PrivateNotesViewProps {
   course: Course;
@@ -63,6 +112,64 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
   // Per-note selected attendance session ID for 1-Click Quick Attendance Marking
   const [selectedSessionByNote, setSelectedSessionByNote] = useState<Record<string, string>>({});
   const [quickAttendanceToast, setQuickAttendanceToast] = useState<Record<string, string>>({});
+
+  // Quick Reply Templates (Canned Responses) state for instructors
+  const [customTemplates, setCustomTemplates] = useState<QuickReplyTemplate[]>(() => {
+    try {
+      const raw = localStorage.getItem(CUSTOM_QUICK_REPLIES_STORAGE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+  const [addingTemplateForNoteId, setAddingTemplateForNoteId] = useState<string | null>(null);
+  const [newTemplateLabel, setNewTemplateLabel] = useState('');
+  const [newTemplateText, setNewTemplateText] = useState('');
+
+  const allQuickReplyTemplates: QuickReplyTemplate[] = [
+    ...DEFAULT_QUICK_REPLY_TEMPLATES,
+    ...customTemplates,
+  ];
+
+  const handleSaveCustomTemplate = (noteId?: string) => {
+    const cleanLabel = newTemplateLabel.trim();
+    const cleanText = newTemplateText.trim();
+    if (!cleanLabel || !cleanText) return;
+    const created: QuickReplyTemplate = {
+      id: `custom_qr_${Date.now()}`,
+      label: cleanLabel,
+      text: cleanText,
+      isCustom: true,
+    };
+    const updated = [...customTemplates, created];
+    setCustomTemplates(updated);
+    try {
+      localStorage.setItem(CUSTOM_QUICK_REPLIES_STORAGE_KEY, JSON.stringify(updated));
+    } catch {
+      // ignore storage quota errors
+    }
+    setNewTemplateLabel('');
+    setNewTemplateText('');
+    setAddingTemplateForNoteId(null);
+    if (noteId) {
+      setReplyDrafts((prev) => ({
+        ...prev,
+        [noteId]: prev[noteId]?.trim() ? `${prev[noteId].trim()} ${cleanText}` : cleanText,
+      }));
+    }
+  };
+
+  const handleDeleteCustomTemplate = (templateId: string) => {
+    const updated = customTemplates.filter((t) => t.id !== templateId);
+    setCustomTemplates(updated);
+    try {
+      localStorage.setItem(CUSTOM_QUICK_REPLIES_STORAGE_KEY, JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+  };
 
   const notes = ClassroomDB.getPrivateNotes(course.id, currentUser);
   const attendanceSessions = ClassroomDB.getAttendanceSessions(course.id);
@@ -1027,6 +1134,105 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
                         </div>
                       )}
 
+                      {/* Quick Reply Templates (Canned Responses) Bar */}
+                      <div className="p-2.5 rounded-2xl bg-slate-50/90 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-800 space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-[11px] font-extrabold text-indigo-700 dark:text-indigo-300 flex items-center gap-1.5">
+                            <MessageSquare className="w-3.5 h-3.5" />
+                            <span>💬 အမြန်ဖြေကြားရန် စာသားများ (Quick Reply Templates — နှိပ်ပါက အောက်ရှိအကွက်ထဲ စာသားဝင်သွားပြီး လိုသလိုပြင်၍ ပို့နိုင်သည်):</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (addingTemplateForNoteId === note.id) {
+                                setAddingTemplateForNoteId(null);
+                              } else {
+                                setAddingTemplateForNoteId(note.id);
+                                setNewTemplateText(currentDraft || '');
+                              }
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-extrabold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-colors cursor-pointer"
+                          >
+                            <Plus className="w-3 h-3" />
+                            <span>ကိုယ်ပိုင် အမြန်ပြန်စာ အသစ်မှတ်မည်</span>
+                          </button>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {allQuickReplyTemplates.map((tpl) => (
+                            <div
+                              key={tpl.id}
+                              className="inline-flex items-center rounded-xl bg-white dark:bg-slate-800 border border-slate-200/90 dark:border-slate-700 shadow-2xs overflow-hidden"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const existing = (replyDrafts[note.id] ?? '').trim();
+                                  const nextVal = existing
+                                    ? `${existing} ${tpl.text}`
+                                    : tpl.text;
+                                  setReplyDrafts((prev) => ({
+                                    ...prev,
+                                    [note.id]: nextVal,
+                                  }));
+                                  ClassroomDB.broadcastPrivateNoteTyping(note, currentUser);
+                                }}
+                                title={tpl.text}
+                                className="px-2.5 py-1 text-[11px] font-bold text-slate-700 dark:text-slate-200 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 hover:text-indigo-700 dark:hover:text-indigo-300 transition-colors cursor-pointer"
+                              >
+                                {tpl.label}
+                              </button>
+                              {tpl.isCustom && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteCustomTemplate(tpl.id)}
+                                  title="ဤ ကိုယ်ပိုင် အမြန်ပြန်စာကို ဖျက်မည်"
+                                  className="px-1.5 py-1 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 border-l border-slate-200 dark:border-slate-700 cursor-pointer"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+
+                        {addingTemplateForNoteId === note.id && (
+                          <div className="pt-2 border-t border-slate-200/70 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-12 gap-2 items-center">
+                            <input
+                              type="text"
+                              value={newTemplateLabel}
+                              onChange={(e) => setNewTemplateLabel(e.target.value)}
+                              placeholder="ခလုတ်အမည် (ဥပမာ - ✅ စစ်ဆေးပြီး)"
+                              className="sm:col-span-4 neu-input px-2.5 py-1.5 rounded-xl text-xs text-slate-900 dark:text-slate-100"
+                            />
+                            <input
+                              type="text"
+                              value={newTemplateText}
+                              onChange={(e) => setNewTemplateText(e.target.value)}
+                              placeholder="အမြန်ပြန်မည့် စာသားအပြည့်အစုံ..."
+                              className="sm:col-span-6 neu-input px-2.5 py-1.5 rounded-xl text-xs text-slate-900 dark:text-slate-100"
+                            />
+                            <div className="sm:col-span-2 flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleSaveCustomTemplate(note.id)}
+                                disabled={!newTemplateLabel.trim() || !newTemplateText.trim()}
+                                className="flex-1 px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-[11px] font-extrabold cursor-pointer"
+                              >
+                                မှတ်မည်
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setAddingTemplateForNoteId(null)}
+                                className="px-2 py-1.5 rounded-xl neu-btn text-slate-500 text-[11px] font-bold cursor-pointer"
+                              >
+                                ပိတ်
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
                       <textarea
                         rows={2}
                         value={currentDraft}
@@ -1042,8 +1248,8 @@ export const PrivateNotesView: React.FC<PrivateNotesViewProps> = ({
                         }}
                         placeholder={
                           note.category === 'leave_request' || note.category === 'attendance_request'
-                            ? 'ဆရာ / လက်ထောက်ဆရာ ကိုယ်တိုင် ပြန်လည်ဖြေကြားလိုသော မှတ်ချက် သို့မဟုတ် အဖြေကို ဤနေရာတွင် ရေးသားပါ...'
-                            : 'ကျောင်းသားထံ ပြန်လည်ဖြေကြားလိုသော အဖြေကို ရေးသားပါ...'
+                            ? 'ဆရာ / လက်ထောက်ဆရာ ကိုယ်တိုင် ပြန်လည်ဖြေကြားလိုသော မှတ်ချက် သို့မဟုတ် အဖြေကို ဤနေရာတွင် ရေးသားပါ (သို့မဟုတ် အပေါ်ရှိ အမြန်ဖြေကြားရန် စာသားခလုတ်ကို နှိပ်ပါ)...'
+                            : 'ကျောင်းသားထံ ပြန်လည်ဖြေကြားလိုသော အဖြေကို ရေးသားပါ (သို့မဟုတ် အပေါ်ရှိ အမြန်ဖြေကြားရန် စာသားခလုတ်ကို နှိပ်ပါ)...'
                         }
                         className="neu-input w-full px-3.5 py-2.5 rounded-2xl text-xs sm:text-sm text-slate-900 dark:text-slate-100"
                       />
