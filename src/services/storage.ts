@@ -10771,7 +10771,7 @@ export class ClassroomDB {
       courseId,
       youtubeChannelUrl: 'https://youtube.com/@swanarhacademy?si=KsKCGtp9Y-enjKnA',
       youtubeHandle: '@swanarhacademy',
-      youtubeChannelId: '',
+      youtubeChannelId: 'UCk0VikA7fYKBuoJkI_cOxRg',
       tiktokProfileUrl: 'https://www.tiktok.com/@dr..si.thu.aung.s?_r=1&_t=ZS-9BidC4ArLuv',
       tiktokHandle: '@dr..si.thu.aung.s',
       autoEmbedLiveFeeds: true,
@@ -10795,10 +10795,16 @@ export class ClassroomDB {
     const saved = all[courseId];
     const def = this.getDefaultLibraryChannelConfig(courseId);
     if (!saved) return def;
+    const isSwanarh =
+      !saved.youtubeHandle ||
+      saved.youtubeHandle.toLowerCase().includes('swanarhacademy') ||
+      (saved.youtubeChannelUrl || '').toLowerCase().includes('swanarhacademy');
     return {
       ...def,
       ...saved,
       courseId,
+      youtubeChannelId:
+        saved.youtubeChannelId || (isSwanarh ? 'UCk0VikA7fYKBuoJkI_cOxRg' : def.youtubeChannelId),
       defaultEbookNoteAccessRules: {
         ...def.defaultEbookNoteAccessRules,
         ...(saved.defaultEbookNoteAccessRules || {}),

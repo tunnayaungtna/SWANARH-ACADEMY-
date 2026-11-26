@@ -141,7 +141,7 @@ async function startServer() {
     });
   });
 
-  // Live YouTube Channel Feed Resolver & RSS Parser (resolves @swanarhacademy or any YouTube channel URL to latest videos automatically)
+  // Live YouTube Channel Feed Resolver & RSS + Multi-Tab Parser (resolves @swanarhacademy or any YouTube channel URL to latest videos automatically)
   const ytFeedCache = new Map<
     string,
     {
@@ -157,8 +157,10 @@ async function startServer() {
       fetchedAt: number;
     }
   >();
+  const ytVideoTitleCache = new Map<string, string>();
 
   app.get('/api/youtube-feed', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
     try {
       const clientIp =
         (typeof req.headers['x-forwarded-for'] === 'string'
@@ -175,28 +177,37 @@ async function startServer() {
 
       // Strict validation to prevent SSRF: only allow valid YouTube handles (@...) or UC... channel IDs
       const cleanHandle = rawHandle.replace(/^https?:\/\/(www\.)?youtube\.com\//i, '').split(/[/?#]/)[0].trim();
-      const validChannelId = /^UC[a-zA-Z0-9_-]{20,28}$/.test(rawChannelId) ? rawChannelId : '';
-      const cacheKey = validChannelId || cleanHandle || '@swanarhacademy';
+      const handlePath = cleanHandle.startsWith('@') ? cleanHandle : `@${cleanHandle.replace(/^@+/, '')}`;
+      const isSwanarhDefault = handlePath.toLowerCase() === '@swanarhacademy';
+      const validChannelId = /^UC[a-zA-Z0-9_-]{20,28}$/.test(rawChannelId)
+        ? rawChannelId
+        : isSwanarhDefault
+        ? 'UCk0VikA7fYKBuoJkI_cOxRg'
+        : '';
+      const cacheKey = `${handlePath.toLowerCase()}:${validChannelId}`;
 
       const cached = ytFeedCache.get(cacheKey);
-      if (!force && cached && Date.now() - cached.fetchedAt < 60 * 1000) {
+      if (!force && cached && Date.now() - cached.fetchedAt < 60 * 1000 && cached.videos.length > 0) {
         res.status(200).json({ ok: true, ...cached });
         return;
       }
 
+      if (!/^@[a-zA-Z0-9._-]{2,60}$/.test(handlePath)) {
+        res.status(400).json({ ok: false, message: 'Invalid YouTube handle format.' });
+        return;
+      }
+
+      const ytHeaders = {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+        Cookie: 'SOCS=CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg',
+      };
+
       let resolvedChannelId = validChannelId;
       if (!resolvedChannelId) {
-        const handlePath = cleanHandle.startsWith('@') ? cleanHandle : `@${cleanHandle.replace(/^@+/, '')}`;
-        if (!/^@[a-zA-Z0-9._-]{2,60}$/.test(handlePath)) {
-          res.status(400).json({ ok: false, message: 'Invalid YouTube handle format.' });
-          return;
-        }
         const pageRes = await fetchWithTimeout(`https://www.youtube.com/${handlePath}`, {
-          headers: {
-            'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-          },
+          headers: ytHeaders,
         });
         if (pageRes.ok) {
           const html = await pageRes.text();
@@ -210,80 +221,146 @@ async function startServer() {
         }
       }
 
-      if (!resolvedChannelId) {
-        res.status(200).json({
-          ok: false,
-          channelId: '',
-          channelTitle: cleanHandle,
-          videos: [],
-          message: 'Could not resolve YouTube channel ID automatically.',
-        });
-        return;
-      }
+      let channelTitle = isSwanarhDefault ? 'SwanArh Academy' : handlePath;
+      const videoMap = new Map<
+        string,
+        {
+          videoId: string;
+          title: string;
+          publishedAt: string;
+          thumbnailUrl: string;
+          videoUrl: string;
+        }
+      >();
 
-      const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(resolvedChannelId)}`;
-      const rssRes = await fetchWithTimeout(rssUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; ClassroomLibraryBot/1.0)',
-        },
-      });
-      if (!rssRes.ok) {
-        res.status(200).json({
-          ok: false,
-          channelId: resolvedChannelId,
-          channelTitle: cleanHandle,
-          videos: [],
-        });
-        return;
-      }
+      // 1. Parse YouTube Atom RSS Feed for latest videos & publish timestamps
+      if (resolvedChannelId) {
+        try {
+          const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(
+            resolvedChannelId
+          )}`;
+          const rssRes = await fetchWithTimeout(rssUrl, { headers: ytHeaders });
+          if (rssRes.ok) {
+            const xml = await rssRes.text();
+            const channelTitleMatch = xml.match(/<title>([^<]+)<\/title>/);
+            if (channelTitleMatch && channelTitleMatch[1]) {
+              channelTitle = channelTitleMatch[1].trim();
+            }
 
-      const xml = await rssRes.text();
-      const channelTitleMatch = xml.match(/<title>([^<]+)<\/title>/);
-      const channelTitle = channelTitleMatch ? channelTitleMatch[1] : cleanHandle;
-
-      const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
-      const videos: Array<{
-        videoId: string;
-        title: string;
-        publishedAt: string;
-        thumbnailUrl: string;
-        videoUrl: string;
-      }> = [];
-
-      let match: RegExpExecArray | null;
-      while ((match = entryRegex.exec(xml)) !== null && videos.length < 50) {
-        const block = match[1];
-        const vidMatch = block.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
-        const titleMatch = block.match(/<title>([\s\S]*?)<\/title>/);
-        const pubMatch = block.match(/<published>([^<]+)<\/published>/);
-        if (vidMatch && vidMatch[1]) {
-          const videoId = vidMatch[1].trim();
-          const rawTitle = (titleMatch ? titleMatch[1] : 'YouTube Video')
-            .replace(/&amp;/g, '&')
-            .replace(/&quot;/g, '"')
-            .replace(/&#39;/g, "'")
-            .replace(/&lt;/g, '<')
-            .replace(/&gt;/g, '>')
-            .trim();
-          const publishedAt = pubMatch ? pubMatch[1].trim() : new Date().toISOString();
-          videos.push({
-            videoId,
-            title: rawTitle,
-            publishedAt,
-            thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-            videoUrl: `https://www.youtube.com/watch?v=${videoId}`,
-          });
+            const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
+            let match: RegExpExecArray | null;
+            while ((match = entryRegex.exec(xml)) !== null && videoMap.size < 50) {
+              const block = match[1];
+              const vidMatch = block.match(/<yt:videoId>([^<]+)<\/yt:videoId>/);
+              const titleMatch = block.match(/<title>([\s\S]*?)<\/title>/);
+              const pubMatch = block.match(/<published>([^<]+)<\/published>/);
+              if (vidMatch && vidMatch[1]) {
+                const videoId = vidMatch[1].trim();
+                if (/^[a-zA-Z0-9_-]{11}$/.test(videoId) && !videoMap.has(videoId)) {
+                  const rawTitle = (titleMatch ? titleMatch[1] : 'YouTube Video')
+                    .replace(/&amp;/g, '&')
+                    .replace(/&quot;/g, '"')
+                    .replace(/&#39;/g, "'")
+                    .replace(/&lt;/g, '<')
+                    .replace(/&gt;/g, '>')
+                    .trim();
+                  const publishedAt = pubMatch ? pubMatch[1].trim() : new Date().toISOString();
+                  ytVideoTitleCache.set(videoId, rawTitle);
+                  videoMap.set(videoId, {
+                    videoId,
+                    title: rawTitle,
+                    publishedAt,
+                    thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                    videoUrl: `https://www.youtube.com/watch?v=${videoId}`,
+                  });
+                }
+              }
+            }
+          }
+        } catch {
+          // continue to channel page scraping
         }
       }
 
+      // 2. Also scrape /videos and /shorts tabs to discover full channel catalog beyond the 15-item RSS limit
+      const extraIds: string[] = [];
+      for (const tab of ['videos', 'shorts']) {
+        try {
+          const tabRes = await fetchWithTimeout(`https://www.youtube.com/${handlePath}/${tab}`, {
+            headers: ytHeaders,
+          });
+          if (!tabRes.ok) continue;
+          const html = await tabRes.text();
+          if (!resolvedChannelId) {
+            const cidMatch =
+              html.match(/"externalId"\s*:\s*"(UC[a-zA-Z0-9_-]{20,28})"/) ||
+              html.match(/"channelId"\s*:\s*"(UC[a-zA-Z0-9_-]{20,28})"/);
+            if (cidMatch && cidMatch[1]) {
+              resolvedChannelId = cidMatch[1];
+            }
+          }
+          const vidRegex = /"videoId"\s*:\s*"([a-zA-Z0-9_-]{11})"/g;
+          let vm: RegExpExecArray | null;
+          while ((vm = vidRegex.exec(html)) !== null) {
+            const vid = vm[1];
+            if (!videoMap.has(vid) && !extraIds.includes(vid) && videoMap.size + extraIds.length < 40) {
+              extraIds.push(vid);
+            }
+          }
+        } catch {
+          // ignore tab fetch error
+        }
+      }
+
+      if (extraIds.length > 0) {
+        const resolvedExtras = await Promise.all(
+          extraIds.map(async (vid) => {
+            let title = ytVideoTitleCache.get(vid) || '';
+            if (!title) {
+              try {
+                const oRes = await fetchWithTimeout(
+                  `https://www.youtube.com/oembed?url=${encodeURIComponent(
+                    `https://www.youtube.com/watch?v=${vid}`
+                  )}&format=json`
+                );
+                if (oRes.ok) {
+                  const oData = (await oRes.json()) as { title?: string };
+                  if (oData.title) {
+                    title = String(oData.title).trim();
+                    ytVideoTitleCache.set(vid, title);
+                  }
+                }
+              } catch {
+                // ignore oembed failure
+              }
+            }
+            return {
+              videoId: vid,
+              title: title || `${channelTitle} — သင်ခန်းစာ ဗီဒီယို`,
+              publishedAt: 'SwanArh Academy',
+              thumbnailUrl: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
+              videoUrl: `https://www.youtube.com/watch?v=${vid}`,
+            };
+          })
+        );
+        for (const item of resolvedExtras) {
+          if (!videoMap.has(item.videoId)) {
+            videoMap.set(item.videoId, item);
+          }
+        }
+      }
+
+      const videos = Array.from(videoMap.values());
       const payload = {
-        channelId: resolvedChannelId,
+        channelId: resolvedChannelId || (isSwanarhDefault ? 'UCk0VikA7fYKBuoJkI_cOxRg' : ''),
         channelTitle,
         videos,
         fetchedAt: Date.now(),
       };
-      ytFeedCache.set(cacheKey, payload);
-      res.status(200).json({ ok: true, ...payload });
+      if (videos.length > 0) {
+        ytFeedCache.set(cacheKey, payload);
+      }
+      res.status(200).json({ ok: videos.length > 0, ...payload });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(200).json({ ok: false, videos: [], message: msg });
@@ -306,6 +383,7 @@ async function startServer() {
   >();
 
   app.get('/api/tiktok-feed', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
     try {
       const clientIp =
         (typeof req.headers['x-forwarded-for'] === 'string'

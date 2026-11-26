@@ -151,6 +151,166 @@ function isSafePdfEmbedUrl(rawUrl?: string): boolean {
   return false;
 }
 
+const OFFICIAL_SWANARH_YOUTUBE_CHANNEL_ID = 'UCk0VikA7fYKBuoJkI_cOxRg';
+const CLOUD_RELAY_ORIGIN = 'https://ais-pre-x3aphtm3a4npfd5tmiiqhv-683201169391.asia-southeast1.run.app';
+
+const OFFICIAL_SWANARH_YOUTUBE_VIDEOS: LiveYouTubeFeedVideo[] = [
+  {
+    videoId: 'JuojeHJ4u4c',
+    title: 'A heartfelt message from one of my beloved students in Japan.',
+    publishedAt: 'Nov 12, 2026',
+  },
+  {
+    videoId: '-nOET2U31rg',
+    title: 'A personal stake',
+    publishedAt: 'Nov 10, 2026',
+  },
+  {
+    videoId: 'ypvtik2fgRg',
+    title: 'Even as',
+    publishedAt: 'Nov 6, 2026',
+  },
+  {
+    videoId: 'zGWCnHqvSSw',
+    title: 'Jet lag',
+    publishedAt: 'Nov 5, 2026',
+  },
+  {
+    videoId: 'JdcDs1Aj0VE',
+    title: 'No matter how',
+    publishedAt: 'Nov 4, 2026',
+  },
+  {
+    videoId: 'P2LLq2L5KAA',
+    title: '၄ /၂၀၂၆ နှင့် ၅/ ၂၀၂၆ ကြေငြာစာအတွက် ရာထူးဝင်ခွင့်သင်တန်း',
+    publishedAt: 'Nov 3, 2026',
+  },
+  {
+    videoId: 'CSJm7Kt33VY',
+    title: 'Get over',
+    publishedAt: 'Oct 30, 2026',
+  },
+  {
+    videoId: 'DVsIznkQAoI',
+    title: 'Compound noun',
+    publishedAt: 'Oct 29, 2026',
+  },
+  {
+    videoId: 'YxrztqjZLFU',
+    title: 'Back when + Clause',
+    publishedAt: 'Oct 27, 2026',
+  },
+  {
+    videoId: 'wubX0qYHAeU',
+    title: 'Future Perfect',
+    publishedAt: 'Oct 26, 2026',
+  },
+  {
+    videoId: 'twcAmPkXL_A',
+    title: 'Future Tense (Part 5)',
+    publishedAt: 'Oct 25, 2026',
+  },
+  {
+    videoId: '7sjjyMF4wYk',
+    title: 'Future Tense (Part 4)',
+    publishedAt: 'Oct 24, 2026',
+  },
+  {
+    videoId: 'DAK2RLg9jtg',
+    title: 'Future Tense (Part 3)',
+    publishedAt: 'Oct 23, 2026',
+  },
+  {
+    videoId: 'O1keiMKZrPw',
+    title: 'Future Tense (Part 2)',
+    publishedAt: 'Oct 22, 2026',
+  },
+  {
+    videoId: 'kxyotbO4ZhY',
+    title: 'Future Tense (Part 1)',
+    publishedAt: 'Oct 21, 2026',
+  },
+  {
+    videoId: '0WmU26TcUeQ',
+    title: 'Present and Past Perfect Continuous',
+    publishedAt: 'SwanArh Academy',
+  },
+  {
+    videoId: '9tAjIvvEosQ',
+    title: 'Lest',
+    publishedAt: 'SwanArh Academy',
+  },
+  {
+    videoId: '0qXycEEhoy4',
+    title: 'Now that (Usage & Examples)',
+    publishedAt: 'SwanArh Academy',
+  },
+  {
+    videoId: 'aRblqAMoiXk',
+    title: 'A couple of',
+    publishedAt: 'SwanArh Academy',
+  },
+  {
+    videoId: '9zK663jFzGA',
+    title: 'And... as well / as well as',
+    publishedAt: 'SwanArh Academy',
+  },
+  {
+    videoId: 'pZBNDH2Ztns',
+    title: 'Now that',
+    publishedAt: 'SwanArh Academy',
+  },
+  {
+    videoId: '6Bby3ND-4og',
+    title: 'Have a hard time + Ving',
+    publishedAt: 'SwanArh Academy',
+  },
+  {
+    videoId: 'zfb2BZdW1i4',
+    title: 'Go overboard',
+    publishedAt: 'SwanArh Academy',
+  },
+  {
+    videoId: 'rvHxkMuUqZg',
+    title: 'As far as',
+    publishedAt: 'SwanArh Academy',
+  },
+  {
+    videoId: 'PxmBf9eqVt8',
+    title: 'As long as',
+    publishedAt: 'SwanArh Academy',
+  },
+  {
+    videoId: 'OFK7Q3fXNX8',
+    title: 'As soon as',
+    publishedAt: 'SwanArh Academy',
+  },
+  {
+    videoId: '9_B70m3L3Zs',
+    title: 'Feel like',
+    publishedAt: 'SwanArh Academy',
+  },
+  {
+    videoId: 'xQA4pvOKyFY',
+    title: 'Past Simple',
+    publishedAt: 'SwanArh Academy',
+  },
+  {
+    videoId: 'QDGqPQJpStc',
+    title: 'Reach and Arrive',
+    publishedAt: 'SwanArh Academy',
+  },
+  {
+    videoId: '6jS8DHNeI1A',
+    title: 'What matters most',
+    publishedAt: 'SwanArh Academy',
+  },
+].map((v) => ({
+  ...v,
+  thumbnailUrl: `https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`,
+  videoUrl: `https://www.youtube.com/watch?v=${v.videoId}`,
+}));
+
 export const LibraryView: React.FC<LibraryViewProps> = ({
   course,
   currentUser,
@@ -184,10 +344,16 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [readerFontSize, setReaderFontSize] = useState<number>(17);
   const [readerTheme, setReaderTheme] = useState<'light' | 'sepia' | 'dark'>('sepia');
 
-  // Live Auto-Sync YouTube & TikTok Channel Feed states
-  const [liveYtVideos, setLiveYtVideos] = useState<LiveYouTubeFeedVideo[]>([]);
-  const [liveYtChannelId, setLiveYtChannelId] = useState<string>('');
-  const [activeLiveYtVideoId, setActiveLiveYtVideoId] = useState<string>('');
+  // Live Auto-Sync YouTube & TikTok Channel Feed states (Pre-seeded with official @swanarhacademy videos so 0ms blank state never happens)
+  const [liveYtVideos, setLiveYtVideos] = useState<LiveYouTubeFeedVideo[]>(
+    () => OFFICIAL_SWANARH_YOUTUBE_VIDEOS
+  );
+  const [liveYtChannelId, setLiveYtChannelId] = useState<string>(
+    () => OFFICIAL_SWANARH_YOUTUBE_CHANNEL_ID
+  );
+  const [activeLiveYtVideoId, setActiveLiveYtVideoId] = useState<string>(
+    () => OFFICIAL_SWANARH_YOUTUBE_VIDEOS[0]?.videoId || 'JuojeHJ4u4c'
+  );
 
   const [liveTtVideos, setLiveTtVideos] = useState<LiveTikTokFeedVideo[]>([]);
   const [activeLiveTtVideoId, setActiveLiveTtVideoId] = useState<string>('');
@@ -248,42 +414,161 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     setTimeout(() => setToastMessage(null), 4200);
   };
 
-  // Fetch all YouTube & TikTok videos automatically from the channels
+  // Fetch all YouTube & TikTok videos automatically from the channels (works on Cloud Run AND static GitHub Pages)
   const syncLiveChannelFeeds = async (force: boolean = false) => {
     setIsSyncingChannels(true);
     try {
       const ytHandle = extractYouTubeHandle(channelConfig.youtubeChannelUrl);
-      const cid = channelConfig.youtubeChannelId || '';
+      const isDefaultSwanarh = ytHandle.toLowerCase() === '@swanarhacademy';
+      const cid =
+        channelConfig.youtubeChannelId ||
+        (isDefaultSwanarh ? OFFICIAL_SWANARH_YOUTUBE_CHANNEL_ID : '');
       const ttHandle = extractTikTokHandle(channelConfig.tiktokProfileUrl);
 
-      const [ytRes, ttRes] = await Promise.allSettled([
-        fetch(
-          `/api/youtube-feed?handle=${encodeURIComponent(ytHandle)}&channelId=${encodeURIComponent(
-            cid
-          )}${force ? '&force=1' : ''}`
-        ),
-        fetch(
-          `/api/tiktok-feed?handle=${encodeURIComponent(ttHandle)}${force ? '&force=1' : ''}`
-        ),
+      const mergeYouTubeVideos = (incoming: LiveYouTubeFeedVideo[]) => {
+        const mergedMap = new Map<string, LiveYouTubeFeedVideo>();
+        incoming.forEach((v) => {
+          if (v && /^[a-zA-Z0-9_-]{11}$/.test(v.videoId)) {
+            mergedMap.set(v.videoId, {
+              videoId: v.videoId,
+              title: v.title || 'SwanArh Academy Video',
+              publishedAt: v.publishedAt || 'SwanArh Academy',
+              thumbnailUrl: v.thumbnailUrl || `https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`,
+              videoUrl: v.videoUrl || `https://www.youtube.com/watch?v=${v.videoId}`,
+            });
+          }
+        });
+        if (isDefaultSwanarh) {
+          OFFICIAL_SWANARH_YOUTUBE_VIDEOS.forEach((v) => {
+            if (!mergedMap.has(v.videoId)) {
+              mergedMap.set(v.videoId, v);
+            }
+          });
+        }
+        return Array.from(mergedMap.values());
+      };
+
+      const ytQuery = `handle=${encodeURIComponent(ytHandle)}&channelId=${encodeURIComponent(
+        cid
+      )}${force ? '&force=1' : ''}`;
+      const ttQuery = `handle=${encodeURIComponent(ttHandle)}${force ? '&force=1' : ''}`;
+
+      // Tier 1: Same-origin API -> Tier 2: Cloud Run Relay -> Tier 3: Public RSS2JSON Fallback
+      const fetchYouTubeFeedWithFallbacks = async (): Promise<{
+        videos: LiveYouTubeFeedVideo[];
+        channelId: string;
+      } | null> => {
+        const endpoints = [
+          `/api/youtube-feed?${ytQuery}`,
+          `${CLOUD_RELAY_ORIGIN}/api/youtube-feed?${ytQuery}`,
+        ];
+        for (const ep of endpoints) {
+          try {
+            const resp = await fetch(ep);
+            if (!resp.ok) continue;
+            const contentType = resp.headers.get('content-type') || '';
+            if (!contentType.includes('application/json')) continue;
+            const data = await resp.json();
+            if (Array.isArray(data?.videos) && data.videos.length > 0) {
+              return {
+                videos: data.videos,
+                channelId: data.channelId || cid,
+              };
+            }
+          } catch {
+            // try next endpoint
+          }
+        }
+
+        // Tier 3: Pure Client-Side Public RSS-to-JSON Fallback (for static hosting if Cloud Run relay is unreachable)
+        if (cid) {
+          try {
+            const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(
+              cid
+            )}`;
+            const rss2JsonRes = await fetch(
+              `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(rssUrl)}`
+            );
+            if (rss2JsonRes.ok) {
+              const rssData = await rss2JsonRes.json();
+              if (Array.isArray(rssData?.items) && rssData.items.length > 0) {
+                const parsed: LiveYouTubeFeedVideo[] = [];
+                for (const item of rssData.items) {
+                  const vid =
+                    extractYouTubeVideoId(String(item.link || '')) ||
+                    String(item.guid || '').replace(/^yt:video:/, '');
+                  if (/^[a-zA-Z0-9_-]{11}$/.test(vid)) {
+                    parsed.push({
+                      videoId: vid,
+                      title: String(item.title || 'SwanArh Academy Video').trim(),
+                      publishedAt: String(item.pubDate || 'SwanArh Academy'),
+                      thumbnailUrl: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`,
+                      videoUrl: `https://www.youtube.com/watch?v=${vid}`,
+                    });
+                  }
+                }
+                if (parsed.length > 0) {
+                  return { videos: parsed, channelId: cid };
+                }
+              }
+            }
+          } catch {
+            // ignore fallback error
+          }
+        }
+        return null;
+      };
+
+      const fetchTikTokFeedWithFallbacks = async (): Promise<LiveTikTokFeedVideo[] | null> => {
+        const endpoints = [
+          `/api/tiktok-feed?${ttQuery}`,
+          `${CLOUD_RELAY_ORIGIN}/api/tiktok-feed?${ttQuery}`,
+        ];
+        for (const ep of endpoints) {
+          try {
+            const resp = await fetch(ep);
+            if (!resp.ok) continue;
+            const contentType = resp.headers.get('content-type') || '';
+            if (!contentType.includes('application/json')) continue;
+            const data = await resp.json();
+            if (Array.isArray(data?.videos) && data.videos.length > 0) {
+              return data.videos;
+            }
+          } catch {
+            // try next endpoint
+          }
+        }
+        return null;
+      };
+
+      const [ytPayload, ttVideos] = await Promise.all([
+        fetchYouTubeFeedWithFallbacks(),
+        fetchTikTokFeedWithFallbacks(),
       ]);
 
-      if (ytRes.status === 'fulfilled' && ytRes.value.ok) {
-        const ytData = await ytRes.value.json();
-        if (Array.isArray(ytData.videos) && ytData.videos.length > 0) {
-          setLiveYtVideos(ytData.videos);
-          setActiveLiveYtVideoId((prev) => prev || ytData.videos[0].videoId);
+      if (ytPayload && ytPayload.videos.length > 0) {
+        const merged = mergeYouTubeVideos(ytPayload.videos);
+        setLiveYtVideos(merged);
+        setActiveLiveYtVideoId((prev) =>
+          prev && merged.some((v) => v.videoId === prev) ? prev : merged[0].videoId
+        );
+        if (ytPayload.channelId) {
+          setLiveYtChannelId(ytPayload.channelId);
         }
-        if (ytData.channelId) {
-          setLiveYtChannelId(ytData.channelId);
-        }
+      } else if (isDefaultSwanarh) {
+        setLiveYtVideos((prev) =>
+          prev.length > 0 ? prev : OFFICIAL_SWANARH_YOUTUBE_VIDEOS
+        );
+        setLiveYtChannelId((prev) => prev || OFFICIAL_SWANARH_YOUTUBE_CHANNEL_ID);
       }
 
-      if (ttRes.status === 'fulfilled' && ttRes.value.ok) {
-        const ttData = await ttRes.value.json();
-        if (Array.isArray(ttData.videos) && ttData.videos.length > 0) {
-          setLiveTtVideos(ttData.videos);
-          setActiveLiveTtVideoId((prev) => prev || ttData.videos[0].videoId);
-        }
+      if (ttVideos && ttVideos.length > 0) {
+        setLiveTtVideos(ttVideos);
+        setActiveLiveTtVideoId((prev) => prev || ttVideos[0].videoId);
+      }
+
+      if (force) {
+        showToast('YouTube နှင့် TikTok ဗီဒီယိုစာရင်း အသစ်များကို Sync ဆွဲပြီးပါပြီ!', 'info');
       }
     } catch {
       // ignore offline
@@ -1004,13 +1289,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             </div>
           )}
 
-          {/* Segmented Library Section Controls & Search */}
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-            <div className="neu-inset p-1.5 rounded-2xl flex flex-wrap items-center gap-1.5 text-xs font-bold">
+          {/* Segmented Library Section Controls & Search (Responsive across Mobile, Tablet & Browser) */}
+          <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+            <div className="neu-inset p-1.5 rounded-2xl grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1.5 text-xs font-bold">
               <button
                 type="button"
                 onClick={() => setFilterTab('all')}
-                className={`px-3.5 py-2 rounded-xl transition-all cursor-pointer ${
+                className={`col-span-2 sm:col-span-1 px-3 sm:px-3.5 py-2 rounded-xl transition-all cursor-pointer text-center ${
                   filterTab === 'all'
                     ? 'neu-raised-sm text-indigo-700 dark:text-indigo-300'
                     : 'text-slate-600 dark:text-slate-400'
@@ -1022,58 +1307,58 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               <button
                 type="button"
                 onClick={() => setFilterTab('ebook')}
-                className={`px-3.5 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 ${
+                className={`px-2.5 sm:px-3.5 py-2 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                   filterTab === 'ebook'
                     ? 'neu-raised-sm text-emerald-700 dark:text-emerald-300'
                     : 'text-slate-600 dark:text-slate-400'
                 }`}
               >
-                <BookOpen className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                <span>သင်တန်း eBook စာအုပ်စင် ({counts.ebook})</span>
+                <BookOpen className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span className="truncate">eBook စာအုပ်စင် ({counts.ebook})</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setFilterTab('long_note')}
-                className={`px-3.5 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 ${
+                className={`px-2.5 sm:px-3.5 py-2 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                   filterTab === 'long_note'
                     ? 'neu-raised-sm text-amber-700 dark:text-amber-300'
                     : 'text-slate-600 dark:text-slate-400'
                 }`}
               >
-                <FileText className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-                <span>စာရှည်မှတ်စုများ ({counts.long_note})</span>
+                <FileText className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                <span className="truncate">စာရှည်မှတ်စုများ ({counts.long_note})</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setFilterTab('youtube')}
-                className={`px-3.5 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 ${
+                className={`px-2.5 sm:px-3.5 py-2 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                   filterTab === 'youtube'
                     ? 'neu-raised-sm text-rose-700 dark:text-rose-300'
                     : 'text-slate-600 dark:text-slate-400'
                 }`}
               >
-                <Youtube className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
-                <span>YouTube ဗီဒီယိုအားလုံး ({counts.youtube})</span>
+                <Youtube className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
+                <span className="truncate">YouTube ဗီဒီယို ({counts.youtube})</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setFilterTab('tiktok')}
-                className={`px-3.5 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 ${
+                className={`px-2.5 sm:px-3.5 py-2 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                   filterTab === 'tiktok'
                     ? 'neu-raised-sm text-cyan-700 dark:text-cyan-300'
                     : 'text-slate-600 dark:text-slate-400'
                 }`}
               >
-                <Video className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />
-                <span>TikTok ဗီဒီယိုအားလုံး</span>
+                <Video className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" />
+                <span className="truncate">TikTok ဗီဒီယို</span>
               </button>
             </div>
 
-            <div className="flex items-center gap-2">
-              <div className="relative flex-1 sm:w-64">
+            <div className="flex items-center gap-2 w-full xl:w-auto">
+              <div className="relative flex-1 xl:w-64">
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
@@ -1399,84 +1684,99 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 </div>
               </div>
 
-              {/^[a-zA-Z0-9_-]{11}$/.test(activeLiveYtVideoId) ? (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-                  {/* Main Cinema Player */}
-                  <div className="lg:col-span-7 space-y-2.5">
-                    <div className="aspect-video w-full rounded-2xl overflow-hidden bg-slate-950 shadow-lg border border-slate-800">
-                      <iframe
-                        src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(
-                          activeLiveYtVideoId
-                        )}?rel=0`}
-                        title="Swanarh Academy YouTube Theater"
-                        className="w-full h-full"
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                        allowFullScreen
-                      />
-                    </div>
-                    <div className="px-1">
-                      <p className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-slate-100">
-                        {allYouTubeGalleryVideos.find((v) => v.videoId === activeLiveYtVideoId)
-                          ?.title || 'Swanarh Academy YouTube Video'}
-                      </p>
-                    </div>
-                  </div>
+              {/* YouTube Cinema Player + Full Video Catalog */}
+              {(() => {
+                const currentVideoId =
+                  /^[a-zA-Z0-9_-]{11}$/.test(activeLiveYtVideoId)
+                    ? activeLiveYtVideoId
+                    : allYouTubeGalleryVideos[0]?.videoId ||
+                      OFFICIAL_SWANARH_YOUTUBE_VIDEOS[0]?.videoId ||
+                      'JuojeHJ4u4c';
+                const currentVideoObj =
+                  allYouTubeGalleryVideos.find((v) => v.videoId === currentVideoId) ||
+                  OFFICIAL_SWANARH_YOUTUBE_VIDEOS.find((v) => v.videoId === currentVideoId);
+                const displayVideos =
+                  allYouTubeGalleryVideos.length > 0
+                    ? allYouTubeGalleryVideos
+                    : OFFICIAL_SWANARH_YOUTUBE_VIDEOS;
 
-                  {/* Full Scrollable Gallery of All Channel Videos */}
-                  <div className="lg:col-span-5 space-y-2">
-                    <div className="text-xs font-extrabold text-slate-700 dark:text-slate-300 px-1">
-                      Channel ဗီဒီယိုစာရင်း အားလုံး ({allYouTubeGalleryVideos.length} ခု) — နှိပ်၍ ကြည့်ရှုပါ
+                return (
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-5 items-start">
+                    {/* Main Cinema Player */}
+                    <div className="lg:col-span-7 space-y-2.5 min-w-0">
+                      <div className="aspect-video w-full rounded-2xl overflow-hidden bg-slate-950 shadow-lg border border-slate-800">
+                        <iframe
+                          key={currentVideoId}
+                          src={`https://www.youtube.com/embed/${encodeURIComponent(
+                            currentVideoId
+                          )}?rel=0&modestbranding=1&playsinline=1`}
+                          title={currentVideoObj?.title || 'Swanarh Academy YouTube Theater'}
+                          className="w-full h-full border-0"
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                          referrerPolicy="strict-origin-when-cross-origin"
+                          allowFullScreen
+                        />
+                      </div>
+                      <div className="px-1 flex items-center justify-between gap-2 flex-wrap">
+                        <p className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-slate-100 leading-snug">
+                          {currentVideoObj?.title || 'Swanarh Academy YouTube Video'}
+                        </p>
+                        {currentVideoObj?.publishedAt && (
+                          <span className="text-[11px] font-mono text-rose-600 dark:text-rose-400 font-bold shrink-0">
+                            {currentVideoObj.publishedAt}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-2.5 max-h-[420px] overflow-y-auto pr-1">
-                      {allYouTubeGalleryVideos.map((v, idx) => {
-                        const isPlaying = v.videoId === activeLiveYtVideoId;
-                        return (
-                          <button
-                            key={v.videoId}
-                            type="button"
-                            onClick={() => setActiveLiveYtVideoId(v.videoId)}
-                            className={`p-2.5 rounded-2xl text-left transition-all cursor-pointer flex items-center gap-3 ${
-                              isPlaying
-                                ? 'ring-2 ring-rose-500 bg-rose-500/10'
-                                : 'neu-inset hover:bg-slate-200/40 dark:hover:bg-slate-800/40'
-                            }`}
-                          >
-                            <div className="relative w-28 aspect-video rounded-xl overflow-hidden bg-slate-900 shrink-0">
-                              <img
-                                src={v.thumbnailUrl}
-                                alt={v.title}
-                                className="w-full h-full object-cover"
-                                loading="lazy"
-                              />
-                              <span className="absolute inset-0 bg-black/30 flex items-center justify-center">
-                                <Play className="w-4 h-4 text-white fill-white" />
-                              </span>
-                            </div>
-                            <div className="min-w-0 flex-1 space-y-1">
-                              <div className="text-[10px] font-mono text-rose-600 dark:text-rose-400 font-bold">
-                                #{idx + 1} {isPlaying ? '· ယခုဖွင့်ထားသည်' : ''}
+
+                    {/* Full Scrollable Gallery of All Channel Videos */}
+                    <div className="lg:col-span-5 space-y-2 min-w-0">
+                      <div className="text-xs font-extrabold text-slate-700 dark:text-slate-300 px-1 flex items-center justify-between gap-2">
+                        <span>
+                          Channel ဗီဒီယိုစာရင်း အားလုံး ({displayVideos.length} ခု) — နှိပ်၍ ကြည့်ရှုပါ
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-2.5 max-h-[380px] sm:max-h-[430px] overflow-y-auto pr-1">
+                        {displayVideos.map((v, idx) => {
+                          const isPlaying = v.videoId === currentVideoId;
+                          return (
+                            <button
+                              key={v.videoId}
+                              type="button"
+                              onClick={() => setActiveLiveYtVideoId(v.videoId)}
+                              className={`p-2 sm:p-2.5 rounded-2xl text-left transition-all cursor-pointer flex items-center gap-2.5 sm:gap-3 min-w-0 ${
+                                isPlaying
+                                  ? 'ring-2 ring-rose-500 bg-rose-500/10'
+                                  : 'neu-inset hover:bg-slate-200/40 dark:hover:bg-slate-800/40'
+                              }`}
+                            >
+                              <div className="relative w-24 sm:w-28 aspect-video rounded-xl overflow-hidden bg-slate-900 shrink-0">
+                                <img
+                                  src={v.thumbnailUrl}
+                                  alt={v.title}
+                                  className="w-full h-full object-cover"
+                                  loading="lazy"
+                                />
+                                <span className="absolute inset-0 bg-black/30 flex items-center justify-center">
+                                  <Play className="w-4 h-4 text-white fill-white" />
+                                </span>
                               </div>
-                              <p className="text-xs font-bold text-slate-800 dark:text-slate-100 line-clamp-2 leading-snug">
-                                {v.title}
-                              </p>
-                            </div>
-                          </button>
-                        );
-                      })}
+                              <div className="min-w-0 flex-1 space-y-0.5">
+                                <div className="text-[10px] font-mono text-rose-600 dark:text-rose-400 font-bold truncate">
+                                  #{idx + 1} {isPlaying ? '· ▶ ယခုဖွင့်ထားသည်' : ''}
+                                </div>
+                                <p className="text-xs font-bold text-slate-800 dark:text-slate-100 line-clamp-2 leading-snug">
+                                  {v.title}
+                                </p>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ) : uploadsPlaylistId ? (
-                <div className="aspect-video w-full rounded-2xl overflow-hidden bg-slate-950 border border-slate-800">
-                  <iframe
-                    src={`https://www.youtube-nocookie.com/embed/videoseries?list=${uploadsPlaylistId}`}
-                    title="Swanarh Academy Uploads Playlist"
-                    className="w-full h-full"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                    allowFullScreen
-                  />
-                </div>
-              ) : null}
+                );
+              })()}
             </div>
           )}
 

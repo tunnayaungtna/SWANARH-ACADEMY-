@@ -996,30 +996,30 @@ export default function App() {
           <div className="space-y-6 sm:space-y-9 min-w-0">
             {/* Sleek Liquid Glass Quick Action Console (Mobile, Tablet & Web Responsive) */}
             <div className="neu-card rounded-2xl p-3 sm:p-4 min-w-0 overflow-hidden">
-              <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center justify-between gap-2 sm:gap-3">
+              <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center justify-between gap-2 sm:gap-2.5">
                 <div className="contents sm:flex sm:flex-wrap sm:items-center sm:gap-2.5 sm:flex-1">
                   <button
-                    onClick={() => setShowRulesModal(true)}
-                    className="neu-btn flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2.5 text-emerald-800 dark:text-emerald-300 text-xs font-bold rounded-xl cursor-pointer sm:flex-1 lg:flex-initial"
-                  >
-                    <ScrollText className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                    <span className="truncate">စည်းကမ်းချက်များ</span>
-                  </button>
-
-                  <button
                     onClick={() => setShowGuideModal(true)}
-                    className="neu-btn flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2.5 text-amber-800 dark:text-amber-200 text-xs font-extrabold rounded-xl cursor-pointer border border-amber-500/25 sm:flex-1 lg:flex-initial"
+                    className="col-span-2 sm:col-span-1 neu-btn flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2.5 text-amber-800 dark:text-amber-200 text-xs font-extrabold rounded-xl cursor-pointer border border-amber-500/25 sm:flex-1 lg:flex-initial"
                     title="Classroom အသုံးပြုနည်း (User Guide)"
                   >
                     <HelpCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
                     <span className="truncate">📖 Classroom အသုံးပြုနည်း (User Guide)</span>
                   </button>
 
+                  <button
+                    onClick={() => setShowRulesModal(true)}
+                    className="neu-btn flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2.5 text-emerald-800 dark:text-emerald-300 text-xs font-bold rounded-xl cursor-pointer sm:flex-1 lg:flex-initial"
+                  >
+                    <ScrollText className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                    <span className="truncate">စည်းကမ်းချက်များ</span>
+                  </button>
+
                   {currentUser.role === 'student' && currentUser.rulesAccepted && (
                     <button
                       type="button"
                       onClick={() => setShowRulesModal(true)}
-                      className="neu-inset-sm flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl text-emerald-800 dark:text-emerald-300 font-sans font-bold text-xs cursor-pointer hover:text-emerald-600 transition-colors"
+                      className="neu-inset-sm flex items-center justify-center gap-1.5 px-3 sm:px-3.5 py-2.5 rounded-xl text-emerald-800 dark:text-emerald-300 font-sans font-bold text-xs cursor-pointer hover:text-emerald-600 transition-colors"
                       title="သင်တန်းစည်းကမ်းချက်များကို သိရှိလိုက်နာပါမည်ဟု အတည်ပြုပြီး"
                     >
                       <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
@@ -1032,7 +1032,7 @@ export default function App() {
                       {currentUser.role === 'admin' && (
                         <button
                           onClick={() => setShowAuditLogModal(true)}
-                          className="neu-btn flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2.5 text-amber-800 dark:text-amber-300 text-xs font-bold rounded-xl cursor-pointer border border-amber-500/20 sm:flex-1 lg:flex-initial"
+                          className="neu-btn flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2.5 text-amber-800 dark:text-amber-300 text-xs font-bold rounded-xl cursor-pointer border border-amber-500/20 sm:flex-1 lg:flex-initial"
                           title="Admin နှင့် Co-Admin တို့၏ လုပ်ဆောင်ချက် မှတ်တမ်းအားလုံးကို စစ်ဆေးရန်"
                         >
                           <History className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
@@ -1042,7 +1042,7 @@ export default function App() {
 
                       <button
                         onClick={() => setShowStudentDirectoryModal(true)}
-                        className="neu-btn flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2.5 text-slate-800 dark:text-slate-100 text-xs font-bold rounded-xl cursor-pointer sm:flex-1 lg:flex-initial"
+                        className="neu-btn flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2.5 text-slate-800 dark:text-slate-100 text-xs font-bold rounded-xl cursor-pointer sm:flex-1 lg:flex-initial"
                       >
                         <Users className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
                         <span className="truncate">Manage Users</span>
@@ -1050,7 +1050,7 @@ export default function App() {
 
                       <button
                         onClick={() => setShowCreateCourseModal(true)}
-                        className="neu-btn-indigo flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2.5 text-white text-xs font-bold rounded-xl cursor-pointer sm:flex-1 lg:flex-initial"
+                        className="neu-btn-indigo flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2.5 text-white text-xs font-bold rounded-xl cursor-pointer sm:flex-1 lg:flex-initial"
                       >
                         <Plus className="w-4 h-4 shrink-0" />
                         <span className="truncate">Create Class</span>
@@ -1062,7 +1062,7 @@ export default function App() {
                 <button
                   onClick={handleLogout}
                   className={`neu-btn ${
-                    currentUser.role === 'admin' ||
+                    currentUser.role === 'co_admin' ||
                     (currentUser.role === 'student' && currentUser.rulesAccepted)
                       ? 'col-span-2 sm:col-span-1'
                       : ''
@@ -1074,19 +1074,19 @@ export default function App() {
               </div>
             </div>
 
-            {/* Side-by-Side Premium Hub: စွမ်းအား Website & Library စာကြည့်တိုက် (No New Tab Button) */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+            {/* Side-by-Side Premium Hub: စွမ်းအား Website & Library စာကြည့်တိုက် (Responsive on Mobile, Tablet & Desktop) */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
               {/* 1. စွမ်းအားသင်တန်း တရားဝင် ဝက်ဘ်ဆိုဒ် (Official Website) */}
               <div
                 onClick={() => setShowWebsiteModal(true)}
-                className="neu-raised rounded-2xl p-4 sm:px-5 sm:py-4 flex items-center justify-between gap-3.5 border border-emerald-500/25 hover:border-emerald-500/50 transition-all cursor-pointer group"
+                className="neu-raised rounded-2xl p-4 sm:px-5 sm:py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-emerald-500/25 hover:border-emerald-500/50 transition-all cursor-pointer group min-w-0"
               >
                 <div className="flex items-center gap-3.5 min-w-0">
                   <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform">
                     <Globe className="w-5 h-5" />
                   </div>
-                  <div className="min-w-0">
-                    <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-slate-100 truncate">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-slate-100 leading-snug">
                       စွမ်းအား Website (Official Website)
                     </h3>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
@@ -1100,7 +1100,7 @@ export default function App() {
                     e.stopPropagation();
                     setShowWebsiteModal(true);
                   }}
-                  className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-xs"
+                  className="w-full sm:w-auto px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-xs"
                 >
                   <Globe className="w-3.5 h-3.5 shrink-0" />
                   <span>Website ဖွင့်ရန်</span>
@@ -1110,14 +1110,14 @@ export default function App() {
               {/* 2. စွမ်းအား ဒစ်ဂျစ်တယ် စာကြည့်တိုက် (Grand Digital Library) */}
               <div
                 onClick={() => setShowLibraryModal(true)}
-                className="neu-raised rounded-2xl p-4 sm:px-5 sm:py-4 flex items-center justify-between gap-3.5 border border-amber-500/30 hover:border-amber-500/60 transition-all cursor-pointer group"
+                className="neu-raised rounded-2xl p-4 sm:px-5 sm:py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-amber-500/30 hover:border-amber-500/60 transition-all cursor-pointer group min-w-0"
               >
                 <div className="flex items-center gap-3.5 min-w-0">
                   <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-amber-500 to-indigo-700 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform">
                     <BookOpen className="w-5 h-5" />
                   </div>
-                  <div className="min-w-0">
-                    <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-slate-100 truncate">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-slate-100 leading-snug">
                       Library စာကြည့်တိုက် (Digital Library)
                     </h3>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
@@ -1131,7 +1131,7 @@ export default function App() {
                     e.stopPropagation();
                     setShowLibraryModal(true);
                   }}
-                  className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-xs"
+                  className="w-full sm:w-auto px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-xs"
                 >
                   <BookOpen className="w-3.5 h-3.5 shrink-0" />
                   <span>စာကြည့်တိုက် ဖွင့်ရန်</span>
@@ -1468,10 +1468,10 @@ export default function App() {
 
         {/* Standalone Academy-Wide Digital Library Modal (Opened alongside Official Website) */}
         {showLibraryModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/75 backdrop-blur-sm animate-fade-in">
-            <div className="relative w-full max-w-6xl h-[92dvh] neu-canvas rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col">
-              <div className="px-4 sm:px-6 py-3 border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-3 shrink-0">
-                <div className="flex items-center gap-2.5 min-w-0">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-1.5 sm:p-4 bg-slate-950/75 backdrop-blur-sm animate-fade-in">
+            <div className="relative w-full max-w-7xl h-[94dvh] sm:h-[92dvh] neu-canvas rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col">
+              <div className="px-3.5 sm:px-6 py-2.5 sm:py-3 border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-2.5 shrink-0">
+                <div className="flex items-center gap-2 min-w-0">
                   <BookOpen className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
                   <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white truncate">
                     Swanarh Academy — Library စာကြည့်တိုက် (eBooks · Notes · YouTube · TikTok)
@@ -1485,7 +1485,7 @@ export default function App() {
                   ✕ ပိတ်မည်
                 </button>
               </div>
-              <div className="flex-1 overflow-y-auto p-3 sm:p-6">
+              <div className="flex-1 overflow-y-auto overflow-x-hidden p-2.5 sm:p-5">
                 <LibraryView
                   course={selectedCourse || courses[0]}
                   currentUser={currentUser}

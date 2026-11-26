@@ -202,9 +202,9 @@ export const Navbar: React.FC<NavbarProps> = ({
         />
       )}
 
-      <div className="relative z-50 max-w-7xl mx-auto neu-raised rounded-2xl px-2.5 sm:px-5 h-14 sm:h-16 flex items-center justify-between gap-1.5 sm:gap-4 min-w-0 w-full">
+      <div className="relative z-50 max-w-7xl mx-auto neu-raised rounded-2xl px-2.5 sm:px-4 lg:px-5 h-14 sm:h-16 flex items-center justify-between gap-1.5 sm:gap-3 min-w-0 w-full">
         {/* Zone 1: Brand Wordmark & Role Indicator */}
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1 sm:flex-initial sm:shrink-0">
+        <div className="flex items-center gap-2 min-w-0 flex-1 sm:flex-initial shrink-0">
           <button
             type="button"
             onClick={() => {
@@ -212,7 +212,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               setShowUserDropdown(false);
               setShowNotifications(false);
             }}
-            className="text-sm sm:text-base lg:text-lg font-extrabold tracking-tight text-slate-900 dark:text-slate-100 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer text-left flex items-center gap-2 min-w-0 max-w-full"
+            className="text-sm sm:text-base font-extrabold tracking-tight text-slate-900 dark:text-slate-100 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer text-left flex items-center gap-2 min-w-0 max-w-full"
           >
             <div className="neu-inset-sm p-1 sm:p-1.5 rounded-xl shrink-0">
               <AcademyLogo size="sm" />
@@ -220,13 +220,13 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span className="truncate">SwanArh Classroom</span>
           </button>
 
-          <span className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 hidden xl:inline-block shrink-0">
+          <span className="text-[10px] sm:text-xs font-semibold text-slate-500 dark:text-slate-400 hidden 2xl:inline-block shrink-0">
             · {currentUser.role === 'admin' ? 'Lead Mentor (Admin)' : currentUser.role === 'co_admin' ? 'Co-Admin (တွဲဖက်)' : 'Student (ကျောင်းသား)'}
           </span>
         </div>
 
-        {/* Zone 2: Desktop Navigation Links (hidden on mobile/tablet, visible on lg+) */}
-        <nav className="hidden lg:flex items-center gap-4 xl:gap-6 text-xs sm:text-sm font-semibold text-slate-600 dark:text-slate-300 shrink-0">
+        {/* Zone 2: Desktop Navigation Links (hidden on mobile/tablet, visible on lg+ with compact spacing so all links fit 1024px-1440px+ cleanly) */}
+        <nav className="hidden lg:flex items-center gap-2 xl:gap-3.5 text-xs font-semibold text-slate-600 dark:text-slate-300 shrink-0">
           <button
             type="button"
             onClick={() => {
@@ -234,7 +234,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               setShowNotifications(false);
               onNavigateHome();
             }}
-            className="hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="px-2 py-1.5 rounded-xl hover:bg-white/50 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             My Classes
           </button>
@@ -246,9 +246,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                 setShowNotifications(false);
                 onOpenRules();
               }}
-              className="text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5"
+              className="px-2 py-1.5 rounded-xl hover:bg-white/50 dark:hover:bg-slate-800/50 text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1"
             >
-              <ScrollText className="w-3.5 h-3.5" />
+              <ScrollText className="w-3.5 h-3.5 shrink-0" />
               <span>စည်းကမ်းချက်များ</span>
             </button>
           )}
@@ -260,10 +260,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                 setShowNotifications(false);
                 onOpenWebsite();
               }}
-              className="text-sky-700 dark:text-sky-400 hover:text-sky-800 dark:hover:text-sky-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5"
+              className="px-2 py-1.5 rounded-xl hover:bg-white/50 dark:hover:bg-slate-800/50 text-sky-700 dark:text-sky-400 hover:text-sky-800 dark:hover:text-sky-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1"
               title="စွမ်းအားသင်တန်း Official Website (www.swanarhacademy.com)"
             >
-              <Globe className="w-3.5 h-3.5" />
+              <Globe className="w-3.5 h-3.5 shrink-0" />
               <span>စွမ်းအား Website</span>
             </button>
           )}
@@ -275,10 +275,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                 setShowNotifications(false);
                 onOpenLibrary();
               }}
-              className="text-amber-700 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5"
+              className="px-2 py-1.5 rounded-xl hover:bg-white/50 dark:hover:bg-slate-800/50 text-amber-700 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1"
               title="စွမ်းအား ဒစ်ဂျစ်တယ် စာကြည့်တိုက် (Library)"
             >
-              <BookOpen className="w-3.5 h-3.5" />
+              <BookOpen className="w-3.5 h-3.5 shrink-0" />
               <span>Library စာကြည့်တိုက်</span>
             </button>
           )}
@@ -290,11 +290,12 @@ export const Navbar: React.FC<NavbarProps> = ({
                 setShowNotifications(false);
                 onOpenGuide();
               }}
-              className="text-indigo-700 dark:text-indigo-300 hover:text-indigo-900 dark:hover:text-indigo-200 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5"
+              className="px-2 py-1.5 rounded-xl hover:bg-white/50 dark:hover:bg-slate-800/50 text-indigo-700 dark:text-indigo-300 hover:text-indigo-900 dark:hover:text-indigo-200 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1"
               title="Classroom အသုံးပြုနည်း (User Guide)"
             >
-              <HelpCircle className="w-3.5 h-3.5" />
-              <span>Classroom အသုံးပြုနည်း (User Guide)</span>
+              <HelpCircle className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden 2xl:inline">Classroom </span>
+              <span>အသုံးပြုနည်း (User Guide)</span>
             </button>
           )}
           {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
@@ -307,9 +308,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                     setShowNotifications(false);
                     onOpenStudentDirectory();
                   }}
-                  className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5"
+                  className="px-2 py-1.5 rounded-xl hover:bg-white/50 dark:hover:bg-slate-800/50 text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1"
                 >
-                  <Users className="w-3.5 h-3.5" />
+                  <Users className="w-3.5 h-3.5 shrink-0" />
                   <span>Manage Users</span>
                 </button>
               )}
@@ -321,9 +322,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                     setShowNotifications(false);
                     onOpenAuditLog();
                   }}
-                  className="text-amber-700 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5"
+                  className="px-2 py-1.5 rounded-xl hover:bg-white/50 dark:hover:bg-slate-800/50 text-amber-700 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1"
                 >
-                  <Shield className="w-3.5 h-3.5" />
+                  <Shield className="w-3.5 h-3.5 shrink-0" />
                   <span>Audit Log</span>
                 </button>
               )}
@@ -333,8 +334,8 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Zone 3: Actions (PWA Install, Theme Toggle, Notifications & Unified Profile/Menu Button) */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 min-w-0">
-          {/* In-App PWA Install Button (Visible on md+, also inside unified Profile Menu) */}
-          <div className="hidden md:block shrink-0">
+          {/* In-App PWA Install Button (Visible on xl+, also inside unified Profile Menu on mobile/tablet/laptop) */}
+          <div className="hidden xl:block shrink-0">
             <PWAInstallButton variant="navbar" />
           </div>
 
@@ -342,14 +343,14 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             type="button"
             onClick={onToggleTheme}
-            className="hidden sm:flex neu-btn p-2 sm:p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl cursor-pointer shrink-0"
+            className="hidden sm:flex neu-btn p-2 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl cursor-pointer shrink-0"
             title={theme === 'dark' ? 'Switch to Light Mode (အလင်းရောင်)' : 'Switch to Dark Mode (အမှောင်ရောင်)'}
             aria-label="Toggle color mode"
           >
             {theme === 'dark' ? (
-              <Sun className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-amber-400 animate-in spin-in-90 duration-200" />
+              <Sun className="w-4 h-4 text-amber-400 animate-in spin-in-90 duration-200" />
             ) : (
-              <Moon className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-slate-600 animate-in spin-in-90 duration-200" />
+              <Moon className="w-4 h-4 text-slate-600 animate-in spin-in-90 duration-200" />
             )}
           </button>
 
@@ -361,12 +362,12 @@ export const Navbar: React.FC<NavbarProps> = ({
                 setShowNotifications((prev) => !prev);
                 setShowUserDropdown(false);
               }}
-              className="neu-btn p-2 sm:p-2.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl relative cursor-pointer"
+              className="neu-btn p-2 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl relative cursor-pointer"
               aria-label="View notifications"
               aria-expanded={showNotifications}
               title="အတန်းတွင်း အသိပေးချက်များ (Classroom Notifications)"
             >
-              <Bell className={`w-4 h-4 sm:w-4.5 sm:h-4.5 ${unreadCount > 0 ? 'text-indigo-600 dark:text-indigo-400' : ''}`} />
+              <Bell className={`w-4 h-4 ${unreadCount > 0 ? 'text-indigo-600 dark:text-indigo-400' : ''}`} />
               {unreadCount > 0 && (
                 <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-600 text-white text-[10px] font-extrabold flex items-center justify-center shadow-xs animate-pulse">
                   {unreadCount > 9 ? '9+' : unreadCount}
@@ -376,7 +377,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             {/* Notifications Popover (Always opens below Navbar, never covers trigger) */}
             {showNotifications && (
-              <div className="neu-card absolute right-0 top-full mt-2 w-[calc(100vw-1rem)] max-w-96 sm:w-96 max-h-[calc(100dvh-5.5rem)] overflow-y-auto overflow-x-hidden rounded-2xl p-3.5 sm:p-4 z-50 shadow-2xl border border-slate-200/70 dark:border-slate-700/70 animate-in fade-in zoom-in-95 duration-150">
+              <div className="neu-card absolute right-0 top-full mt-2 w-[min(24rem,calc(100vw-1rem))] sm:w-96 max-h-[calc(100dvh-5.5rem)] overflow-y-auto overflow-x-hidden rounded-2xl p-3.5 sm:p-4 z-50 shadow-2xl border border-slate-200/70 dark:border-slate-700/70 animate-in fade-in zoom-in-95 duration-150">
                 <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-200/60 dark:border-slate-800">
                   <div className="flex items-center gap-2 min-w-0">
                     <Bell className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
