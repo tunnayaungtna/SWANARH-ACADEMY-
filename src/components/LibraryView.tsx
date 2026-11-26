@@ -50,6 +50,7 @@ import {
   AlignLeft,
   AlignCenter,
   Eraser,
+  ExternalLink,
 } from 'lucide-react';
 
 interface LibraryViewProps {
@@ -543,6 +544,76 @@ const OFFICIAL_SWANARH_YOUTUBE_VIDEOS: LiveYouTubeFeedVideo[] = [
   videoUrl: `https://www.youtube.com/watch?v=${v.videoId}`,
 }));
 
+const OFFICIAL_SWANARH_TIKTOK_VIDEOS: LiveTikTokFeedVideo[] = [
+  {
+    videoId: '7686849242882690324',
+    title:
+      'PSC/UCSB အကြိုသင်တန်း (MOFA အထူး) — Preparatory Course for Civil Service Officer Recruitment Exam (အရာထမ်း ဝင်ခွင့်စာမေးပွဲ အကြိုပြင်ဆင်မှုသင်တန်း)',
+  },
+  {
+    videoId: '7606326061525208340',
+    title:
+      'Wh-Cleft Sentences, Emphasis with “Do/Does/Did”, Fronting & CLEFT + RELATIVE CLAUSE (Double Structure) — English Grammar Lesson',
+  },
+  {
+    videoId: '7632240573637741845',
+    title: 'By + Ving အသုံးပြုပုံ ရှင်းလင်းချက် — Dr. Si Thu Aung (Swanarh Academy English)',
+  },
+  {
+    videoId: '7712381537790168321',
+    title:
+      'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၁) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
+  },
+  {
+    videoId: '7711884806786764052',
+    title:
+      'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၂) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
+  },
+  {
+    videoId: '7711655174200151316',
+    title:
+      'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၃) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
+  },
+  {
+    videoId: '7711330768659762453',
+    title:
+      'SWANARH Academy သင်တန်းများ အသေးစိတ် စုံစမ်းအပ်နှံရန် လမ်းညွှန် — Dr. Si Thu Aung',
+  },
+  {
+    videoId: '7711274278485773588',
+    title:
+      'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၄) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
+  },
+  {
+    videoId: '7710806847556521217',
+    title:
+      'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၅) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
+  },
+  {
+    videoId: '7710549914119621908',
+    title:
+      'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၆) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
+  },
+  {
+    videoId: '7710086799976172806',
+    title:
+      'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၇) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
+  },
+  {
+    videoId: '7709802131942870292',
+    title:
+      'SWANARH Academy သင်တန်းအချိန်စာရင်းနှင့် ဆက်သွယ်ရန် လမ်းညွှန် — Dr. Si Thu Aung',
+  },
+  {
+    videoId: '7709800688548580628',
+    title:
+      'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၈) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
+  },
+].map((v) => ({
+  ...v,
+  videoUrl: `https://www.tiktok.com/@dr..si.thu.aung.s/video/${v.videoId}`,
+}));
+
 export const LibraryView: React.FC<LibraryViewProps> = ({
   course,
   currentUser,
@@ -576,7 +647,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [readerFontSize, setReaderFontSize] = useState<number>(17);
   const [readerTheme, setReaderTheme] = useState<'light' | 'sepia' | 'dark'>('sepia');
 
-  // Live Auto-Sync YouTube & TikTok Channel Feed states (Pre-seeded with official @swanarhacademy videos so 0ms blank state never happens)
+  // Live Auto-Sync YouTube & TikTok Channel Feed states (Pre-seeded with official @swanarhacademy & @dr..si.thu.aung.s videos so 0ms blank state never happens)
   const [liveYtVideos, setLiveYtVideos] = useState<LiveYouTubeFeedVideo[]>(
     () => OFFICIAL_SWANARH_YOUTUBE_VIDEOS
   );
@@ -587,8 +658,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     () => OFFICIAL_SWANARH_YOUTUBE_VIDEOS[0]?.videoId || 'JuojeHJ4u4c'
   );
 
-  const [liveTtVideos, setLiveTtVideos] = useState<LiveTikTokFeedVideo[]>([]);
-  const [activeLiveTtVideoId, setActiveLiveTtVideoId] = useState<string>('');
+  const [liveTtVideos, setLiveTtVideos] = useState<LiveTikTokFeedVideo[]>(
+    () => OFFICIAL_SWANARH_TIKTOK_VIDEOS
+  );
+  const [activeLiveTtVideoId, setActiveLiveTtVideoId] = useState<string>(
+    () => OFFICIAL_SWANARH_TIKTOK_VIDEOS[0]?.videoId || '7686849242882690324'
+  );
+  const [tiktokPlayerMode, setTiktokPlayerMode] = useState<'player_v1' | 'embed_v2'>('player_v1');
   const [isSyncingChannels, setIsSyncingChannels] = useState(false);
 
   const [toastMessage, setToastMessage] = useState<{
@@ -828,9 +904,45 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         setLiveYtChannelId((prev) => prev || OFFICIAL_SWANARH_YOUTUBE_CHANNEL_ID);
       }
 
+      const isDefaultTikTok = ttHandle.toLowerCase() === 'dr..si.thu.aung.s';
+      const mergeTikTokVideos = (incoming: LiveTikTokFeedVideo[]) => {
+        const mergedMap = new Map<string, LiveTikTokFeedVideo>();
+        incoming.forEach((v) => {
+          if (v && /^\d{15,22}$/.test(v.videoId)) {
+            const fallbackOfficial = OFFICIAL_SWANARH_TIKTOK_VIDEOS.find(
+              (o) => o.videoId === v.videoId
+            );
+            mergedMap.set(v.videoId, {
+              videoId: v.videoId,
+              title:
+                v.title && !v.title.endsWith('TikTok Video')
+                  ? v.title
+                  : fallbackOfficial?.title || v.title || `Dr. Si Thu Aung (@${ttHandle}) TikTok Video`,
+              thumbnailUrl: v.thumbnailUrl,
+              videoUrl: v.videoUrl || `https://www.tiktok.com/@${ttHandle}/video/${v.videoId}`,
+            });
+          }
+        });
+        if (isDefaultTikTok) {
+          OFFICIAL_SWANARH_TIKTOK_VIDEOS.forEach((v) => {
+            if (!mergedMap.has(v.videoId)) {
+              mergedMap.set(v.videoId, v);
+            }
+          });
+        }
+        return Array.from(mergedMap.values());
+      };
+
       if (ttVideos && ttVideos.length > 0) {
-        setLiveTtVideos(ttVideos);
-        setActiveLiveTtVideoId((prev) => prev || ttVideos[0].videoId);
+        const mergedTt = mergeTikTokVideos(ttVideos);
+        setLiveTtVideos(mergedTt);
+        setActiveLiveTtVideoId((prev) =>
+          prev && mergedTt.some((v) => v.videoId === prev) ? prev : mergedTt[0].videoId
+        );
+      } else if (isDefaultTikTok) {
+        setLiveTtVideos((prev) =>
+          prev.length > 0 ? prev : OFFICIAL_SWANARH_TIKTOK_VIDEOS
+        );
       }
 
       if (force) {
@@ -1629,7 +1741,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 }`}
               >
                 <Video className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" />
-                <span className="truncate">TikTok ဗီဒီယို</span>
+                <span className="truncate">TikTok ဗီဒီယို ({counts.tiktok})</span>
               </button>
             </div>
 
@@ -2056,7 +2168,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             </div>
           )}
 
-          {/* 2B. TikTok Channel Complete Video Gallery (@dr..si.thu.aung.s) */}
+          {/* 2B. TikTok Channel Complete Video Gallery (@dr..si.thu.aung.s) — Direct In-App Video Player + Open TikTok */}
           {(filterTab === 'all' || filterTab === 'tiktok') && (
             <div className="neu-raised rounded-3xl p-5 sm:p-6 space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200/70 dark:border-slate-700/60 pb-3.5">
@@ -2069,12 +2181,22 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       Dr. Si Thu Aung — TikTok သင်ခန်းစာနှင့် ဗီဒီယိုစာကြည့်တိုက် (@{tiktokCleanHandle})
                     </h3>
                     <p className="text-xs text-slate-500 dark:text-slate-400">
-                      TikTok Channel ရှိ ဗီဒီယိုများအားလုံးကို စာကြည့်တိုက်အတွင်း တိုက်ရိုက်ရွေးချယ် ကြည့်ရှုနိုင်ပါသည်
+                      TikTok ဗီဒီယိုများကို စာကြည့်တိုက်အတွင်း တိုက်ရိုက်ဖွင့်ကြည့်နိုင်သလို Open TikTok နှိပ်၍ TikTok တွင်လည်း တိုက်ရိုက်ဖွင့်နိုင်ပါသည်
                     </p>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <a
+                    href={`https://www.tiktok.com/@${encodeURIComponent(tiktokCleanHandle)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Open TikTok (@{tiktokCleanHandle})</span>
+                  </a>
+
                   <button
                     type="button"
                     onClick={() => syncLiveChannelFeeds(true)}
@@ -2101,65 +2223,193 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-                {/* Live Creator Profile Embed Stream (Shows all latest TikTok videos from @dr..si.thu.aung.s) */}
-                <div
-                  className={`${
-                    allTikTokGalleryVideos.length > 0 ? 'lg:col-span-7' : 'lg:col-span-12'
-                  } space-y-2`}
-                >
-                  <div className="text-xs font-extrabold text-slate-700 dark:text-slate-300 px-1">
-                    @{tiktokCleanHandle} ၏ TikTok ဗီဒီယိုစုစည်းမှု (ဗီဒီယိုတစ်ခုချင်းစီကို နှိပ်၍ ကြည့်ရှုနိုင်ပါသည်)
-                  </div>
-                  <div className="w-full rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shadow-inner">
-                    <iframe
-                      src={`https://www.tiktok.com/embed/@${encodeURIComponent(tiktokCleanHandle)}`}
-                      title={`TikTok Creator @${tiktokCleanHandle}`}
-                      className="w-full h-[540px]"
-                      allow="encrypted-media;"
-                      allowFullScreen
-                    />
-                  </div>
-                </div>
+              {(() => {
+                const displayTikTokVideos =
+                  allTikTokGalleryVideos.length > 0
+                    ? allTikTokGalleryVideos
+                    : OFFICIAL_SWANARH_TIKTOK_VIDEOS;
+                const currentTikTokId = /^\d{15,22}$/.test(activeLiveTtVideoId)
+                  ? activeLiveTtVideoId
+                  : displayTikTokVideos[0]?.videoId ||
+                    OFFICIAL_SWANARH_TIKTOK_VIDEOS[0]?.videoId ||
+                    '7686849242882690324';
+                const currentTikTokObj =
+                  displayTikTokVideos.find((v) => v.videoId === currentTikTokId) ||
+                  OFFICIAL_SWANARH_TIKTOK_VIDEOS.find((v) => v.videoId === currentTikTokId) ||
+                  displayTikTokVideos[0];
+                const currentTikTokUrl =
+                  currentTikTokObj?.videoUrl ||
+                  `https://www.tiktok.com/@${tiktokCleanHandle}/video/${currentTikTokId}`;
+                const playerIframeSrc =
+                  tiktokPlayerMode === 'player_v1'
+                    ? `https://www.tiktok.com/player/v1/${encodeURIComponent(
+                        currentTikTokId
+                      )}?autoplay=0&rel=0&music_info=1&description=1`
+                    : `https://www.tiktok.com/embed/v2/${encodeURIComponent(currentTikTokId)}`;
 
-                {/* Individual Discovered & Curated TikTok Video Player */}
-                {allTikTokGalleryVideos.length > 0 && (
-                  <div className="lg:col-span-5 space-y-3">
-                    {/^\d{15,22}$/.test(activeLiveTtVideoId) && (
-                      <div className="w-full rounded-2xl overflow-hidden bg-slate-950 border border-slate-800">
+                return (
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+                    {/* Left Column: Direct In-App TikTok Video Player */}
+                    <div className="lg:col-span-5 space-y-3 min-w-0">
+                      <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                        <div className="inline-flex items-center rounded-xl neu-inset p-1 gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setTiktokPlayerMode('player_v1')}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold cursor-pointer transition-all ${
+                              tiktokPlayerMode === 'player_v1'
+                                ? 'bg-cyan-600 text-white shadow-sm'
+                                : 'text-slate-600 dark:text-slate-300'
+                            }`}
+                          >
+                            ▶ တိုက်ရိုက် Player (Direct)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setTiktokPlayerMode('embed_v2')}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold cursor-pointer transition-all ${
+                              tiktokPlayerMode === 'embed_v2'
+                                ? 'bg-cyan-600 text-white shadow-sm'
+                                : 'text-slate-600 dark:text-slate-300'
+                            }`}
+                          >
+                            TikTok Card Player
+                          </button>
+                        </div>
+
+                        <a
+                          href={currentTikTokUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-extrabold inline-flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          <span>Open TikTok</span>
+                        </a>
+                      </div>
+
+                      <div className="w-full rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shadow-lg">
                         <iframe
-                          src={`https://www.tiktok.com/embed/v2/${encodeURIComponent(
-                            activeLiveTtVideoId
-                          )}`}
-                          title="TikTok Video Player"
-                          className="w-full h-[460px]"
-                          allow="encrypted-media;"
+                          key={`${tiktokPlayerMode}_${currentTikTokId}`}
+                          src={playerIframeSrc}
+                          title={currentTikTokObj?.title || 'TikTok Direct Video Player'}
+                          className="w-full h-[540px] sm:h-[580px] border-0"
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                          referrerPolicy="strict-origin-when-cross-origin"
                           allowFullScreen
                         />
                       </div>
-                    )}
-                    <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
-                      {allTikTokGalleryVideos.map((tv, i) => (
-                        <button
-                          key={tv.videoId}
-                          type="button"
-                          onClick={() => setActiveLiveTtVideoId(tv.videoId)}
-                          className={`w-full p-2.5 rounded-xl text-left text-xs font-bold flex items-center gap-2.5 cursor-pointer ${
-                            activeLiveTtVideoId === tv.videoId
-                              ? 'ring-2 ring-cyan-500 bg-cyan-500/10 text-cyan-800 dark:text-cyan-200'
-                              : 'neu-inset text-slate-700 dark:text-slate-300'
-                          }`}
+
+                      <div className="neu-inset rounded-2xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[10px] font-mono font-bold text-cyan-600 dark:text-cyan-400">
+                            ▶ ယခုဖွင့်ထားသော TikTok ဗီဒီယို (@{tiktokCleanHandle})
+                          </div>
+                          <p className="text-xs font-extrabold text-slate-900 dark:text-slate-100 line-clamp-2 leading-snug mt-0.5">
+                            {currentTikTokObj?.title || 'Dr. Si Thu Aung TikTok Video'}
+                          </p>
+                        </div>
+                        <a
+                          href={currentTikTokUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 text-white text-xs font-extrabold inline-flex items-center justify-center gap-1.5 shrink-0 shadow-sm cursor-pointer"
                         >
-                          <Play className="w-3.5 h-3.5 text-cyan-600 shrink-0" />
-                          <span className="truncate">
-                            #{i + 1} · {tv.title}
-                          </span>
-                        </button>
-                      ))}
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          <span>Open TikTok တွင် ဖွင့်ရန်</span>
+                        </a>
+                      </div>
+                    </div>
+
+                    {/* Right Column: Complete Interactive TikTok Video Catalog */}
+                    <div className="lg:col-span-7 space-y-2.5 min-w-0">
+                      <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                        <span className="text-xs font-extrabold text-slate-700 dark:text-slate-300">
+                          @{tiktokCleanHandle} ၏ TikTok ဗီဒီယိုစာရင်း အားလုံး ({displayTikTokVideos.length}{' '}
+                          ခု) — နှိပ်၍ စာကြည့်တိုက်အတွင်း တိုက်ရိုက်ကြည့်ရှုပါ
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-2.5 max-h-[620px] overflow-y-auto pr-1">
+                        {displayTikTokVideos.map((tv, i) => {
+                          const isPlaying = tv.videoId === currentTikTokId;
+                          const itemTikTokUrl =
+                            tv.videoUrl ||
+                            `https://www.tiktok.com/@${tiktokCleanHandle}/video/${tv.videoId}`;
+                          return (
+                            <div
+                              key={tv.videoId}
+                              onClick={() => setActiveLiveTtVideoId(tv.videoId)}
+                              className={`p-3 sm:p-3.5 rounded-2xl transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                                isPlaying
+                                  ? 'ring-2 ring-cyan-500 bg-cyan-500/10'
+                                  : 'neu-inset hover:bg-slate-200/40 dark:hover:bg-slate-800/40'
+                              }`}
+                            >
+                              <div className="flex items-start gap-3 min-w-0 flex-1">
+                                <div
+                                  className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 font-mono text-xs font-extrabold shadow-sm ${
+                                    isPlaying
+                                      ? 'bg-cyan-600 text-white'
+                                      : 'bg-slate-900 text-cyan-400 border border-slate-700'
+                                  }`}
+                                >
+                                  <Play className="w-4 h-4 fill-current" />
+                                </div>
+                                <div className="min-w-0 flex-1 space-y-1">
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <span className="text-[10px] font-mono font-extrabold text-cyan-700 dark:text-cyan-400">
+                                      TIKTOK #{i + 1}
+                                    </span>
+                                    {isPlaying && (
+                                      <span className="px-2 py-0.5 rounded-md bg-cyan-600 text-white text-[10px] font-extrabold">
+                                        ▶ ယခု တိုက်ရိုက်ဖွင့်ထားသည်
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-xs sm:text-sm font-bold text-slate-900 dark:text-slate-100 line-clamp-2 leading-snug">
+                                    {tv.title}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveLiveTtVideoId(tv.videoId);
+                                  }}
+                                  className={`px-3 py-1.5 rounded-xl text-[11px] font-extrabold inline-flex items-center gap-1 cursor-pointer ${
+                                    isPlaying
+                                      ? 'bg-cyan-600 text-white'
+                                      : 'neu-btn text-cyan-700 dark:text-cyan-300'
+                                  }`}
+                                >
+                                  <Play className="w-3 h-3 fill-current" />
+                                  <span>{isPlaying ? 'ဖွင့်ထားသည်' : 'တိုက်ရိုက်ကြည့်ရန်'}</span>
+                                </button>
+
+                                <a
+                                  href={itemTikTokUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="px-2.5 py-1.5 rounded-xl bg-rose-600/10 hover:bg-rose-600 hover:text-white text-rose-700 dark:text-rose-300 border border-rose-500/30 text-[11px] font-extrabold inline-flex items-center gap-1 transition-colors cursor-pointer"
+                                  title="TikTok App / Website တွင် တိုက်ရိုက်ဖွင့်ရန်"
+                                >
+                                  <ExternalLink className="w-3 h-3" />
+                                  <span>Open TikTok</span>
+                                </a>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
-                )}
-              </div>
+                );
+              })()}
             </div>
           )}
         </div>

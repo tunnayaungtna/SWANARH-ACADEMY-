@@ -437,10 +437,54 @@ async function startServer() {
           });
           if (!resp.ok) continue;
           const html = await resp.text();
-          const idMatches =
-            html.match(/\/video\/(\d{17,21})/g) ||
-            html.match(/"id"\s*:\s*"(\d{17,21})"/g) ||
-            [];
+
+          // 1. Parse structured __FRONTITY_CONNECT_STATE__ from TikTok embed page (includes full Myanmar descriptions & cover images)
+          const frontityMatch = html.match(
+            /<script id="__FRONTITY_CONNECT_STATE__"[^>]*>([\s\S]*?)<\/script>/i
+          );
+          if (frontityMatch && frontityMatch[1]) {
+            try {
+              const stateObj = JSON.parse(frontityMatch[1]);
+              const dataMap = stateObj?.source?.data || {};
+              for (const k of Object.keys(dataMap)) {
+                const vList = dataMap[k]?.videoList;
+                if (Array.isArray(vList)) {
+                  vList.forEach((v: Record<string, unknown>, idx: number) => {
+                    const vid = String(v?.id || '').replace(/\D/g, '');
+                    if (vid.length >= 17 && vid.length <= 21 && !seenIds.has(vid)) {
+                      seenIds.add(vid);
+                      const rawDesc = String(v?.desc || '')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                      const cleanTitle = rawDesc
+                        ? rawDesc.slice(0, 140)
+                        : `Dr. Si Thu Aung (@${cleanHandle}) TikTok Video #${idx + 1}`;
+                      const cover =
+                        typeof v?.coverUrl === 'string' && v.coverUrl
+                          ? v.coverUrl
+                          : typeof v?.originCoverUrl === 'string' && v.originCoverUrl
+                          ? v.originCoverUrl
+                          : undefined;
+                      videos.push({
+                        videoId: vid,
+                        title: cleanTitle,
+                        thumbnailUrl: cover,
+                        videoUrl: `https://www.tiktok.com/@${cleanHandle}/video/${vid}`,
+                      });
+                    }
+                  });
+                }
+              }
+            } catch {
+              // fallback to regex extraction below
+            }
+          }
+
+          // 2. Fallback regex extraction for any additional video IDs
+          const idMatches = [
+            ...(html.match(/\/video\/(\d{17,21})/g) || []),
+            ...(html.match(/"id"\s*:\s*"(\d{17,21})"/g) || []),
+          ];
           for (const raw of idMatches) {
             const digits = raw.replace(/\D/g, '');
             if (digits.length >= 17 && digits.length <= 21 && !seenIds.has(digits)) {
@@ -452,9 +496,13 @@ async function startServer() {
         }
       }
 
-      const discoveredIds = Array.from(seenIds).slice(0, 18);
+      const existingIds = new Set(videos.map((v) => v.videoId));
+      const remainingIds = Array.from(seenIds)
+        .filter((id) => !existingIds.has(id))
+        .slice(0, 18);
+
       await Promise.all(
-        discoveredIds.map(async (vid) => {
+        remainingIds.map(async (vid) => {
           const vUrl = `https://www.tiktok.com/@${cleanHandle}/video/${vid}`;
           try {
             const oeRes = await fetchWithTimeout(
@@ -465,13 +513,15 @@ async function startServer() {
                 title?: string;
                 thumbnail_url?: string;
               };
-              videos.push({
-                videoId: vid,
-                title: oe.title || `Dr. Si Thu Aung (@${cleanHandle}) TikTok Video`,
-                thumbnailUrl: oe.thumbnail_url,
-                videoUrl: vUrl,
-              });
-              return;
+              if (oe.title || oe.thumbnail_url) {
+                videos.push({
+                  videoId: vid,
+                  title: oe.title || `Dr. Si Thu Aung (@${cleanHandle}) TikTok Video`,
+                  thumbnailUrl: oe.thumbnail_url,
+                  videoUrl: vUrl,
+                });
+                return;
+              }
             }
           } catch {
             // fallback
@@ -489,8 +539,10 @@ async function startServer() {
         videos,
         fetchedAt: Date.now(),
       };
-      ttFeedCache.set(cleanHandle, payload);
-      res.status(200).json({ ok: true, ...payload });
+      if (videos.length > 0) {
+        ttFeedCache.set(cleanHandle, payload);
+      }
+      res.status(200).json({ ok: videos.length > 0, ...payload });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(200).json({ ok: false, videos: [], message: msg });
