@@ -367,6 +367,21 @@ async function startServer() {
     }
   });
 
+  // Helper to decode exact Unix timestamp (ms) from 64-bit TikTok Snowflake video ID
+  function getTikTokVideoTimestampMs(videoId: string): number {
+    try {
+      const clean = String(videoId || '').replace(/\D/g, '');
+      if (clean.length < 15) return 0;
+      const sec = Number(BigInt(clean) >> 32n);
+      if (sec > 1400000000 && sec < 4000000000) {
+        return sec * 1000;
+      }
+      return 0;
+    } catch {
+      return 0;
+    }
+  }
+
   // Live TikTok Creator Feed Resolver (discovers video IDs & metadata from @dr..si.thu.aung.s automatically)
   const ttFeedCache = new Map<
     string,
@@ -375,6 +390,8 @@ async function startServer() {
       videos: Array<{
         videoId: string;
         title: string;
+        publishedAt?: string;
+        timestampMs?: number;
         thumbnailUrl?: string;
         videoUrl: string;
       }>;
@@ -408,7 +425,7 @@ async function startServer() {
       }
 
       const cached = ttFeedCache.get(cleanHandle);
-      if (!force && cached && Date.now() - cached.fetchedAt < 60 * 1000) {
+      if (!force && cached && Date.now() - cached.fetchedAt < 45 * 1000) {
         res.status(200).json({ ok: true, ...cached });
         return;
       }
@@ -416,6 +433,8 @@ async function startServer() {
       const videos: Array<{
         videoId: string;
         title: string;
+        publishedAt?: string;
+        timestampMs?: number;
         thumbnailUrl?: string;
         videoUrl: string;
       }> = [];
@@ -431,8 +450,9 @@ async function startServer() {
           const resp = await fetchWithTimeout(ep, {
             headers: {
               'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
               'Accept-Language': 'en-US,en;q=0.9',
+              'Cache-Control': 'no-cache',
             },
           });
           if (!resp.ok) continue;
@@ -457,7 +477,7 @@ async function startServer() {
                         .replace(/\s+/g, ' ')
                         .trim();
                       const cleanTitle = rawDesc
-                        ? rawDesc.slice(0, 140)
+                        ? rawDesc.slice(0, 160)
                         : `Dr. Si Thu Aung (@${cleanHandle}) TikTok Video #${idx + 1}`;
                       const cover =
                         typeof v?.coverUrl === 'string' && v.coverUrl
@@ -465,9 +485,18 @@ async function startServer() {
                           : typeof v?.originCoverUrl === 'string' && v.originCoverUrl
                           ? v.originCoverUrl
                           : undefined;
+                      const tsMs = getTikTokVideoTimestampMs(vid);
                       videos.push({
                         videoId: vid,
                         title: cleanTitle,
+                        timestampMs: tsMs || undefined,
+                        publishedAt: tsMs
+                          ? new Date(tsMs).toLocaleDateString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              year: 'numeric',
+                            })
+                          : undefined,
                         thumbnailUrl: cover,
                         videoUrl: `https://www.tiktok.com/@${cleanHandle}/video/${vid}`,
                       });
@@ -481,10 +510,7 @@ async function startServer() {
           }
 
           // 2. Fallback regex extraction for any additional video IDs
-          const idMatches = [
-            ...(html.match(/\/video\/(\d{17,21})/g) || []),
-            ...(html.match(/"id"\s*:\s*"(\d{17,21})"/g) || []),
-          ];
+          const idMatches = html.match(/\/video\/(\d{17,21})/g) || [];
           for (const raw of idMatches) {
             const digits = raw.replace(/\D/g, '');
             if (digits.length >= 17 && digits.length <= 21 && !seenIds.has(digits)) {
@@ -504,6 +530,14 @@ async function startServer() {
       await Promise.all(
         remainingIds.map(async (vid) => {
           const vUrl = `https://www.tiktok.com/@${cleanHandle}/video/${vid}`;
+          const tsMs = getTikTokVideoTimestampMs(vid);
+          const pubDate = tsMs
+            ? new Date(tsMs).toLocaleDateString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+              })
+            : undefined;
           try {
             const oeRes = await fetchWithTimeout(
               `https://www.tiktok.com/oembed?url=${encodeURIComponent(vUrl)}`
@@ -517,6 +551,8 @@ async function startServer() {
                 videos.push({
                   videoId: vid,
                   title: oe.title || `Dr. Si Thu Aung (@${cleanHandle}) TikTok Video`,
+                  timestampMs: tsMs || undefined,
+                  publishedAt: pubDate,
                   thumbnailUrl: oe.thumbnail_url,
                   videoUrl: vUrl,
                 });
@@ -529,10 +565,25 @@ async function startServer() {
           videos.push({
             videoId: vid,
             title: `Dr. Si Thu Aung (@${cleanHandle}) TikTok Video`,
+            timestampMs: tsMs || undefined,
+            publishedAt: pubDate,
             videoUrl: vUrl,
           });
         })
       );
+
+      // Sort strictly by Snowflake videoId descending (newest uploaded video first, so older pinned videos don't hide brand-new uploads)
+      videos.sort((a, b) => {
+        try {
+          const idA = BigInt(a.videoId.replace(/\D/g, '') || '0');
+          const idB = BigInt(b.videoId.replace(/\D/g, '') || '0');
+          if (idB > idA) return 1;
+          if (idB < idA) return -1;
+          return 0;
+        } catch {
+          return (b.timestampMs || 0) - (a.timestampMs || 0);
+        }
+      });
 
       const payload = {
         handle: cleanHandle,

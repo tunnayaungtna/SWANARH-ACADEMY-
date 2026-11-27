@@ -73,8 +73,56 @@ interface LiveYouTubeFeedVideo {
 interface LiveTikTokFeedVideo {
   videoId: string;
   title: string;
+  publishedAt?: string;
+  timestampMs?: number;
   thumbnailUrl?: string;
   videoUrl: string;
+}
+
+function decodeTikTokSnowflakeTimestampMs(videoId: string): number {
+  try {
+    const clean = String(videoId || '').replace(/\D/g, '');
+    if (clean.length < 15) return 0;
+    const sec = Number(BigInt(clean) >> 32n);
+    if (sec > 1400000000 && sec < 4000000000) {
+      return sec * 1000;
+    }
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
+function formatTikTokUploadDate(videoId: string, existingDate?: string): string {
+  if (existingDate && existingDate.trim()) return existingDate.trim();
+  const ts = decodeTikTokSnowflakeTimestampMs(videoId);
+  if (!ts) return '';
+  try {
+    return new Date(ts).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  } catch {
+    return '';
+  }
+}
+
+function sortTikTokVideosNewestFirst(videos: LiveTikTokFeedVideo[]): LiveTikTokFeedVideo[] {
+  return [...videos].sort((a, b) => {
+    try {
+      const idA = BigInt(String(a.videoId || '').replace(/\D/g, '') || '0');
+      const idB = BigInt(String(b.videoId || '').replace(/\D/g, '') || '0');
+      if (idB > idA) return 1;
+      if (idB < idA) return -1;
+      return 0;
+    } catch {
+      return (
+        decodeTikTokSnowflakeTimestampMs(b.videoId) -
+        decodeTikTokSnowflakeTimestampMs(a.videoId)
+      );
+    }
+  });
 }
 
 const GLOBAL_LIBRARY_COURSE_FALLBACK: Course = {
@@ -544,75 +592,87 @@ const OFFICIAL_SWANARH_YOUTUBE_VIDEOS: LiveYouTubeFeedVideo[] = [
   videoUrl: `https://www.youtube.com/watch?v=${v.videoId}`,
 }));
 
-const OFFICIAL_SWANARH_TIKTOK_VIDEOS: LiveTikTokFeedVideo[] = [
-  {
-    videoId: '7686849242882690324',
-    title:
-      'PSC/UCSB အကြိုသင်တန်း (MOFA အထူး) — Preparatory Course for Civil Service Officer Recruitment Exam (အရာထမ်း ဝင်ခွင့်စာမေးပွဲ အကြိုပြင်ဆင်မှုသင်တန်း)',
-  },
-  {
-    videoId: '7606326061525208340',
-    title:
-      'Wh-Cleft Sentences, Emphasis with “Do/Does/Did”, Fronting & CLEFT + RELATIVE CLAUSE (Double Structure) — English Grammar Lesson',
-  },
-  {
-    videoId: '7632240573637741845',
-    title: 'By + Ving အသုံးပြုပုံ ရှင်းလင်းချက် — Dr. Si Thu Aung (Swanarh Academy English)',
-  },
-  {
-    videoId: '7712381537790168321',
-    title:
-      'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၁) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
-  },
-  {
-    videoId: '7711884806786764052',
-    title:
-      'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၂) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
-  },
-  {
-    videoId: '7711655174200151316',
-    title:
-      'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၃) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
-  },
-  {
-    videoId: '7711330768659762453',
-    title:
-      'SWANARH Academy သင်တန်းများ အသေးစိတ် စုံစမ်းအပ်နှံရန် လမ်းညွှန် — Dr. Si Thu Aung',
-  },
-  {
-    videoId: '7711274278485773588',
-    title:
-      'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၄) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
-  },
-  {
-    videoId: '7710806847556521217',
-    title:
-      'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၅) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
-  },
-  {
-    videoId: '7710549914119621908',
-    title:
-      'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၆) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
-  },
-  {
-    videoId: '7710086799976172806',
-    title:
-      'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၇) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
-  },
-  {
-    videoId: '7709802131942870292',
-    title:
-      'SWANARH Academy သင်တန်းအချိန်စာရင်းနှင့် ဆက်သွယ်ရန် လမ်းညွှန် — Dr. Si Thu Aung',
-  },
-  {
-    videoId: '7709800688548580628',
-    title:
-      'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၈) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
-  },
-].map((v) => ({
-  ...v,
-  videoUrl: `https://www.tiktok.com/@dr..si.thu.aung.s/video/${v.videoId}`,
-}));
+const CLOUD_DEV_RELAY_ORIGIN = 'https://ais-dev-x3aphtm3a4npfd5tmiiqhv-683201169391.asia-southeast1.run.app';
+const LIVE_TIKTOK_CACHE_KEY = 'swanarh_live_tiktok_feed_cache_v3';
+
+const OFFICIAL_SWANARH_TIKTOK_VIDEOS: LiveTikTokFeedVideo[] = sortTikTokVideosNewestFirst(
+  [
+    {
+      videoId: '7712388431933934900',
+      title:
+        'Common Interjections Part 1 — ဆရာဒေါက်တာစည်သူအောင် (စွမ်းအား ရာထူးဝင်ခွင့်သင်တန်းနှင့် အင်္ဂလိပ်စာသင်တန်းများ #English #UCSB #GED)',
+    },
+    {
+      videoId: '7712381537790168321',
+      title:
+        'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၁) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
+    },
+    {
+      videoId: '7711884806786764052',
+      title:
+        'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၂) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
+    },
+    {
+      videoId: '7711655174200151316',
+      title:
+        'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၃) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
+    },
+    {
+      videoId: '7711330768659762453',
+      title:
+        'SWANARH Academy သင်တန်းများ အသေးစိတ် စုံစမ်းအပ်နှံရန် လမ်းညွှန် — Dr. Si Thu Aung',
+    },
+    {
+      videoId: '7711274278485773588',
+      title:
+        'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၄) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
+    },
+    {
+      videoId: '7710806847556521217',
+      title:
+        'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၅) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
+    },
+    {
+      videoId: '7710549914119621908',
+      title:
+        'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၆) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
+    },
+    {
+      videoId: '7710086799976172806',
+      title:
+        'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၇) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
+    },
+    {
+      videoId: '7709802131942870292',
+      title:
+        'SWANARH Academy သင်တန်းအချိန်စာရင်းနှင့် ဆက်သွယ်ရန် လမ်းညွှန် — Dr. Si Thu Aung',
+    },
+    {
+      videoId: '7709800688548580628',
+      title:
+        'သုတရေးရာ သတင်းစာ ကောက်နုတ်ချက် (အပိုင်း ၈) — UCSB အထွေထွေဗဟုသုတနှင့် ရာထူးဝင်ခွင့် လေ့ကျင့်ခန်း',
+    },
+    {
+      videoId: '7686849242882690324',
+      title:
+        'PSC/UCSB အကြိုသင်တန်း (MOFA အထူး) — Preparatory Course for Civil Service Officer Recruitment Exam (အရာထမ်း ဝင်ခွင့်စာမေးပွဲ အကြိုပြင်ဆင်မှုသင်တန်း)',
+    },
+    {
+      videoId: '7632240573637741845',
+      title: 'By + Ving အသုံးပြုပုံ ရှင်းလင်းချက် — Dr. Si Thu Aung (Swanarh Academy English)',
+    },
+    {
+      videoId: '7606326061525208340',
+      title:
+        'Wh-Cleft Sentences, Emphasis with “Do/Does/Did”, Fronting & CLEFT + RELATIVE CLAUSE (Double Structure) — English Grammar Lesson',
+    },
+  ].map((v) => ({
+    ...v,
+    timestampMs: decodeTikTokSnowflakeTimestampMs(v.videoId),
+    publishedAt: formatTikTokUploadDate(v.videoId),
+    videoUrl: `https://www.tiktok.com/@dr..si.thu.aung.s/video/${v.videoId}`,
+  }))
+);
 
 export const LibraryView: React.FC<LibraryViewProps> = ({
   course,
@@ -658,12 +718,34 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     () => OFFICIAL_SWANARH_YOUTUBE_VIDEOS[0]?.videoId || 'JuojeHJ4u4c'
   );
 
-  const [liveTtVideos, setLiveTtVideos] = useState<LiveTikTokFeedVideo[]>(
-    () => OFFICIAL_SWANARH_TIKTOK_VIDEOS
-  );
+  const [liveTtVideos, setLiveTtVideos] = useState<LiveTikTokFeedVideo[]>(() => {
+    try {
+      const cachedRaw = localStorage.getItem(LIVE_TIKTOK_CACHE_KEY);
+      if (cachedRaw) {
+        const parsed = JSON.parse(cachedRaw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const map = new Map<string, LiveTikTokFeedVideo>();
+          [...parsed, ...OFFICIAL_SWANARH_TIKTOK_VIDEOS].forEach((v: LiveTikTokFeedVideo) => {
+            if (v && /^\d{15,22}$/.test(v.videoId) && !map.has(v.videoId)) {
+              map.set(v.videoId, {
+                ...v,
+                timestampMs: v.timestampMs || decodeTikTokSnowflakeTimestampMs(v.videoId),
+                publishedAt: formatTikTokUploadDate(v.videoId, v.publishedAt),
+              });
+            }
+          });
+          return sortTikTokVideosNewestFirst(Array.from(map.values()));
+        }
+      }
+    } catch {
+      // ignore storage error
+    }
+    return OFFICIAL_SWANARH_TIKTOK_VIDEOS;
+  });
   const [activeLiveTtVideoId, setActiveLiveTtVideoId] = useState<string>(
-    () => OFFICIAL_SWANARH_TIKTOK_VIDEOS[0]?.videoId || '7686849242882690324'
+    () => OFFICIAL_SWANARH_TIKTOK_VIDEOS[0]?.videoId || '7712388431933934900'
   );
+  const userManuallyPickedTtRef = React.useRef<boolean>(false);
   const [tiktokPlayerMode, setTiktokPlayerMode] = useState<'player_v1' | 'embed_v2'>('player_v1');
   const [isSyncingChannels, setIsSyncingChannels] = useState(false);
 
@@ -795,7 +877,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       )}${force ? '&force=1' : ''}`;
       const ttQuery = `handle=${encodeURIComponent(ttHandle)}${force ? '&force=1' : ''}`;
 
-      // Tier 1: Same-origin API -> Tier 2: Cloud Run Relay -> Tier 3: Public RSS2JSON Fallback
+      // Tier 1: Same-origin API -> Tier 2: Cloud Run Relays -> Tier 3: Public RSS2JSON Fallback
       const fetchYouTubeFeedWithFallbacks = async (): Promise<{
         videos: LiveYouTubeFeedVideo[];
         channelId: string;
@@ -803,6 +885,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         const endpoints = [
           `/api/youtube-feed?${ytQuery}`,
           `${CLOUD_RELAY_ORIGIN}/api/youtube-feed?${ytQuery}`,
+          `${CLOUD_DEV_RELAY_ORIGIN}/api/youtube-feed?${ytQuery}`,
         ];
         for (const ep of endpoints) {
           try {
@@ -865,6 +948,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         const endpoints = [
           `/api/tiktok-feed?${ttQuery}`,
           `${CLOUD_RELAY_ORIGIN}/api/tiktok-feed?${ttQuery}`,
+          `${CLOUD_DEV_RELAY_ORIGIN}/api/tiktok-feed?${ttQuery}`,
         ];
         for (const ep of endpoints) {
           try {
@@ -912,12 +996,17 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             const fallbackOfficial = OFFICIAL_SWANARH_TIKTOK_VIDEOS.find(
               (o) => o.videoId === v.videoId
             );
+            const resolvedTitle =
+              fallbackOfficial?.title ||
+              (v.title && !v.title.endsWith('TikTok Video')
+                ? v.title
+                : `Dr. Si Thu Aung (@${ttHandle}) TikTok Video`);
+            const tsMs = v.timestampMs || decodeTikTokSnowflakeTimestampMs(v.videoId);
             mergedMap.set(v.videoId, {
               videoId: v.videoId,
-              title:
-                v.title && !v.title.endsWith('TikTok Video')
-                  ? v.title
-                  : fallbackOfficial?.title || v.title || `Dr. Si Thu Aung (@${ttHandle}) TikTok Video`,
+              title: resolvedTitle,
+              timestampMs: tsMs || undefined,
+              publishedAt: formatTikTokUploadDate(v.videoId, v.publishedAt),
               thumbnailUrl: v.thumbnailUrl,
               videoUrl: v.videoUrl || `https://www.tiktok.com/@${ttHandle}/video/${v.videoId}`,
             });
@@ -930,18 +1019,31 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             }
           });
         }
-        return Array.from(mergedMap.values());
+        // Always sort newest upload first (by Snowflake videoId) so new uploads appear at #1 above older pinned videos
+        return sortTikTokVideosNewestFirst(Array.from(mergedMap.values()));
       };
 
       if (ttVideos && ttVideos.length > 0) {
         const mergedTt = mergeTikTokVideos(ttVideos);
         setLiveTtVideos(mergedTt);
-        setActiveLiveTtVideoId((prev) =>
-          prev && mergedTt.some((v) => v.videoId === prev) ? prev : mergedTt[0].videoId
-        );
+        try {
+          localStorage.setItem(LIVE_TIKTOK_CACHE_KEY, JSON.stringify(mergedTt));
+        } catch {
+          // ignore storage quota
+        }
+        // If user hasn't manually clicked a specific video or requested force sync, always select the #1 newest video
+        if (force || !userManuallyPickedTtRef.current) {
+          if (mergedTt[0]?.videoId) {
+            setActiveLiveTtVideoId(mergedTt[0].videoId);
+          }
+        } else {
+          setActiveLiveTtVideoId((prev) =>
+            prev && mergedTt.some((v) => v.videoId === prev) ? prev : mergedTt[0].videoId
+          );
+        }
       } else if (isDefaultTikTok) {
         setLiveTtVideos((prev) =>
-          prev.length > 0 ? prev : OFFICIAL_SWANARH_TIKTOK_VIDEOS
+          prev.length > 0 ? sortTikTokVideosNewestFirst(prev) : OFFICIAL_SWANARH_TIKTOK_VIDEOS
         );
       }
 
@@ -1427,7 +1529,11 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     const q = searchQuery.trim().toLowerCase();
     liveTtVideos.forEach((v) => {
       if (!q || v.title.toLowerCase().includes(q)) {
-        map.set(v.videoId, v);
+        map.set(v.videoId, {
+          ...v,
+          timestampMs: v.timestampMs || decodeTikTokSnowflakeTimestampMs(v.videoId),
+          publishedAt: formatTikTokUploadDate(v.videoId, v.publishedAt),
+        });
       }
     });
     allItems.forEach((item) => {
@@ -1445,13 +1551,15 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           map.set(vid, {
             videoId: vid,
             title: item.title,
+            timestampMs: decodeTikTokSnowflakeTimestampMs(vid),
+            publishedAt: formatTikTokUploadDate(vid, item.createdAt),
             videoUrl:
               item.videoUrl || `https://www.tiktok.com/@${tiktokCleanHandle}/video/${vid}`,
           });
         }
       }
     });
-    return Array.from(map.values());
+    return sortTikTokVideosNewestFirst(Array.from(map.values()));
   }, [liveTtVideos, allItems, tiktokCleanHandle, searchQuery, showBookmarksOnly, bookmarkedIds]);
 
   const readingItems = useMemo(() => {
@@ -2302,8 +2410,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
                       <div className="neu-inset rounded-2xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                         <div className="min-w-0 flex-1">
-                          <div className="text-[10px] font-mono font-bold text-cyan-600 dark:text-cyan-400">
-                            ▶ ယခုဖွင့်ထားသော TikTok ဗီဒီယို (@{tiktokCleanHandle})
+                          <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-mono font-bold text-cyan-600 dark:text-cyan-400">
+                            <span>▶ ယခုဖွင့်ထားသော TikTok ဗီဒီယို (@{tiktokCleanHandle})</span>
+                            {currentTikTokObj?.publishedAt && (
+                              <span className="px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-700 dark:text-cyan-300">
+                                📅 {currentTikTokObj.publishedAt}
+                              </span>
+                            )}
                           </div>
                           <p className="text-xs font-extrabold text-slate-900 dark:text-slate-100 line-clamp-2 leading-snug mt-0.5">
                             {currentTikTokObj?.title || 'Dr. Si Thu Aung TikTok Video'}
@@ -2321,12 +2434,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       </div>
                     </div>
 
-                    {/* Right Column: Complete Interactive TikTok Video Catalog */}
+                    {/* Right Column: Complete Interactive TikTok Video Catalog (Sorted Newest First) */}
                     <div className="lg:col-span-7 space-y-2.5 min-w-0">
                       <div className="flex flex-wrap items-center justify-between gap-2 px-1">
                         <span className="text-xs font-extrabold text-slate-700 dark:text-slate-300">
                           @{tiktokCleanHandle} ၏ TikTok ဗီဒီယိုစာရင်း အားလုံး ({displayTikTokVideos.length}{' '}
-                          ခု) — နှိပ်၍ စာကြည့်တိုက်အတွင်း တိုက်ရိုက်ကြည့်ရှုပါ
+                          ခု · အသစ်တင်သည့် ဗီဒီယိုများ အပေါ်ဆုံး၌ ပြသထားသည်)
                         </span>
                       </div>
 
@@ -2336,10 +2449,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                           const itemTikTokUrl =
                             tv.videoUrl ||
                             `https://www.tiktok.com/@${tiktokCleanHandle}/video/${tv.videoId}`;
+                          const isRecentNew = i < 2;
                           return (
                             <div
                               key={tv.videoId}
-                              onClick={() => setActiveLiveTtVideoId(tv.videoId)}
+                              onClick={() => {
+                                userManuallyPickedTtRef.current = true;
+                                setActiveLiveTtVideoId(tv.videoId);
+                              }}
                               className={`p-3 sm:p-3.5 rounded-2xl transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
                                 isPlaying
                                   ? 'ring-2 ring-cyan-500 bg-cyan-500/10'
@@ -2361,6 +2478,16 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                                     <span className="text-[10px] font-mono font-extrabold text-cyan-700 dark:text-cyan-400">
                                       TIKTOK #{i + 1}
                                     </span>
+                                    {isRecentNew && (
+                                      <span className="px-2 py-0.5 rounded-md bg-gradient-to-r from-rose-600 to-amber-500 text-white text-[10px] font-extrabold shadow-2xs">
+                                        ✨ NEW အသစ်
+                                      </span>
+                                    )}
+                                    {tv.publishedAt && (
+                                      <span className="text-[10px] font-mono font-semibold text-slate-500 dark:text-slate-400">
+                                        · 📅 {tv.publishedAt}
+                                      </span>
+                                    )}
                                     {isPlaying && (
                                       <span className="px-2 py-0.5 rounded-md bg-cyan-600 text-white text-[10px] font-extrabold">
                                         ▶ ယခု တိုက်ရိုက်ဖွင့်ထားသည်
@@ -2378,6 +2505,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
+                                    userManuallyPickedTtRef.current = true;
                                     setActiveLiveTtVideoId(tv.videoId);
                                   }}
                                   className={`px-3 py-1.5 rounded-xl text-[11px] font-extrabold inline-flex items-center gap-1 cursor-pointer ${
