@@ -767,6 +767,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [formVideoUrl, setFormVideoUrl] = useState('');
   const [formIsPinned, setFormIsPinned] = useState(false);
   const [formWatermark, setFormWatermark] = useState(true);
+  const [formAllowDownload, setFormAllowDownload] = useState(false);
   const [formRules, setFormRules] = useState<LibraryAccessRules>({
     enabled: true,
     allowedCourseIds: [],
@@ -1234,6 +1235,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     setFormVideoUrl('');
     setFormIsPinned(false);
     setFormWatermark(isRestrictedType);
+    setFormAllowDownload(false);
     setFormRules(
       isRestrictedType
         ? {
@@ -1276,6 +1278,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     setFormVideoUrl(item.videoUrl || '');
     setFormIsPinned(Boolean(item.isPinned));
     setFormWatermark(item.watermarkProtected !== false);
+    setFormAllowDownload(Boolean(item.allowDownload));
     setFormRules({
       ...item.accessRules,
       allowedCourseIds: item.accessRules.allowedCourseIds || [],
@@ -1424,6 +1427,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         channelHandle,
         isPinned: formIsPinned,
         watermarkProtected: formWatermark,
+        allowDownload: formType === 'ebook' ? formAllowDownload : false,
         accessRules: formRules,
       },
       currentUser
@@ -1436,6 +1440,28 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         ? 'စာကြည့်တိုက် အချက်အလက် ပြင်ဆင်သိမ်းဆည်းပြီးပါပြီ!'
         : 'စာကြည့်တိုက်သို့ အသစ်ထည့်သွင်းပြီးပါပြီ!'
     );
+  };
+
+  const handleToggleDownloadPermission = (item: LibraryItem) => {
+    if (!isStaff) return;
+    const nextAllowed = !Boolean(item.allowDownload);
+    const updated = ClassroomDB.toggleLibraryItemDownloadPermission(
+      item.id,
+      nextAllowed,
+      currentUser
+    );
+    if (updated) {
+      if (activeReaderItem?.id === item.id) {
+        setActiveReaderItem(updated);
+      }
+      onRefresh();
+      showToast(
+        nextAllowed
+          ? `"${item.title}" အတွက် eBook Download ဆွဲခွင့် ဖွင့်ပေးလိုက်ပါပြီ (Allow Download)။`
+          : `"${item.title}" အတွက် eBook Download ဆွဲခွင့် ပိတ်လိုက်ပါပြီ (စာကြည့်တိုက်အတွင်း ဖတ်ရှုရန်သာ)။`,
+        'info'
+      );
+    }
   };
 
   const handleDeleteItem = (item: LibraryItem) => {
@@ -2013,6 +2039,20 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                                 </span>
                               </>
                             )}
+                            {isEbook && (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                {item.allowDownload ? (
+                                  <span className="inline-flex items-center gap-0.5 text-emerald-700 dark:text-emerald-400 font-bold">
+                                    <Download className="w-3 h-3" /> Download ခွင့်ပြုထားသည်
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-0.5 text-rose-600 dark:text-rose-400 font-bold">
+                                    <Lock className="w-3 h-3" /> Download ပိတ်ထားသည် (ဖတ်ရှုရန်သာ)
+                                  </span>
+                                )}
+                              </>
+                            )}
                           </div>
 
                           <div className="flex items-center gap-1 shrink-0">
@@ -2090,10 +2130,36 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     </div>
 
                     {/* Shelf Footer */}
-                    <div className="pt-3 border-t border-slate-200/60 dark:border-slate-700/50 flex items-center justify-between gap-2">
-                      <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                        {item.authorName} · {item.createdAt}
-                      </span>
+                    <div className="pt-3 border-t border-slate-200/60 dark:border-slate-700/50 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                          {item.authorName} · {item.createdAt}
+                        </span>
+                        {isStaff && !previewAsRestrictedStudent && isEbook && (
+                          <button
+                            type="button"
+                            onClick={() => handleToggleDownloadPermission(item)}
+                            title="ကျောင်းသားများ eBook ဒေါင်းလုဒ်ဆွဲခွင့် ဖွင့်/ပိတ် ပြောင်းရန်"
+                            className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold inline-flex items-center gap-1 cursor-pointer border transition-all ${
+                              item.allowDownload
+                                ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/25'
+                                : 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30 hover:bg-rose-500/25'
+                            }`}
+                          >
+                            {item.allowDownload ? (
+                              <>
+                                <Download className="w-3 h-3" />
+                                <span>Download ခွင့်ပြုထားသည် (ပိတ်ရန်နှိပ်ပါ)</span>
+                              </>
+                            ) : (
+                              <>
+                                <Lock className="w-3 h-3" />
+                                <span>Download ပိတ်ထားသည် (ခွင့်ပြုရန်နှိပ်ပါ)</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
 
                       {!isLockedForStudent && (
                         <div className="flex items-center gap-2">
@@ -2109,18 +2175,25 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                             <ChevronRight className="w-3.5 h-3.5" />
                           </button>
 
-                          {isSafeLibraryFileUrl(item.fileUrl) && (
-                            <a
-                              href={item.fileUrl}
-                              download={item.fileName || `${item.title}.pdf`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="px-3 py-2 rounded-xl neu-btn text-xs font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1 cursor-pointer"
-                            >
-                              <Download className="w-3.5 h-3.5" />
-                              <span>PDF</span>
-                            </a>
-                          )}
+                          {isSafeLibraryFileUrl(item.fileUrl) &&
+                            (Boolean(item.allowDownload) ||
+                              (isStaff && !previewAsRestrictedStudent)) && (
+                              <a
+                                href={item.fileUrl}
+                                download={item.fileName || `${item.title}.pdf`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-3 py-2 rounded-xl neu-btn text-xs font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1 cursor-pointer"
+                                title={
+                                  !item.allowDownload && isStaff
+                                    ? 'ဆရာအကောင့်ဖြင့် ဒေါင်းလုဒ်ဆွဲရန် (ကျောင်းသားများအတွက် ပိတ်ထားသည်)'
+                                    : 'PDF ဒေါင်းလုဒ်ဆွဲရန်'
+                                }
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                                <span>PDF</span>
+                              </a>
+                            )}
                         </div>
                       )}
                     </div>
@@ -2670,38 +2743,103 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               )}
 
               {/* Embedded PDF / External eBook Viewer if fileUrl is present and passes strict URL scheme validation */}
-              {isSafeLibraryFileUrl(activeReaderItem.fileUrl) && (
-                <div className="relative z-20 space-y-3">
-                  <div className="p-3.5 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-between gap-3 flex-wrap">
-                    <div className="flex items-center gap-2 text-xs font-bold">
-                      <BookOpen className="w-4 h-4 text-indigo-600" />
-                      <span>
-                        ပူးတွဲပါ eBook ဖိုင်: {activeReaderItem.fileName || 'Course_eBook.pdf'}
-                        {activeReaderItem.fileSize ? ` (${activeReaderItem.fileSize})` : ''}
-                      </span>
-                    </div>
-                    <a
-                      href={activeReaderItem.fileUrl}
-                      download={activeReaderItem.fileName || `${activeReaderItem.title}.pdf`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-3.5 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-extrabold flex items-center gap-1.5"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>eBook ဒေါင်းလုဒ်ဆွဲရန်</span>
-                    </a>
-                  </div>
+              {isSafeLibraryFileUrl(activeReaderItem.fileUrl) &&
+                (() => {
+                  const canStudentDownload = Boolean(activeReaderItem.allowDownload);
+                  const canCurrentUserDownload =
+                    canStudentDownload || (isStaff && !previewAsRestrictedStudent);
+                  const basePdfUrl = activeReaderItem.fileUrl!;
+                  const embedPdfUrl =
+                    !canCurrentUserDownload && !basePdfUrl.includes('#')
+                      ? `${basePdfUrl}#toolbar=0&navpanes=0&scrollbar=1`
+                      : basePdfUrl;
 
-                  {isSafePdfEmbedUrl(activeReaderItem.fileUrl) ? (
-                    <iframe
-                      src={activeReaderItem.fileUrl}
-                      title={activeReaderItem.title}
-                      sandbox="allow-scripts allow-same-origin"
-                      className="w-full h-[520px] rounded-2xl border border-current/15"
-                    />
-                  ) : null}
-                </div>
-              )}
+                  return (
+                    <div
+                      className="relative z-20 space-y-3"
+                      onContextMenu={(e) => {
+                        if (!canCurrentUserDownload) {
+                          e.preventDefault();
+                        }
+                      }}
+                    >
+                      <div className="p-3.5 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-between gap-3 flex-wrap">
+                        <div className="flex items-center gap-2 text-xs font-bold flex-wrap">
+                          <BookOpen className="w-4 h-4 text-indigo-600 shrink-0" />
+                          <span>
+                            ပူးတွဲပါ eBook ဖိုင်: {activeReaderItem.fileName || 'Course_eBook.pdf'}
+                            {activeReaderItem.fileSize ? ` (${activeReaderItem.fileSize})` : ''}
+                          </span>
+                          {canStudentDownload ? (
+                            <span className="px-2 py-0.5 rounded-lg bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-[11px] font-extrabold">
+                              📥 Download ခွင့်ပြုထားသည်
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-lg bg-rose-500/15 text-rose-700 dark:text-rose-300 text-[11px] font-extrabold">
+                              🔒 Download ပိတ်ထားသည် (ဖတ်ရှုရန်သာ)
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {isStaff &&
+                            !previewAsRestrictedStudent &&
+                            activeReaderItem.itemType === 'ebook' && (
+                              <button
+                                type="button"
+                                onClick={() => handleToggleDownloadPermission(activeReaderItem)}
+                                className={`px-3 py-1.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 cursor-pointer border transition-all ${
+                                  canStudentDownload
+                                    ? 'bg-rose-600/15 text-rose-700 dark:text-rose-300 border-rose-500/30 hover:bg-rose-600 hover:text-white'
+                                    : 'bg-emerald-600/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30 hover:bg-emerald-600 hover:text-white'
+                                }`}
+                              >
+                                <Lock className="w-3.5 h-3.5" />
+                                <span>
+                                  {canStudentDownload
+                                    ? 'ကျောင်းသား Download ပိတ်ရန်'
+                                    : 'ကျောင်းသား Download ခွင့်ပြုရန်'}
+                                </span>
+                              </button>
+                            )}
+
+                          {canCurrentUserDownload ? (
+                            <a
+                              href={activeReaderItem.fileUrl}
+                              download={
+                                activeReaderItem.fileName || `${activeReaderItem.title}.pdf`
+                              }
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-extrabold flex items-center gap-1.5"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              <span>
+                                {canStudentDownload
+                                  ? 'eBook ဒေါင်းလုဒ်ဆွဲရန်'
+                                  : 'eBook ဒေါင်းလုဒ်ဆွဲရန် (ဆရာသီးသန့်)'}
+                              </span>
+                            </a>
+                          ) : (
+                            <span className="px-3 py-1.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-700 dark:text-rose-300 text-xs font-extrabold flex items-center gap-1.5">
+                              <Lock className="w-3.5 h-3.5 shrink-0" />
+                              <span>စာကြည့်တိုက်အတွင်း ဖတ်ရှုရန်သာ (Download ခွင့်မပြုပါ)</span>
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {isSafePdfEmbedUrl(activeReaderItem.fileUrl) ? (
+                        <iframe
+                          src={embedPdfUrl}
+                          title={activeReaderItem.title}
+                          sandbox="allow-scripts allow-same-origin"
+                          className="w-full h-[520px] rounded-2xl border border-current/15"
+                        />
+                      ) : null}
+                    </div>
+                  );
+                })()}
 
               {/* Formatted Long-Form Article / Note Body (Preserves Bold, Underline, Text Colors, Highlights & Copy-Paste Styling) */}
               {activeReaderItem.content && (
@@ -2855,34 +2993,99 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               </div>
 
               {formType === 'ebook' && (
-                <div className="neu-inset rounded-2xl p-3.5 space-y-3">
-                  <label className="font-extrabold text-slate-800 dark:text-slate-100 block">
-                    eBook PDF ဖိုင် တင်ရန် သို့မဟုတ် Direct eBook Link ထည့်ရန်
-                  </label>
-                  <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
-                    <label className="px-3.5 py-2 rounded-xl neu-btn font-bold text-indigo-700 dark:text-indigo-300 flex items-center gap-1.5 cursor-pointer w-fit">
-                      <Upload className="w-3.5 h-3.5" />
-                      <span>PDF / eBook ဖိုင် ရွေးချယ်ရန်</span>
-                      <input
-                        type="file"
-                        accept=".pdf,.epub,.doc,.docx"
-                        onChange={handleEbookFileUpload}
-                        className="hidden"
-                      />
+                <div className="neu-inset rounded-2xl p-3.5 space-y-3.5">
+                  <div className="space-y-2">
+                    <label className="font-extrabold text-slate-800 dark:text-slate-100 block">
+                      eBook PDF ဖိုင် တင်ရန် သို့မဟုတ် Direct eBook Link ထည့်ရန်
                     </label>
-                    <input
-                      type="text"
-                      value={formFileUrl}
-                      onChange={(e) => setFormFileUrl(e.target.value)}
-                      placeholder="သို့မဟုတ် eBook URL ထည့်ပါ..."
-                      className="flex-1 px-3 py-2 rounded-xl bg-white/70 dark:bg-slate-800/70 border border-slate-300 dark:border-slate-700"
-                    />
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
+                      <label className="px-3.5 py-2 rounded-xl neu-btn font-bold text-indigo-700 dark:text-indigo-300 flex items-center gap-1.5 cursor-pointer w-fit">
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>PDF / eBook ဖိုင် ရွေးချယ်ရန်</span>
+                        <input
+                          type="file"
+                          accept=".pdf,.epub,.doc,.docx"
+                          onChange={handleEbookFileUpload}
+                          className="hidden"
+                        />
+                      </label>
+                      <input
+                        type="text"
+                        value={formFileUrl}
+                        onChange={(e) => setFormFileUrl(e.target.value)}
+                        placeholder="သို့မဟုတ် eBook URL ထည့်ပါ..."
+                        className="flex-1 px-3 py-2 rounded-xl bg-white/70 dark:bg-slate-800/70 border border-slate-300 dark:border-slate-700"
+                      />
+                    </div>
+                    {formFileName && (
+                      <p className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300">
+                        ရွေးချယ်ထားသောဖိုင်: {formFileName} ({formFileSize})
+                      </p>
+                    )}
                   </div>
-                  {formFileName && (
-                    <p className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300">
-                      ရွေးချယ်ထားသောဖိုင်: {formFileName} ({formFileSize})
-                    </p>
-                  )}
+
+                  {/* eBook Download Permission Control for Admin & Co-Admin */}
+                  <div className="pt-3 border-t border-slate-300/60 dark:border-slate-700/60 space-y-2">
+                    <label className="font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+                      <Download className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                      <span>
+                        eBook ဒေါင်းလုဒ်ဆွဲခွင့် သတ်မှတ်ချက် (Admin / Co-Admin Download Permission):
+                      </span>
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => setFormAllowDownload(false)}
+                        className={`p-3 rounded-xl text-left border transition-all cursor-pointer flex items-start gap-2.5 ${
+                          !formAllowDownload
+                            ? 'bg-rose-600 text-white border-rose-600 shadow-sm'
+                            : 'bg-white/60 dark:bg-slate-800/60 border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200'
+                        }`}
+                      >
+                        <Lock className="w-4 h-4 shrink-0 mt-0.5" />
+                        <div>
+                          <div className="font-extrabold text-xs">
+                            🔒 Download ပိတ်ထားမည် (ဖတ်ရှုရန်သာ)
+                          </div>
+                          <div
+                            className={`text-[11px] mt-0.5 ${
+                              !formAllowDownload
+                                ? 'text-rose-100'
+                                : 'text-slate-500 dark:text-slate-400'
+                            }`}
+                          >
+                            ကျောင်းသားများ စာကြည့်တိုက်အတွင်း ဖတ်ရှုနိုင်သော်လည်း PDF ဒေါင်းလုဒ်ဆွဲခွင့် မရှိပါ
+                          </div>
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setFormAllowDownload(true)}
+                        className={`p-3 rounded-xl text-left border transition-all cursor-pointer flex items-start gap-2.5 ${
+                          formAllowDownload
+                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                            : 'bg-white/60 dark:bg-slate-800/60 border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200'
+                        }`}
+                      >
+                        <Download className="w-4 h-4 shrink-0 mt-0.5" />
+                        <div>
+                          <div className="font-extrabold text-xs">
+                            📥 Download လုပ်ခွင့်ပြုမည် (Allow Download)
+                          </div>
+                          <div
+                            className={`text-[11px] mt-0.5 ${
+                              formAllowDownload
+                                ? 'text-emerald-100'
+                                : 'text-slate-500 dark:text-slate-400'
+                            }`}
+                          >
+                            သတ်မှတ်ချက်ပြည့်မီသော ကျောင်းသားများ eBook PDF ဖိုင်ကို ဒေါင်းလုဒ်ဆွဲနိုင်ပါမည်
+                          </div>
+                        </div>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
 

@@ -14,6 +14,7 @@ import { CreateCourseModal } from './components/CreateCourseModal';
 import { AdminStudentDirectoryModal } from './components/AdminStudentDirectoryModal';
 import { SupabaseModal } from './components/SupabaseModal';
 import { AcademyRulesModal } from './components/AcademyRulesModal';
+import { FirstLoginPasswordChangeModal } from './components/FirstLoginPasswordChangeModal';
 import { AdminAuditLogModal } from './components/AdminAuditLogModal';
 import { OfficialWebsiteModal } from './components/OfficialWebsiteModal';
 import { LibraryView } from './components/LibraryView';
@@ -1469,6 +1470,19 @@ export default function App() {
             onLogout={handleLogout}
           />
         )}
+
+        {/* Mandatory First-Login Password Change Modal (Students after accepting Rules, and New Admin / Co-Admin accounts immediately on First Login) */}
+        {Boolean(currentUser.mustChangePassword) &&
+          (currentUser.role !== 'student' || Boolean(currentUser.rulesAccepted)) && (
+            <FirstLoginPasswordChangeModal
+              currentUser={currentUser}
+              onPasswordChanged={(updatedUser) => {
+                setCurrentUser(updatedUser);
+                refreshData();
+              }}
+              onLogout={handleLogout}
+            />
+          )}
 
         {/* Official Academy Website In-App Viewer Modal (Method 3) */}
         <OfficialWebsiteModal

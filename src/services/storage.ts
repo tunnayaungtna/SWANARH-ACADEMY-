@@ -1616,11 +1616,12 @@ export class ClassroomDB {
     const activeDev = matched.activeDeviceId || '';
 
     // Enforce Single-Device Policy (1 Account = 1 Device Only) STRICTLY FOR STUDENTS ONLY.
-    // Note: If a newly created student account has NOT accepted the rules yet (!matched.rulesAccepted),
+    // Note: If a newly created student account has NOT accepted the rules yet (!matched.rulesAccepted) or has NOT changed their initial password yet (matched.mustChangePassword),
     // allow the student's phone to claim the session automatically even if the Admin tested the login on a computer first.
     if (
       matched.role === 'student' &&
       Boolean(matched.rulesAccepted) &&
+      !matched.mustChangePassword &&
       activeDev &&
       activeDev !== 'LOGGED_OUT' &&
       activeDev !== localDeviceId &&
@@ -1719,6 +1720,12 @@ export class ClassroomDB {
       return false;
     });
     const existing = idx >= 0 ? localUsers[idx] : undefined;
+    const mergedPwdChangedAt = remoteUser.passwordChangedAt || existing?.passwordChangedAt;
+    const mergedMustChangePwd = mergedPwdChangedAt
+      ? false
+      : remoteUser.mustChangePassword !== undefined
+      ? Boolean(remoteUser.mustChangePassword)
+      : Boolean(existing?.mustChangePassword);
     const mergedUser: User = {
       ...(existing || {}),
       ...remoteUser,
@@ -1732,6 +1739,8 @@ export class ClassroomDB {
       sessionUpdatedAtMs: remoteUser.sessionUpdatedAtMs,
       rulesAccepted: Boolean(remoteUser.rulesAccepted || existing?.rulesAccepted),
       rulesAcceptedAt: remoteUser.rulesAcceptedAt || existing?.rulesAcceptedAt,
+      mustChangePassword: mergedMustChangePwd,
+      passwordChangedAt: mergedPwdChangedAt,
       password: encryptPassword(
         remoteUser.password || existing?.password,
         remoteUser.role,
@@ -1756,6 +1765,12 @@ export class ClassroomDB {
       if (deletedSet.has(ru.id)) return;
       const existing = userMap.get(ru.id);
       const ruName = (ru.username || '').trim().toLowerCase();
+      const mergedPwdChangedAt = ru.passwordChangedAt || existing?.passwordChangedAt;
+      const mergedMustChangePwd = mergedPwdChangedAt
+        ? false
+        : ru.mustChangePassword !== undefined
+        ? Boolean(ru.mustChangePassword)
+        : Boolean(existing?.mustChangePassword);
       userMap.set(ru.id, {
         ...(existing || {}),
         ...ru,
@@ -1768,6 +1783,8 @@ export class ClassroomDB {
         sessionUpdatedAtMs: ru.sessionUpdatedAtMs,
         rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
         rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
+        mustChangePassword: mergedMustChangePwd,
+        passwordChangedAt: mergedPwdChangedAt,
         avatar: ru.role !== 'admin' ? '' : ru.avatar || existing?.avatar || '',
         password: encryptPassword(
           ru.password || existing?.password,
@@ -2019,6 +2036,7 @@ export class ClassroomDB {
       title: data.title?.trim() || (data.role === 'admin' ? 'Administrator' : data.role === 'co_admin' ? 'Course Coordinator & Assistant Instructor' : undefined),
       gender: data.gender || 'male',
       address: data.address?.trim() || undefined,
+      mustChangePassword: true,
     };
 
     const updatedUsers = [...users, newUser];
@@ -2549,18 +2567,29 @@ export class ClassroomDB {
       users[userIndex].role,
       users[userIndex].id
     );
+    const changedStamp = new Date().toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
     users[userIndex].password = encryptedNewPwd;
+    users[userIndex].mustChangePassword = false;
+    users[userIndex].passwordChangedAt = changedStamp;
     this.markLocalWrite(userId);
     this.setItem(STORAGE_KEYS.USERS, users);
 
     const currentLogged = this.getCurrentUser();
     if (currentLogged && currentLogged.id === userId) {
       currentLogged.password = encryptedNewPwd;
+      currentLogged.mustChangePassword = false;
+      currentLogged.passwordChangedAt = changedStamp;
       this.setCurrentUser(currentLogged);
     }
 
     try {
-      SupabaseService.upsertProfile(users[userIndex]).catch(() => {});
+      SupabaseService.upsertProfile(users[userIndex], true).catch(() => {});
     } catch {
       // ignore
     }
@@ -2580,6 +2609,85 @@ export class ClassroomDB {
     }
 
     return { success: true };
+  }
+
+  /**
+   * Mandatory First-Login Password Change for newly created Student, Co-Admin, and Admin accounts.
+   */
+  static completeFirstLoginPasswordChange(
+    userId: string,
+    newPassword: string
+  ): { success: boolean; user?: User; error?: string } {
+    const users = this.getAllUsers();
+    const userIndex = users.findIndex((u) => u.id === userId);
+    if (userIndex === -1) {
+      return { success: false, error: 'အသုံးပြုသူ အကောင့် မတွေ့ရှိပါ။' };
+    }
+
+    const cleanNew = (newPassword || '').trim();
+    if (cleanNew.length < 4) {
+      return {
+        success: false,
+        error: 'Password အသစ်သည် အနည်းဆုံး စာလုံး (၄) လုံး ရှိရပါမည်။',
+      };
+    }
+
+    // Ensure the user actually picks a NEW password different from the temporary initial password
+    if (verifyPassword(cleanNew, users[userIndex].password, users[userIndex].role)) {
+      return {
+        success: false,
+        error: 'ယာယီ Password အဟောင်းနှင့် တူညီနေပါသည်။ မိမိကိုယ်ပိုင် Password အသစ်တစ်ခု ပြောင်းလဲသတ်မှတ်ပေးပါ။',
+      };
+    }
+
+    const changedStamp = new Date().toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    const encryptedNewPwd = encryptPassword(
+      cleanNew,
+      users[userIndex].role,
+      users[userIndex].id
+    );
+
+    users[userIndex] = {
+      ...users[userIndex],
+      password: encryptedNewPwd,
+      mustChangePassword: false,
+      passwordChangedAt: changedStamp,
+    };
+
+    this.markLocalWrite(userId);
+    this.setItem(STORAGE_KEYS.USERS, users);
+
+    const currentLogged = this.getCurrentUser();
+    if (currentLogged && currentLogged.id === userId) {
+      this.setCurrentUser(users[userIndex]);
+    }
+
+    try {
+      SupabaseService.upsertProfile(users[userIndex], true).catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    this.recordAuditLog({
+      actor: users[userIndex],
+      category: 'security',
+      actionCode: 'PASSWORD_CHANGED',
+      actionLabel: 'ပထမဆုံးအကြိမ် အကောင့်ဝင်ချိန် ကိုယ်ပိုင်စကားဝှက် အသစ်ပြောင်းလဲခြင်း (First-Login Password Changed)',
+      severity: 'info',
+      targetType: 'user',
+      targetId: users[userIndex].id,
+      targetName: `${users[userIndex].name} (@${users[userIndex].username})`,
+      summary: `${users[userIndex].name} (@${users[userIndex].username} · ${users[userIndex].role.toUpperCase()}) သည် ပထမဆုံးအကြိမ် အကောင့်ဝင်ရောက်ချိန်တွင် ကိုယ်ပိုင် Password အသစ်သို့ ပြောင်းလဲသတ်မှတ်ခဲ့ပါသည်။`,
+    });
+
+    return { success: true, user: users[userIndex] };
   }
 
   static adminUpdateStudentPassword(
@@ -4311,6 +4419,12 @@ export class ClassroomDB {
                 : this.isRecentLocalWrite(ru.id)
                 ? existing?.avatar || ru.avatar || ''
                 : ru.avatar || existing?.avatar || '';
+            const mergedPwdChangedAt = ru.passwordChangedAt || existing?.passwordChangedAt;
+            const mergedMustChangePwd = mergedPwdChangedAt
+              ? false
+              : ru.mustChangePassword !== undefined
+              ? Boolean(ru.mustChangePassword)
+              : Boolean(existing?.mustChangePassword);
             userMap.set(ru.id, {
               ...existing,
               ...ru,
@@ -4319,6 +4433,8 @@ export class ClassroomDB {
               sessionUpdatedAtMs: ru.sessionUpdatedAtMs,
               rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
               rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
+              mustChangePassword: mergedMustChangePwd,
+              passwordChangedAt: mergedPwdChangedAt,
               avatar: resolvedAvatar,
               password: encryptPassword(
                 this.isRecentLocalWrite(ru.id)
@@ -4713,6 +4829,12 @@ export class ClassroomDB {
                 : this.isRecentLocalWrite(ru.id)
                 ? existing?.avatar || ru.avatar || ''
                 : ru.avatar || existing?.avatar || '';
+            const mergedPwdChangedAt = ru.passwordChangedAt || existing?.passwordChangedAt;
+            const mergedMustChangePwd = mergedPwdChangedAt
+              ? false
+              : ru.mustChangePassword !== undefined
+              ? Boolean(ru.mustChangePassword)
+              : Boolean(existing?.mustChangePassword);
             const mergedProfile: User = {
               ...existing,
               ...ru,
@@ -4721,6 +4843,8 @@ export class ClassroomDB {
               sessionUpdatedAtMs: ru.sessionUpdatedAtMs,
               rulesAccepted: Boolean(ru.rulesAccepted || existing?.rulesAccepted),
               rulesAcceptedAt: ru.rulesAcceptedAt || existing?.rulesAcceptedAt,
+              mustChangePassword: mergedMustChangePwd,
+              passwordChangedAt: mergedPwdChangedAt,
               avatar: resolvedAvatar,
               password: encryptPassword(
                 this.isRecentLocalWrite(ru.id)
@@ -11227,6 +11351,7 @@ export class ClassroomDB {
       channelHandle?: string;
       isPinned?: boolean;
       watermarkProtected?: boolean;
+      allowDownload?: boolean;
       accessRules: LibraryAccessRules;
     },
     actor: User
@@ -11286,6 +11411,12 @@ export class ClassroomDB {
         input.watermarkProtected !== undefined
           ? Boolean(input.watermarkProtected)
           : input.itemType === 'ebook' || input.itemType === 'long_note',
+      allowDownload:
+        input.allowDownload !== undefined
+          ? Boolean(input.allowDownload)
+          : prev?.allowDownload !== undefined
+          ? Boolean(prev.allowDownload)
+          : false,
       accessRules:
         input.itemType === 'youtube' || input.itemType === 'tiktok'
           ? {
@@ -11342,6 +11473,42 @@ export class ClassroomDB {
     }
 
     return record;
+  }
+
+  static toggleLibraryItemDownloadPermission(
+    itemId: string,
+    allowDownload: boolean,
+    actor: User
+  ): LibraryItem | null {
+    if (actor.role !== 'admin' && actor.role !== 'co_admin') {
+      throw new Error('ဆရာ (Admin / Co-Admin) များသာ eBook Download ခွင့်ပြုချက်ကို ပြောင်းလဲနိုင်ပါသည်။');
+    }
+    const existing = this.getItem<LibraryItem[]>(STORAGE_KEYS.LIBRARY_ITEMS, []);
+    const idx = existing.findIndex((i) => i.id === itemId);
+    if (idx < 0) return null;
+
+    const nowMs = Date.now();
+    const updated: LibraryItem = {
+      ...existing[idx],
+      allowDownload: Boolean(allowDownload),
+      updatedAtMs: nowMs,
+    };
+
+    const nextList = existing.map((item, i) => (i === idx ? updated : item));
+    this.setItem(STORAGE_KEYS.LIBRARY_ITEMS, nextList);
+    this.markLocalWrite(updated.id);
+
+    try {
+      const cloudRecord: LibraryItem =
+        updated.fileUrl && updated.fileUrl.startsWith('data:') && updated.fileUrl.length > 180_000
+          ? { ...updated, fileUrl: undefined }
+          : updated;
+      SupabaseService.upsertLibraryItem(cloudRecord).catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    return updated;
   }
 
   static bulkUpdateLibraryAccessRules(

@@ -14,6 +14,8 @@ export interface User {
   address?: string;
   rulesAccepted?: boolean;
   rulesAcceptedAt?: string;
+  mustChangePassword?: boolean; // When true, user must change password upon first login before using the app
+  passwordChangedAt?: string; // Timestamp when user completed their password change
   activeDeviceId?: string;
   activeSessionToken?: string;
   sessionUpdatedAtMs?: number;
@@ -437,6 +439,7 @@ export interface LibraryItem {
   authorRole: UserRole;
   isPinned?: boolean;
   watermarkProtected?: boolean; // Overlays student name & username to prevent leaks
+  allowDownload?: boolean; // true = students can download eBook PDF, false = Read-Only inside Library Reader
   accessRules: LibraryAccessRules;
   createdAt: string;
   createdAtMs: number;

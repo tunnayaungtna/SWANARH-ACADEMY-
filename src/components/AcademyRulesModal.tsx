@@ -221,7 +221,10 @@ export const AcademyRulesModal: React.FC<AcademyRulesModalProps> = ({
                   <strong className="text-emerald-700 dark:text-emerald-400">
                     &ldquo;သိရှိ လိုက်နာပါမည်&rdquo;
                   </strong>{' '}
-                  ခလုတ်ကို နှိပ်၍ အတည်ပြုပါ။
+                  ခလုတ်ကို နှိပ်၍ အတည်ပြုပါ
+                  {currentUser.mustChangePassword
+                    ? ' (အတည်ပြုပြီးနောက် သင်၏ ကိုယ်ပိုင် Password အသစ် ဆက်လက်ပြောင်းလဲရပါမည်)။'
+                    : '။'}
                 </span>
               </div>
 

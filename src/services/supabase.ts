@@ -715,6 +715,7 @@ function compactBannerForCloud(banner?: string): string {
 const RULES_MARKER_PREFIX = '||RULES_OK:';
 const DEVICE_SESSION_MARKER_PREFIX = '||DEV_SES:';
 const USERNAME_MARKER_PREFIX = '||USR:';
+const MUST_CHANGE_PWD_MARKER_PREFIX = '||MUST_CHG_PWD:';
 const PASSWORD_ENC_MARKER_PREFIX = '||PWD_ENC:';
 const COURSE_ORDER_MARKER_PREFIX = '||ORDER:';
 const ATT_STATE_MARKER_PREFIX = '||ATT_STATE:';
@@ -832,6 +833,7 @@ function encodeTitleWithRules(user: User): string | null {
     .split(RULES_MARKER_PREFIX)[0]
     .split(DEVICE_SESSION_MARKER_PREFIX)[0]
     .split(USERNAME_MARKER_PREFIX)[0]
+    .split(MUST_CHANGE_PWD_MARKER_PREFIX)[0]
     .split(PASSWORD_ENC_MARKER_PREFIX)[0]
     .trim();
 
@@ -849,6 +851,11 @@ function encodeTitleWithRules(user: User): string | null {
   if (cleanUser) {
     encoded += `${USERNAME_MARKER_PREFIX}${cleanUser}`;
   }
+  if (user.mustChangePassword) {
+    encoded += `${MUST_CHANGE_PWD_MARKER_PREFIX}1`;
+  } else if (user.passwordChangedAt) {
+    encoded += `${MUST_CHANGE_PWD_MARKER_PREFIX}0~${user.passwordChangedAt.replace(/[~|]/g, '')}`;
+  }
   const encryptedPwd = encryptPassword(user.password, user.role, user.id);
   encoded += `${PASSWORD_ENC_MARKER_PREFIX}${encryptedPwd}`;
   return encoded || null;
@@ -862,6 +869,8 @@ function decodeTitleAndRules(
   title?: string;
   rulesAccepted?: boolean;
   rulesAcceptedAt?: string;
+  mustChangePassword?: boolean;
+  passwordChangedAt?: string;
   activeDeviceId?: string;
   activeSessionToken?: string;
   sessionUpdatedAtMs?: number;
@@ -874,12 +883,31 @@ function decodeTitleAndRules(
   let sessionUpdatedAtMs: number | undefined;
   let username: string | undefined;
   let encryptedPassword: string | undefined;
+  let mustChangePassword: boolean | undefined;
+  let passwordChangedAt: string | undefined;
 
   if (working.includes(PASSWORD_ENC_MARKER_PREFIX)) {
     const [beforePwd, pwdRaw] = working.split(PASSWORD_ENC_MARKER_PREFIX);
     working = beforePwd;
     if (pwdRaw && pwdRaw.trim()) {
       encryptedPassword = pwdRaw.trim();
+    }
+  }
+
+  if (working.includes(MUST_CHANGE_PWD_MARKER_PREFIX)) {
+    const [beforeMcp, mcpRaw] = working.split(MUST_CHANGE_PWD_MARKER_PREFIX);
+    working = beforeMcp;
+    if (mcpRaw) {
+      const trimmedMcp = mcpRaw.trim();
+      if (trimmedMcp === '1') {
+        mustChangePassword = true;
+      } else if (trimmedMcp.startsWith('0')) {
+        mustChangePassword = false;
+        const [, stampPart] = trimmedMcp.split('~');
+        if (stampPart && stampPart.trim()) {
+          passwordChangedAt = stampPart.trim();
+        }
+      }
     }
   }
 
@@ -911,6 +939,8 @@ function decodeTitleAndRules(
       title: cleanTitle.trim() || undefined,
       rulesAccepted: true,
       rulesAcceptedAt: rowRulesAcceptedAt || acceptedStamp?.trim() || undefined,
+      mustChangePassword,
+      passwordChangedAt,
       activeDeviceId,
       activeSessionToken,
       sessionUpdatedAtMs,
@@ -922,6 +952,8 @@ function decodeTitleAndRules(
     title: working.trim() || undefined,
     rulesAccepted: rowRulesAccepted ? true : undefined,
     rulesAcceptedAt: rowRulesAcceptedAt || undefined,
+    mustChangePassword,
+    passwordChangedAt,
     activeDeviceId,
     activeSessionToken,
     sessionUpdatedAtMs,
@@ -1987,6 +2019,8 @@ export class SupabaseService {
       address: row.address ? String(row.address) : undefined,
       rulesAccepted: decoded.rulesAccepted,
       rulesAcceptedAt: decoded.rulesAcceptedAt,
+      mustChangePassword: decoded.mustChangePassword,
+      passwordChangedAt: decoded.passwordChangedAt,
       activeDeviceId: decoded.activeDeviceId,
       activeSessionToken: decoded.activeSessionToken,
       sessionUpdatedAtMs: decoded.sessionUpdatedAtMs,
@@ -6290,6 +6324,8 @@ export class SupabaseService {
               address: profile.address || undefined,
               rulesAccepted: decoded.rulesAccepted,
               rulesAcceptedAt: decoded.rulesAcceptedAt,
+              mustChangePassword: decoded.mustChangePassword,
+              passwordChangedAt: decoded.passwordChangedAt,
             },
           };
         }
@@ -6353,6 +6389,7 @@ export class SupabaseService {
       title: userData.title || undefined,
       gender: userData.gender || 'male',
       address: userData.address || undefined,
+      mustChangePassword: true,
     };
 
     // Always force upsert directly to public.profiles table so mobile devices immediately see the new account
