@@ -136,6 +136,7 @@ export class ClassroomDB {
     }
   >();
   private static storageListenerAttached = false;
+  private static isInitialized = false;
 
   private static ensureStorageListener(): void {
     if (this.storageListenerAttached || typeof window === 'undefined') return;
@@ -777,8 +778,12 @@ export class ClassroomDB {
 
   // Init default storage (Non-destructive: preserves live user data across all future AI Studio updates)
   static init(): void {
+    if (this.isInitialized) return;
+    this.isInitialized = true;
+
     this.selfHealFalselyDeletedNewAccounts();
     const isCloudSynced = localStorage.getItem(STORAGE_KEYS.CLOUD_SYNCED) === 'true';
+    const isSanitizedV3 = localStorage.getItem('classroom_init_sanitized_v3') === 'true';
     const deletedSet = new Set(this.getDeletedIds());
     const deletedMeta = this.getDeletedUsersMeta();
 
@@ -791,7 +796,7 @@ export class ClassroomDB {
           password: encryptPassword(u.password, u.role, u.id),
         }))
       );
-    } else {
+    } else if (!isSanitizedV3) {
       // Ensure existing local student and co_admin accounts never retain any profile photo,
       // purge any deleted accounts, and encrypt any legacy plaintext passwords into ENC_V1 ciphertext locally
       // (Never push local users to Supabase on startup before pullFromSupabase runs so deleted accounts never resurrect!)
@@ -826,7 +831,7 @@ export class ClassroomDB {
         STORAGE_KEYS.COURSES,
         isCloudSynced ? [] : INITIAL_COURSES.filter((c) => !deletedSet.has(c.id))
       );
-    } else {
+    } else if (!isSanitizedV3) {
       // Upgrade any legacy local /src/assets/images/ banner paths to the new classroom header photos
       const existingCourses = this.getItem<Course[]>(STORAGE_KEYS.COURSES, []);
       let coursesChanged = false;
@@ -856,7 +861,7 @@ export class ClassroomDB {
         STORAGE_KEYS.POSTS,
         isCloudSynced ? [] : INITIAL_POSTS.filter((p) => !deletedSet.has(p.id))
       );
-    } else {
+    } else if (!isSanitizedV3) {
       // Remove legacy demo scheduled post-103 if present so it never loops notifications
       const existingPosts = this.getItem<CoursePost[]>(STORAGE_KEYS.POSTS, []);
       if (existingPosts.some((p) => p.id === 'post-103')) {
@@ -864,6 +869,13 @@ export class ClassroomDB {
           STORAGE_KEYS.POSTS,
           existingPosts.filter((p) => p.id !== 'post-103')
         );
+      }
+    }
+    if (!isSanitizedV3) {
+      try {
+        localStorage.setItem('classroom_init_sanitized_v3', 'true');
+      } catch {
+        // ignore
       }
     }
     if (!localStorage.getItem(STORAGE_KEYS.ASSIGNMENTS)) {
@@ -9810,14 +9822,16 @@ export class ClassroomDB {
       this.setItem(STORAGE_KEYS.NOTIFICATIONS, activeNotifs);
     }
 
-    const currentActor = this.getCurrentUser();
-    const isInstructorActor =
-      currentActor?.role === 'admin' || currentActor?.role === 'co_admin';
-    if (isInstructorActor && (expiredIds.length > 0 || forceCloudCleanup)) {
-      try {
-        SupabaseService.purgeExpiredNotifications(expiredIds, forceCloudCleanup).catch(() => {});
-      } catch {
-        // ignore
+    if (expiredIds.length > 0 || forceCloudCleanup) {
+      const currentActor = this.getCurrentUser();
+      const isInstructorActor =
+        currentActor?.role === 'admin' || currentActor?.role === 'co_admin';
+      if (isInstructorActor) {
+        try {
+          SupabaseService.purgeExpiredNotifications(expiredIds, forceCloudCleanup).catch(() => {});
+        } catch {
+          // ignore
+        }
       }
     }
 

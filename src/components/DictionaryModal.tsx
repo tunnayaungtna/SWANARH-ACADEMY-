@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { DictionaryEntry } from '../data/enMmDictionary';
 import {
-  MASTER_STATIC_DICTIONARY,
+  getMasterStaticDictionary,
   OxfordDictionaryData,
   containsMyanmarScript,
   convertStaticToOxfordData,
@@ -105,21 +105,25 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
   }, [isOpen]);
 
   const combinedEntries = useMemo(() => {
+    if (!isOpen) return [];
     const map = new Map<string, DictionaryEntry>();
     for (const item of customEntries) {
       map.set(item.id, item);
     }
-    for (const item of MASTER_STATIC_DICTIONARY) {
+    for (const item of getMasterStaticDictionary()) {
       map.set(item.id, item);
     }
     if (liveLookupEntry) {
       map.set(liveLookupEntry.id, liveLookupEntry);
     }
     return Array.from(map.values());
-  }, [customEntries, liveLookupEntry]);
+  }, [isOpen, customEntries, liveLookupEntry]);
 
   // Only return local entries when the user is actively searching OR viewing their Saved words
   const { localResults, hasExactLocalMatch } = useMemo(() => {
+    if (!isOpen) {
+      return { localResults: [], hasExactLocalMatch: false };
+    }
     const q = searchQuery.trim();
     if (showSavedOnly) {
       const savedList = combinedEntries.filter((item) => savedIds.includes(item.id));
@@ -134,10 +138,10 @@ export const DictionaryModal: React.FC<DictionaryModalProps> = ({
       return { localResults: [], hasExactLocalMatch: false };
     }
 
-    const baseList = [...customEntries, ...MASTER_STATIC_DICTIONARY];
+    const baseList = [...customEntries, ...getMasterStaticDictionary()];
     const { results, hasExactMatch } = searchLocalDictionary(q, baseList);
     return { localResults: results, hasExactLocalMatch: hasExactMatch };
-  }, [customEntries, combinedEntries, showSavedOnly, searchQuery, savedIds]);
+  }, [isOpen, customEntries, combinedEntries, showSavedOnly, searchQuery, savedIds]);
 
   // Fast Live Autocomplete Suggestions as user types
   useEffect(() => {

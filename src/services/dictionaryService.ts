@@ -42,9 +42,21 @@ export interface OxfordDictionaryData {
   wordForms?: string[];
 }
 
-// Deduplicate all static entries by lowercase English headword
-function buildMasterStaticList(): DictionaryEntry[] {
-  const seen = new Set<string>();
+// Lazy singleton cache so 0ms is spent at app startup before the user opens the dictionary
+let _masterStaticDictionaryCache: DictionaryEntry[] | null = null;
+let _staticHeadwordMapCache: Map<string, DictionaryEntry> | null = null;
+
+function ensureStaticDictionaryInitialized(): {
+  list: DictionaryEntry[];
+  map: Map<string, DictionaryEntry>;
+} {
+  if (_masterStaticDictionaryCache && _staticHeadwordMapCache) {
+    return {
+      list: _masterStaticDictionaryCache,
+      map: _staticHeadwordMapCache,
+    };
+  }
+  const map = new Map<string, DictionaryEntry>();
   const combined = [
     ...EN_MM_DICTIONARY,
     ...EXTRA_EN_MM_ENTRIES,
@@ -53,24 +65,27 @@ function buildMasterStaticList(): DictionaryEntry[] {
   const unique: DictionaryEntry[] = [];
   for (const item of combined) {
     const key = item.en.trim().toLowerCase();
-    if (!seen.has(key)) {
-      seen.add(key);
+    if (!map.has(key)) {
+      map.set(key, item);
       unique.push(item);
     }
   }
-  return unique.sort((a, b) => a.en.localeCompare(b.en));
+  unique.sort((a, b) => {
+    const ak = a.en.toLowerCase();
+    const bk = b.en.toLowerCase();
+    return ak < bk ? -1 : ak > bk ? 1 : 0;
+  });
+  _masterStaticDictionaryCache = unique;
+  _staticHeadwordMapCache = map;
+  return { list: unique, map };
 }
 
-export const MASTER_STATIC_DICTIONARY: DictionaryEntry[] = buildMasterStaticList();
-
-// O(1) instant lookup map by lowercase English headword
-const STATIC_HEADWORD_MAP = new Map<string, DictionaryEntry>();
-for (const entry of MASTER_STATIC_DICTIONARY) {
-  STATIC_HEADWORD_MAP.set(entry.en.trim().toLowerCase(), entry);
+export function getMasterStaticDictionary(): DictionaryEntry[] {
+  return ensureStaticDictionaryInitialized().list;
 }
 
 export function getInstantStaticEntry(word: string): DictionaryEntry | undefined {
-  return STATIC_HEADWORD_MAP.get(word.trim().toLowerCase());
+  return ensureStaticDictionaryInitialized().map.get(word.trim().toLowerCase());
 }
 
 export function containsMyanmarScript(text: string): boolean {
@@ -626,7 +641,7 @@ export async function fetchOxfordDictionaryEntry(
 
   ensureOxfordCacheLoaded();
   const cacheKey = query.toLowerCase();
-  const existingStatic = STATIC_HEADWORD_MAP.get(cacheKey);
+  const existingStatic = getInstantStaticEntry(cacheKey);
 
   // Instant memory/localStorage hit (0ms)
   if (oxfordMemoryCache.has(cacheKey)) {
@@ -765,7 +780,7 @@ export async function fetchOxfordDictionaryEntry(
       }
 
       const matchedCurated =
-        existingStatic || STATIC_HEADWORD_MAP.get(enHeadword.trim().toLowerCase());
+        existingStatic || getInstantStaticEntry(enHeadword);
 
       // For Myanmar queries, fetch reverse POS breakdown & English Dictionary API in PARALLEL!
       if (isMmQuery && enHeadword && !containsMyanmarScript(enHeadword)) {

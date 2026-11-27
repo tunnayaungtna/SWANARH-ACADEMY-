@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, Suspense } from 'react';
+import React, { useState, useEffect, useRef, useMemo, Suspense } from 'react';
 import { User, Course, CoursePost, Assignment, Quiz, StudentProgress, CertificateData, NotificationItem } from './types/classroom';
 import { ClassroomDB } from './services/storage';
 import { SupabaseService } from './services/supabase';
@@ -54,11 +54,12 @@ import {
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(() => ClassroomDB.getCurrentUser());
-  const [allUsers, setAllUsers] = useState<User[]>(() => ClassroomDB.getAllUsers());
-  const [courses, setCourses] = useState<Course[]>(() => {
-    const user = ClassroomDB.getCurrentUser();
-    return user ? ClassroomDB.getCourses(user) : [];
-  });
+  const [allUsers, setAllUsers] = useState<User[]>(() =>
+    currentUser ? ClassroomDB.getAllUsers() : []
+  );
+  const [courses, setCourses] = useState<Course[]>(() =>
+    currentUser ? ClassroomDB.getCourses(currentUser) : []
+  );
   const [selectedCourse, setSelectedCourse] = useState<Course | null>(null);
   const selectedCourseRef = useRef<Course | null>(null);
   selectedCourseRef.current = selectedCourse;
@@ -75,10 +76,9 @@ export default function App() {
     completedAssignmentIds: [],
     passedQuizIds: [],
   });
-  const [notifications, setNotifications] = useState<NotificationItem[]>(() => {
-    const user = ClassroomDB.getCurrentUser();
-    return user ? ClassroomDB.getNotifications(user.id) : [];
-  });
+  const [notifications, setNotifications] = useState<NotificationItem[]>(() =>
+    currentUser ? ClassroomDB.getNotifications(currentUser.id) : []
+  );
 
   // Modals & Drawers
   const [activeCertificate, setActiveCertificate] = useState<CertificateData | null>(null);
@@ -128,7 +128,12 @@ export default function App() {
   const isLowBandwidthRef = useRef(false);
   isLowBandwidthRef.current = isLowBandwidth;
   const [theme, setTheme] = useState<'light' | 'dark'>(() => ClassroomDB.getTheme());
-  const [, setRefreshTick] = useState(0);
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  const allVisibleNotes = useMemo(
+    () => (currentUser ? ClassroomDB.getPrivateNotes(undefined, currentUser) : []),
+    [currentUser, refreshTick]
+  );
 
   const handleToggleTheme = () => {
     const nextTheme = theme === 'light' ? 'dark' : 'light';
@@ -177,9 +182,6 @@ export default function App() {
     // Allow first paint of LoginView or Dashboard to complete immediately before running network sync
     const initTimer = setTimeout(() => {
       ClassroomDB.init();
-      ClassroomDB.purgeExpiredComments();
-      ClassroomDB.purgeExpiredAuditLogs(false);
-      refreshData();
 
       let isWakeUpdateReload = false;
       try {
@@ -208,6 +210,15 @@ export default function App() {
         }
       }
     }, 30);
+
+    // Defer non-critical expiration sweeps until after initial UI interaction window (2.5s)
+    const deferredCleanupTimer = setTimeout(() => {
+      const purgedComments = ClassroomDB.purgeExpiredComments();
+      const purgedAudit = ClassroomDB.purgeExpiredAuditLogs(false);
+      if (purgedComments || purgedAudit) {
+        refreshData();
+      }
+    }, 2500);
 
     // Instant Realtime Broadcast + Postgres Changes subscription across all accounts & devices
     // Smartly routes each Realtime event to ONLY the affected table(s) to cut Log Ingestion & Egress by ~90%
@@ -502,7 +513,8 @@ export default function App() {
     window.addEventListener('touchstart', markUserActive, { passive: true });
 
     // When refreshing, focusing, or reopening the installed PWA from the background,
-    // pull latest delta updates (throttled to 45s to avoid redundant focus/visibility bursts)
+    // pull latest delta updates (throttled to avoid redundant focus/visibility bursts during startup)
+    let lastWakeUpHandledAt = Date.now();
     const handleWakeUp = () => {
       if (document.visibilityState === 'hidden') {
         return;
@@ -510,11 +522,17 @@ export default function App() {
       if (document.visibilityState === 'visible') {
         const now = Date.now();
         lastUserInteractionAt = now;
+        if (now - lastWakeUpHandledAt < 3500) {
+          return;
+        }
+        lastWakeUpHandledAt = now;
         SupabaseService.resumeRealtimeConnection();
-        ClassroomDB.purgeExpiredComments();
-        ClassroomDB.purgeExpiredAuditLogs(false);
-        ClassroomDB.checkAndPublishDueScheduledPosts();
-        refreshData();
+        const purgedComments = ClassroomDB.purgeExpiredComments();
+        const purgedAudit = ClassroomDB.purgeExpiredAuditLogs(false);
+        const publishedDue = ClassroomDB.checkAndPublishDueScheduledPosts();
+        if (purgedComments || purgedAudit || publishedDue) {
+          refreshData();
+        }
 
         const loggedUser = ClassroomDB.getCurrentUser();
         if (loggedUser && navigator.onLine !== false && !isLowBandwidthRef.current) {
@@ -618,6 +636,7 @@ export default function App() {
 
     return () => {
       clearTimeout(initTimer);
+      clearTimeout(deferredCleanupTimer);
       unsubscribeRealtime();
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('attendance-realtime-updated', handleStorageChange);
@@ -812,7 +831,6 @@ export default function App() {
       <main className="flex-1 max-w-7xl w-full min-w-0 mx-auto px-2.5 sm:px-6 py-4 sm:py-8">
         {/* Live Private Note / Leave Request Instant Alert Banner for Admin, Co-Admin & Students */}
         {(() => {
-          const allVisibleNotes = ClassroomDB.getPrivateNotes(undefined, currentUser);
           if (currentUser.role === 'admin' || currentUser.role === 'co_admin') {
             const pendingNotes = allVisibleNotes.filter((n) => n.status === 'pending');
             if (pendingNotes.length === 0) return null;
@@ -1485,10 +1503,12 @@ export default function App() {
           )}
 
         {/* Official Academy Website In-App Viewer Modal (Method 3) */}
-        <OfficialWebsiteModal
-          isOpen={showWebsiteModal}
-          onClose={() => setShowWebsiteModal(false)}
-        />
+        {showWebsiteModal && (
+          <OfficialWebsiteModal
+            isOpen={showWebsiteModal}
+            onClose={() => setShowWebsiteModal(false)}
+          />
+        )}
 
         {/* Standalone Academy-Wide Digital Library Modal (Opened alongside Official Website) */}
         {showLibraryModal && (
