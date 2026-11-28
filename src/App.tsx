@@ -21,6 +21,8 @@ import { LibraryView } from './components/LibraryView';
 import { ClassroomGuideModal } from './components/ClassroomGuideModal';
 import { DictionaryModal } from './components/DictionaryModal';
 import { SelectionDictionaryTrigger } from './components/SelectionDictionaryTrigger';
+import { DigitalIdCardModal } from './components/DigitalIdCardModal';
+import { StudyNotebookModal } from './components/StudyNotebookModal';
 import {
   dispatchDeviceNotification,
   DeviceAlertPayload,
@@ -50,6 +52,8 @@ import {
   BookA,
   HelpCircle,
   X,
+  Award,
+  NotebookPen,
 } from 'lucide-react';
 
 export default function App() {
@@ -93,6 +97,8 @@ export default function App() {
   const [showLibraryModal, setShowLibraryModal] = useState(false);
   const [showGuideModal, setShowGuideModal] = useState(false);
   const [showDictionaryModal, setShowDictionaryModal] = useState(false);
+  const [showDigitalIdCardModal, setShowDigitalIdCardModal] = useState(false);
+  const [showStudyNotebookModal, setShowStudyNotebookModal] = useState(false);
   const [dictionaryInitialQuery, setDictionaryInitialQuery] = useState('');
   const [showReorderPanel, setShowReorderPanel] = useState(false);
   const [draggedCourseId, setDraggedCourseId] = useState<string | null>(null);
@@ -117,6 +123,8 @@ export default function App() {
   useBackHandler(showLibraryModal, () => setShowLibraryModal(false));
   useBackHandler(showGuideModal, () => setShowGuideModal(false));
   useBackHandler(showDictionaryModal, () => setShowDictionaryModal(false));
+  useBackHandler(showDigitalIdCardModal, () => setShowDigitalIdCardModal(false));
+  useBackHandler(showStudyNotebookModal, () => setShowStudyNotebookModal(false));
 
   const handleOpenDictionary = (initialWord?: string) => {
     setDictionaryInitialQuery(initialWord ? initialWord.trim() : '');
@@ -813,6 +821,8 @@ export default function App() {
           onOpenWebsite={() => setShowWebsiteModal(true)}
           onOpenLibrary={() => setShowLibraryModal(true)}
           onOpenGuide={() => setShowGuideModal(true)}
+          onOpenDigitalIdCard={() => setShowDigitalIdCardModal(true)}
+          onOpenStudyNotebook={() => setShowStudyNotebookModal(true)}
           onResetData={handleResetData}
           onNavigateHome={() => setSelectedCourse(null)}
           notifications={notifications}
@@ -1032,6 +1042,24 @@ export default function App() {
                   >
                     <ScrollText className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
                     <span className="truncate">စည်းကမ်းချက်များ</span>
+                  </button>
+
+                  <button
+                    onClick={() => setShowDigitalIdCardModal(true)}
+                    className="neu-btn flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2.5 text-amber-800 dark:text-amber-300 text-xs font-bold rounded-xl cursor-pointer border border-amber-500/20 sm:flex-1 lg:flex-initial"
+                    title="ဒစ်ဂျစ်တယ် ကျောင်းသား/ဆရာ သက်သေခံကတ်ပြား (Digital Academic ID Card)"
+                  >
+                    <Award className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <span className="truncate">🪪 Digital ID ကတ်</span>
+                  </button>
+
+                  <button
+                    onClick={() => setShowStudyNotebookModal(true)}
+                    className="neu-btn flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2.5 text-indigo-800 dark:text-indigo-300 text-xs font-bold rounded-xl cursor-pointer border border-indigo-500/20 sm:flex-1 lg:flex-initial"
+                    title="ကိုယ်ပိုင် မှတ်စုစာအုပ်ငယ် (Personal Study Notebook)"
+                  >
+                    <NotebookPen className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                    <span className="truncate">📓 မှတ်စုစာအုပ်</span>
                   </button>
 
                   {currentUser.role === 'student' && currentUser.rulesAccepted && (
@@ -1657,6 +1685,27 @@ export default function App() {
           disabled={showDictionaryModal}
           onLookupWord={(word) => handleOpenDictionary(word)}
         />
+
+        {/* Digital Academic ID Card Modal */}
+        {showDigitalIdCardModal && (
+          <DigitalIdCardModal
+            isOpen={showDigitalIdCardModal}
+            onClose={() => setShowDigitalIdCardModal(false)}
+            user={currentUser}
+            courses={courses}
+          />
+        )}
+
+        {/* Personal Study Notebook Modal */}
+        {showStudyNotebookModal && (
+          <StudyNotebookModal
+            isOpen={showStudyNotebookModal}
+            onClose={() => setShowStudyNotebookModal(false)}
+            currentUser={currentUser}
+            courses={courses}
+            activeCourseId={selectedCourse?.id}
+          />
+        )}
 
         {/* Primary Admin Local Cache Reset Confirmation Modal */}
         {showResetConfirmModal && currentUser.role === 'admin' && (

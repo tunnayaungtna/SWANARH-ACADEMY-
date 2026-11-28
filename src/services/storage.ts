@@ -7,6 +7,7 @@ import {
   Assignment,
   AssignmentSubmission,
   Quiz,
+  QuizQuestion,
   QuizSubmission,
   StudentExamSession,
   StudentProgress,
@@ -7542,6 +7543,31 @@ export class ClassroomDB {
     }
   }
 
+  static getQuestionBank(): Array<
+    QuizQuestion & { sourceQuizTitle: string; sourceCourseId: string }
+  > {
+    const quizzes = this.getItem<Quiz[]>(STORAGE_KEYS.QUIZZES, INITIAL_QUIZZES);
+    const seen = new Set<string>();
+    const bank: Array<QuizQuestion & { sourceQuizTitle: string; sourceCourseId: string }> = [];
+
+    for (const qz of quizzes) {
+      if (!qz || qz.itemType === 'data_form') continue;
+      for (const q of qz.questions || []) {
+        if (!q || q.id === '__quiz_meta__' || !q.question?.trim()) continue;
+        const normKey = q.question.trim().toLowerCase();
+        if (!seen.has(normKey)) {
+          seen.add(normKey);
+          bank.push({
+            ...q,
+            sourceQuizTitle: qz.title || 'Exam',
+            sourceCourseId: qz.courseId || '',
+          });
+        }
+      }
+    }
+    return bank;
+  }
+
   static saveQuiz(
     quizInput: {
       id?: string;
@@ -7556,6 +7582,8 @@ export class ClassroomDB {
       mode?: 'exam' | 'practice';
       enableFlashcards?: boolean;
       showAnswersImmediately?: boolean;
+      shuffleQuestions?: boolean;
+      shuffleOptions?: boolean;
       isOpen?: boolean;
       scheduledOpenAt?: string;
       scheduledCloseAt?: string;
@@ -7597,6 +7625,8 @@ export class ClassroomDB {
       mode: quizInput.mode === 'practice' ? 'practice' : 'exam',
       enableFlashcards: isDataForm ? false : quizInput.enableFlashcards !== false,
       showAnswersImmediately: quizInput.showAnswersImmediately !== false,
+      shuffleQuestions: isDataForm ? false : Boolean(quizInput.shuffleQuestions),
+      shuffleOptions: isDataForm ? false : Boolean(quizInput.shuffleOptions),
       isOpen: quizInput.isOpen !== false,
       timezoneMode: tzMode,
       scheduledOpenAt: this.normalizeScheduleStringWithTimezone(quizInput.scheduledOpenAt, tzMode),

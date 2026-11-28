@@ -35,6 +35,8 @@ import {
   ClipboardList,
   FileSpreadsheet,
   FileText,
+  Shuffle,
+  Database,
 } from 'lucide-react';
 import {
   DataFormEditorModal,
@@ -52,6 +54,28 @@ interface QuizzesViewProps {
 }
 
 const OPTION_LABELS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+
+/**
+ * Deterministic Fisher-Yates shuffle seeded by (quizId + studentId + sessionStartedAtMs)
+ * so each student gets a unique question/option order that persists even if they refresh mid-exam.
+ */
+function seededShuffleArray<T>(items: T[], seedStr: string): T[] {
+  const arr = [...items];
+  let hash = 2166136261;
+  for (let i = 0; i < seedStr.length; i++) {
+    hash ^= seedStr.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  let seed = hash >>> 0;
+  for (let i = arr.length - 1; i > 0; i--) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    const j = seed % (i + 1);
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+  return arr;
+}
 
 const MYANMAR_CHOICE_MAP: Record<string, number> = {
   'က': 0,
@@ -1257,6 +1281,21 @@ export const QuizzesView: React.FC<QuizzesViewProps> = ({ course, currentUser, o
                           <span>Flashcards ပါဝင်သည်</span>
                         </span>
                       )}
+
+                      {(quiz.shuffleQuestions || quiz.shuffleOptions) && (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 border border-amber-300/80 dark:border-amber-800">
+                          <Shuffle className="w-3 h-3" />
+                          <span>
+                            ကျပန်းမေးခွန်းစနစ် (
+                            {quiz.shuffleQuestions && quiz.shuffleOptions
+                              ? 'Questions + Choices Shuffle'
+                              : quiz.shuffleQuestions
+                              ? 'Questions Shuffle'
+                              : 'Choices Shuffle'}
+                            )
+                          </span>
+                        </span>
+                      )}
                     </div>
 
                     <h4 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white leading-snug">
@@ -1737,7 +1776,7 @@ const TakeQuizModal: React.FC<{
   onClose: () => void;
   onSubmitted: (submission: QuizSubmission) => void;
 }> = ({ quiz, currentUser, onClose, onSubmitted }) => {
-  const questions = useMemo(
+  const rawQuestions = useMemo(
     () => (quiz.questions || []).filter((q) => q && q.id !== '__quiz_meta__'),
     [quiz.questions]
   );
@@ -1758,6 +1797,15 @@ const TakeQuizModal: React.FC<{
           Date.now() >= existingSession.expiresAtMs));
     return ClassroomDB.startOrResumeStudentExamSession(quiz, currentUser.id, shouldStartFresh);
   });
+
+  // Apply deterministic per-student question order shuffle when quiz.shuffleQuestions is enabled
+  const questions = useMemo(() => {
+    if (!quiz.shuffleQuestions) return rawQuestions;
+    return seededShuffleArray(
+      rawQuestions,
+      `qshuffle|${quiz.id}|${currentUser.id}|${session.startedAtMs}`
+    );
+  }, [rawQuestions, quiz.shuffleQuestions, quiz.id, currentUser.id, session.startedAtMs]);
 
   const [currentIdx, setCurrentIdx] = useState(0);
   const [answers, setAnswers] = useState<Record<string, number>>(
@@ -1886,9 +1934,17 @@ const TakeQuizModal: React.FC<{
         {/* Exam Header with Live Count Time */}
         <div className="px-4 sm:px-6 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 flex flex-wrap items-center justify-between gap-2 shrink-0">
           <div className="min-w-0 flex-1">
-            <h3 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white truncate">
-              {quiz.title}
-            </h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white truncate">
+                {quiz.title}
+              </h3>
+              {(quiz.shuffleQuestions || quiz.shuffleOptions) && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800 text-[10px] font-extrabold">
+                  <Shuffle className="w-3 h-3" />
+                  <span>Anti-Cheat ကျပန်းမေးခွန်းစနစ်</span>
+                </span>
+              )}
+            </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-slate-500 dark:text-slate-400 font-mono mt-0.5">
               <span>
                 ဖြေဆိုပြီး: <strong>{answeredCount}/{questions.length}</strong> ပုဒ်
@@ -2105,41 +2161,54 @@ const TakeQuizModal: React.FC<{
               </div>
 
               <div className="space-y-2.5 pt-1">
-                {currentQ.options.map((opt, oIdx) => {
-                  const isSelected = answers[currentQ.id] === oIdx;
-                  return (
-                    <button
-                      key={oIdx}
-                      type="button"
-                      disabled={isTimeExpiredLocked}
-                      onClick={() => {
-                        if (isTimeExpiredLocked) return;
-                        setAnswers((prev) => ({
-                          ...prev,
-                          [currentQ.id]: oIdx,
-                        }));
-                      }}
-                      className={`w-full p-3.5 sm:p-4 rounded-2xl border-2 text-left transition-all cursor-pointer flex items-start gap-3 ${
-                        isSelected
-                          ? 'bg-indigo-50 dark:bg-indigo-950/70 border-indigo-600 dark:border-indigo-400 text-indigo-950 dark:text-white shadow-xs'
-                          : 'bg-white dark:bg-slate-800/80 border-slate-200 dark:border-slate-700/80 hover:border-indigo-300 text-slate-800 dark:text-slate-200'
-                      }`}
-                    >
-                      <span
-                        className={`w-7 h-7 rounded-xl font-mono text-xs font-extrabold flex items-center justify-center shrink-0 ${
+                {(() => {
+                  const baseOptionEntries = currentQ.options.map((optText, origIdx) => ({
+                    text: optText,
+                    originalIdx: origIdx,
+                  }));
+                  const displayOptions = quiz.shuffleOptions
+                    ? seededShuffleArray(
+                        baseOptionEntries,
+                        `oshuffle|${quiz.id}|${currentUser.id}|${session.startedAtMs}|${currentQ.id}`
+                      )
+                    : baseOptionEntries;
+
+                  return displayOptions.map((entry, displayIdx) => {
+                    const isSelected = answers[currentQ.id] === entry.originalIdx;
+                    return (
+                      <button
+                        key={entry.originalIdx}
+                        type="button"
+                        disabled={isTimeExpiredLocked}
+                        onClick={() => {
+                          if (isTimeExpiredLocked) return;
+                          setAnswers((prev) => ({
+                            ...prev,
+                            [currentQ.id]: entry.originalIdx,
+                          }));
+                        }}
+                        className={`w-full p-3.5 sm:p-4 rounded-2xl border-2 text-left transition-all cursor-pointer flex items-start gap-3 ${
                           isSelected
-                            ? 'bg-indigo-600 text-white'
-                            : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+                            ? 'bg-indigo-50 dark:bg-indigo-950/70 border-indigo-600 dark:border-indigo-400 text-indigo-950 dark:text-white shadow-xs'
+                            : 'bg-white dark:bg-slate-800/80 border-slate-200 dark:border-slate-700/80 hover:border-indigo-300 text-slate-800 dark:text-slate-200'
                         }`}
                       >
-                        {OPTION_LABELS[oIdx] || oIdx + 1}
-                      </span>
-                      <span className="text-xs sm:text-sm font-semibold leading-relaxed pt-0.5 break-words flex-1">
-                        {opt}
-                      </span>
-                    </button>
-                  );
-                })}
+                        <span
+                          className={`w-7 h-7 rounded-xl font-mono text-xs font-extrabold flex items-center justify-center shrink-0 ${
+                            isSelected
+                              ? 'bg-indigo-600 text-white'
+                              : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+                          }`}
+                        >
+                          {OPTION_LABELS[displayIdx] || displayIdx + 1}
+                        </span>
+                        <span className="text-xs sm:text-sm font-semibold leading-relaxed pt-0.5 break-words flex-1">
+                          {entry.text}
+                        </span>
+                      </button>
+                    );
+                  });
+                })()}
               </div>
 
               {showConfirmUnanswered && (
@@ -3146,6 +3215,12 @@ const QuizEditorModal: React.FC<{
   const [enableFlashcards, setEnableFlashcards] = useState(
     initialQuiz?.enableFlashcards !== false
   );
+  const [shuffleQuestions, setShuffleQuestions] = useState<boolean>(
+    initialQuiz ? Boolean(initialQuiz.shuffleQuestions) : true
+  );
+  const [shuffleOptions, setShuffleOptions] = useState<boolean>(
+    initialQuiz ? Boolean(initialQuiz.shuffleOptions) : true
+  );
   const [isOpen, setIsOpen] = useState<boolean>(initialQuiz?.isOpen !== false);
   const [timezoneMode, setTimezoneMode] = useState<'MMT' | 'LOCAL'>(
     initialQuiz?.timezoneMode === 'LOCAL' ? 'LOCAL' : 'MMT'
@@ -3169,9 +3244,12 @@ const QuizEditorModal: React.FC<{
     return () => clearInterval(t);
   }, []);
 
-  const [inputTab, setInputTab] = useState<'builder' | 'bulk'>('builder');
+  const [inputTab, setInputTab] = useState<'builder' | 'bulk' | 'bank'>('builder');
   const [bulkText, setBulkText] = useState('');
+  const [bankSearch, setBankSearch] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const allBankQuestions = useMemo(() => ClassroomDB.getQuestionBank(), []);
 
   const [questions, setQuestions] = useState<QuizQuestion[]>(() => {
     const existing = (initialQuiz?.questions || []).filter(
@@ -3335,6 +3413,8 @@ const QuizEditorModal: React.FC<{
         mode,
         enableFlashcards,
         showAnswersImmediately: true,
+        shuffleQuestions,
+        shuffleOptions,
         isOpen,
         timezoneMode,
         scheduledOpenAt: scheduledOpenAt.trim() || undefined,
@@ -3651,12 +3731,55 @@ const QuizEditorModal: React.FC<{
                 className="w-4 h-4 accent-purple-600 cursor-pointer"
               />
             </div>
+
+            {/* Anti-Cheat Question & Answer Shuffling Toggles */}
+            <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="flex items-center justify-between p-3 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60">
+                <div className="flex items-center gap-2 pr-2">
+                  <Shuffle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                  <div>
+                    <div className="font-extrabold text-slate-900 dark:text-white">
+                      🔀 မေးခွန်းအစီအစဉ် ကျပန်းရောမွှေမည် (Auto-Shuffle Questions)
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                      ကျောင်းသားတစ်ဦးနှင့်တစ်ဦး မေးခွန်းနံပါတ် အစီအစဉ် မတူညီစေရန် အလိုအလျောက် ရောမွှေပေးမည်
+                    </div>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={shuffleQuestions}
+                  onChange={(e) => setShuffleQuestions(e.target.checked)}
+                  className="w-4 h-4 accent-amber-600 cursor-pointer shrink-0"
+                />
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60">
+                <div className="flex items-center gap-2 pr-2">
+                  <Shuffle className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  <div>
+                    <div className="font-extrabold text-slate-900 dark:text-white">
+                      🎲 အဖြေ (A, B, C, D) ကျပန်းရောမွှေမည် (Auto-Shuffle Choices)
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                      အဖြေကူးချ၍ မရစေရန် မေးခွန်းတစ်ပုဒ်ချင်းစီ၏ A, B, C, D အစီအစဉ်ကို ကျပန်းနေရာပြောင်းပေးမည်
+                    </div>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={shuffleOptions}
+                  onChange={(e) => setShuffleOptions(e.target.checked)}
+                  className="w-4 h-4 accent-emerald-600 cursor-pointer shrink-0"
+                />
+              </div>
+            </div>
           </div>
 
-          {/* Input Mode Switcher: Visual Builder vs Smart Paste */}
+          {/* Input Mode Switcher: Visual Builder vs Smart Paste vs Question Bank */}
           <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setInputTab('builder')}
@@ -3681,6 +3804,18 @@ const QuizEditorModal: React.FC<{
                   <ClipboardPaste className="w-3.5 h-3.5" />
                   <span>📋 စာသားဖြင့် အမြန်သွင်းရန် (Smart Paste)</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setInputTab('bank')}
+                  className={`px-3.5 py-2 rounded-xl font-extrabold flex items-center gap-1.5 cursor-pointer ${
+                    inputTab === 'bank'
+                      ? 'bg-amber-500 text-slate-950'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                  }`}
+                >
+                  <Database className="w-3.5 h-3.5" />
+                  <span>🏦 မေးခွန်းဘဏ်မှ ရွေးထည့်ရန် (Question Bank · {allBankQuestions.length})</span>
+                </button>
               </div>
 
               {inputTab === 'builder' && (
@@ -3695,7 +3830,130 @@ const QuizEditorModal: React.FC<{
               )}
             </div>
 
-            {inputTab === 'bulk' ? (
+            {inputTab === 'bank' ? (
+              <div className="p-4 rounded-2xl bg-amber-50/50 dark:bg-slate-800/80 border border-amber-300/70 dark:border-amber-700/60 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
+                      <Database className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                      <span>Swanarh Academy မေးခွန်းဘဏ် (Question Bank Repository)</span>
+                    </h4>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      ယခင် စာမေးပွဲများမှ မေးခွန်းဟောင်းများကို တစ်ချက်နှိပ်ရုံဖြင့် ယခု Exam ထဲသို့ ပြန်လည်ရွေးထည့်နိုင်ပါသည်
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const existingNorm = new Set(
+                        questions.map((q) => q.question.trim().toLowerCase()).filter(Boolean)
+                      );
+                      const available = allBankQuestions.filter(
+                        (bq) => !existingNorm.has(bq.question.trim().toLowerCase())
+                      );
+                      if (available.length === 0) return;
+                      const randomFive = seededShuffleArray(
+                        available,
+                        `randompick|${Date.now()}`
+                      ).slice(0, 5);
+                      const cloned: QuizQuestion[] = randomFive.map((rq, idx) => ({
+                        id: `q-bank-${Date.now()}-${idx}`,
+                        question: rq.question,
+                        options: [...rq.options],
+                        correctIndex: rq.correctIndex,
+                        explanation: rq.explanation || '',
+                      }));
+                      const nonEmpty = questions.filter((q) => q.question.trim().length > 0);
+                      setQuestions([...nonEmpty, ...cloned]);
+                      setInputTab('builder');
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <Shuffle className="w-3.5 h-3.5" />
+                    <span>🎲 မေးခွန်းဘဏ်မှ ကျပန်း (၅) ပုဒ် အလိုအလျောက် ရွေးထည့်မည်</span>
+                  </button>
+                </div>
+
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={bankSearch}
+                    onChange={(e) => setBankSearch(e.target.value)}
+                    placeholder="မေးခွန်းဘဏ်ထဲမှ မေးခွန်း သို့မဟုတ် စာမေးပွဲအမည်ဖြင့် ရှာဖွေရန်..."
+                    className="w-full pl-8 pr-3 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div className="max-h-80 overflow-y-auto space-y-2 pr-1">
+                  {allBankQuestions
+                    .filter((bq) => {
+                      const q = bankSearch.trim().toLowerCase();
+                      if (!q) return true;
+                      return (
+                        bq.question.toLowerCase().includes(q) ||
+                        bq.sourceQuizTitle.toLowerCase().includes(q) ||
+                        bq.options.some((o: string) => o.toLowerCase().includes(q))
+                      );
+                    })
+                    .map((bq, bIdx) => {
+                      const alreadyAdded = questions.some(
+                        (eq) =>
+                          eq.question.trim().toLowerCase() ===
+                          bq.question.trim().toLowerCase()
+                      );
+                      return (
+                        <div
+                          key={`${bq.id}-${bIdx}`}
+                          className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                        >
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 font-mono text-[10px] font-bold">
+                                {bq.sourceQuizTitle}
+                              </span>
+                              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
+                                ✓ အဖြေမှန်: {OPTION_LABELS[bq.correctIndex] || 'A'} ({bq.options[bq.correctIndex]})
+                              </span>
+                            </div>
+                            <p className="text-xs font-extrabold text-slate-900 dark:text-white">
+                              {bq.question}
+                            </p>
+                          </div>
+
+                          <button
+                            type="button"
+                            disabled={alreadyAdded}
+                            onClick={() => {
+                              const nonEmpty = questions.filter(
+                                (q) => q.question.trim().length > 0
+                              );
+                              setQuestions([
+                                ...nonEmpty,
+                                {
+                                  id: `q-bank-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                                  question: bq.question,
+                                  options: [...bq.options],
+                                  correctIndex: bq.correctIndex,
+                                  explanation: bq.explanation || '',
+                                },
+                              ]);
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold shrink-0 cursor-pointer ${
+                              alreadyAdded
+                                ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 cursor-default'
+                                : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                            }`}
+                          >
+                            {alreadyAdded ? '✓ ထည့်သွင်းပြီး' : '+ ရွေးထည့်မည်'}
+                          </button>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            ) : inputTab === 'bulk' ? (
               <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-xs font-bold text-slate-700 dark:text-slate-200 space-y-1">

@@ -9,6 +9,7 @@ import {
 } from '../types/classroom';
 import { ClassroomDB } from '../services/storage';
 import { AcademyLogo } from './AcademyLogo';
+import { AudioReaderPlayer } from './AudioReaderPlayer';
 import { OFFICIAL_ACADEMY_LOGO } from '../assets/officialLogoData';
 import {
   BookOpen,
@@ -2840,6 +2841,18 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     </div>
                   );
                 })()}
+
+              {/* Smart Audio Reader (Text-to-Speech) for Long Notes & eBook Summaries */}
+              {(activeReaderItem.content || activeReaderItem.description) && (
+                <div className="relative z-20 max-w-3xl mx-auto">
+                  <AudioReaderPlayer
+                    title={activeReaderItem.title}
+                    rawTextOrHtml={
+                      activeReaderItem.content || activeReaderItem.description || ''
+                    }
+                  />
+                </div>
+              )}
 
               {/* Formatted Long-Form Article / Note Body (Preserves Bold, Underline, Text Colors, Highlights & Copy-Paste Styling) */}
               {activeReaderItem.content && (

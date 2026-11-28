@@ -29,6 +29,8 @@ import {
   UserCog,
   Globe,
   HelpCircle,
+  Award,
+  NotebookPen,
 } from 'lucide-react';
 import { OFFICIAL_ACADEMY_WEBSITE_URL } from './OfficialWebsiteModal';
 
@@ -44,6 +46,8 @@ interface NavbarProps {
   onOpenWebsite?: () => void;
   onOpenLibrary?: () => void;
   onOpenGuide?: () => void;
+  onOpenDigitalIdCard?: () => void;
+  onOpenStudyNotebook?: () => void;
   onResetData: () => void;
   onNavigateHome: () => void;
   notifications: NotificationItem[];
@@ -69,6 +73,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenWebsite,
   onOpenLibrary,
   onOpenGuide,
+  onOpenDigitalIdCard,
+  onOpenStudyNotebook,
   onResetData: _onResetData,
   onNavigateHome,
   notifications,
@@ -299,7 +305,37 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <HelpCircle className="w-3.5 h-3.5 shrink-0" />
               <span className="hidden 2xl:inline">Classroom </span>
-              <span>အသုံးပြုနည်း (User Guide)</span>
+              <span>အသုံးပြုနည်း</span>
+            </button>
+          )}
+          {onOpenStudyNotebook && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowUserDropdown(false);
+                setShowNotifications(false);
+                onOpenStudyNotebook();
+              }}
+              className="px-2 py-1.5 rounded-xl hover:bg-white/50 dark:hover:bg-slate-800/50 text-amber-700 dark:text-amber-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1"
+              title="ကိုယ်ပိုင် သင်ခန်းစာ မှတ်စုစာအုပ် (Personal Study Notebook)"
+            >
+              <NotebookPen className="w-3.5 h-3.5 shrink-0" />
+              <span>မှတ်စုစာအုပ်</span>
+            </button>
+          )}
+          {onOpenDigitalIdCard && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowUserDropdown(false);
+                setShowNotifications(false);
+                onOpenDigitalIdCard();
+              }}
+              className="px-2 py-1.5 rounded-xl hover:bg-white/50 dark:hover:bg-slate-800/50 text-indigo-700 dark:text-indigo-300 font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1"
+              title="ဒစ်ဂျစ်တယ် ကျောင်းသား/ဆရာ ကတ်ပြား (Digital Academic ID Card)"
+            >
+              <Award className="w-3.5 h-3.5 shrink-0" />
+              <span>ID ကတ်</span>
             </button>
           )}
           {(currentUser.role === 'admin' || currentUser.role === 'co_admin') && (
@@ -700,6 +736,38 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <HelpCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
                       <span className="truncate">📖 Classroom အသုံးပြုနည်း (User Guide)</span>
                     </button>
+                  )}
+
+                  {/* Digital ID Card & Personal Study Notebook Side-by-Side */}
+                  {(onOpenDigitalIdCard || onOpenStudyNotebook) && (
+                    <div className="grid grid-cols-2 gap-2">
+                      {onOpenDigitalIdCard && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowUserDropdown(false);
+                            onOpenDigitalIdCard();
+                          }}
+                          className="flex items-center justify-center gap-1.5 py-2.5 px-2.5 rounded-xl text-xs font-extrabold bg-gradient-to-r from-indigo-700 to-slate-900 hover:from-indigo-600 hover:to-slate-800 text-amber-300 border border-amber-400/30 transition-colors cursor-pointer"
+                        >
+                          <Award className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate">🪪 Digital ID ကတ်</span>
+                        </button>
+                      )}
+                      {onOpenStudyNotebook && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowUserDropdown(false);
+                            onOpenStudyNotebook();
+                          }}
+                          className="flex items-center justify-center gap-1.5 py-2.5 px-2.5 rounded-xl text-xs font-extrabold bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 transition-colors cursor-pointer"
+                        >
+                          <NotebookPen className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate">📓 မှတ်စုစာအုပ်</span>
+                        </button>
+                      )}
+                    </div>
                   )}
 
                   {/* Official Academy Website & Digital Library Side-by-Side */}

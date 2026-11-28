@@ -123,6 +123,8 @@ export interface Quiz {
   mode?: 'exam' | 'practice';
   enableFlashcards?: boolean;
   showAnswersImmediately?: boolean;
+  shuffleQuestions?: boolean; // When true, randomizes question order per student exam session
+  shuffleOptions?: boolean; // When true, randomizes A/B/C/D answer option order per student exam session
   isOpen?: boolean; // Manual On/Off toggle (true = open, false = closed)
   scheduledOpenAt?: string; // ISO/datetime string for scheduled auto-open
   scheduledCloseAt?: string; // ISO/datetime string for scheduled auto-close

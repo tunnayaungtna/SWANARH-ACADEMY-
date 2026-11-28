@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Course, CoursePost, User, Attachment, AttendanceStatus } from '../types/classroom';
 import { EditPostModal } from './EditPostModal';
 import { PinSwapModal } from './PinSwapModal';
+import { AudioReaderPlayer } from './AudioReaderPlayer';
 import {
   CourseBannerModal,
   resolveCourseBannerUrl,
@@ -1990,6 +1991,15 @@ export const CourseStream: React.FC<CourseStreamProps> = ({
                     <p className="text-xs sm:text-sm text-slate-700 dark:text-slate-300 mt-1.5 leading-relaxed whitespace-pre-line">
                       {renderTextWithLinks(post.content)}
                     </p>
+                    {post.content && post.content.trim().length > 0 && (
+                      <div className="mt-2.5">
+                        <AudioReaderPlayer
+                          title={post.title}
+                          rawTextOrHtml={post.content}
+                          compact
+                        />
+                      </div>
+                    )}
                   </div>
                 </div>
 

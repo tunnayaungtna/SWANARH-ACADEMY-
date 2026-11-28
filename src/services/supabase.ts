@@ -2986,6 +2986,8 @@ export class SupabaseService {
       mode: quiz.mode || 'exam',
       enableFlashcards: quiz.enableFlashcards !== false,
       showAnswersImmediately: quiz.showAnswersImmediately !== false,
+      shuffleQuestions: Boolean(quiz.shuffleQuestions),
+      shuffleOptions: Boolean(quiz.shuffleOptions),
       isOpen: quiz.isOpen !== false,
       scheduledOpenAt: quiz.scheduledOpenAt || '',
       scheduledCloseAt: quiz.scheduledCloseAt || '',
@@ -3035,6 +3037,8 @@ export class SupabaseService {
             mode?: 'exam' | 'practice';
             enableFlashcards?: boolean;
             showAnswersImmediately?: boolean;
+            shuffleQuestions?: boolean;
+            shuffleOptions?: boolean;
             isOpen?: boolean;
             scheduledOpenAt?: string;
             scheduledCloseAt?: string;
@@ -3079,6 +3083,8 @@ export class SupabaseService {
             mode: meta.mode === 'practice' ? 'practice' : 'exam',
             enableFlashcards: meta.enableFlashcards !== false,
             showAnswersImmediately: meta.showAnswersImmediately !== false,
+            shuffleQuestions: Boolean(meta.shuffleQuestions),
+            shuffleOptions: Boolean(meta.shuffleOptions),
             isOpen: meta.isOpen !== false,
             scheduledOpenAt: meta.scheduledOpenAt || undefined,
             scheduledCloseAt: meta.scheduledCloseAt || undefined,
